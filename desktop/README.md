@@ -65,8 +65,44 @@ powershell -ExecutionPolicy Bypass -File desktop/build-windows.ps1 -SkipTests -R
 - `desktop/dist/jst-batch-inbound-desktop-3.0.0-win-x64.zip`
 - `desktop/dist/SHA256SUMS.txt`
 
-便携包不内置约 1.4 GB 的 FFmpeg/WebView2 payload。首次启动若缺少依赖，现有检查窗口会调用
-Windows `winget` 安装。
+便携 ZIP（约 86 MiB）不内置 FFmpeg/WebView2 payload，适合已联网或已装好依赖的机器。
+首次启动若缺少依赖，现有检查窗口会调用 Windows `winget` 安装。
+
+## 完整离线安装程序
+
+面向内网或无法联网的收货电脑，构建一个自带全部运行时的单文件安装程序（约 500 MiB）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File desktop/build-windows.ps1 -SkipTests
+powershell -ExecutionPolicy Bypass -File desktop/build-offline-windows.ps1 `
+  -WebView2Cab   <Microsoft.WebView2.FixedVersionRuntime.*.x64.cab> `
+  -WebView2CabSha256 <cab 的 SHA256> `
+  -FfmpegArchive <ffmpeg-*-full_build.zip 或 .7z> `
+  -FfmpegArchiveSha256 <压缩包 SHA256> `
+  -InnoCompiler  <Inno Setup 6 的 ISCC.exe>
+```
+
+已在本机解压好 FFmpeg 时，可改用 `-FfmpegBuildDir <含 bin\ffmpeg.exe 的目录>`，跳过压缩包解压。
+
+离线安装程序会把 `.NET 自包含宿主 + Python 后端 + FFmpeg/ffprobe + WebView2 固定运行时`
+一起打进安装包，安装与启动都无需联网下载这些依赖（ERP 业务仍需要网络）。它会写入
+`installed-mode.txt`，程序据此把业务数据放到 `%LOCALAPPDATA%\ReceivingAssistant\v3`，
+卸载默认保留，不覆盖旧数据。
+
+构建脚本会校验两个依赖的 SHA256、组装 `desktop/dist/offline-payload`、用 Inno Setup 编译出
+`desktop/dist/installer/收货小助手-<版本>-离线完整安装程序.exe`，并把它的哈希追加到
+`desktop/dist/SHA256SUMS.txt`。
+
+安装级验收（静默安装、只留 System32 的 PATH 下做依赖检查、与 payload 逐文件哈希比对、
+重装保留用户数据、静默卸载保留用户数据）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File desktop/verify-offline-installer.ps1 `
+  -Installer desktop/dist/installer/收货小助手-3.0.0-离线完整安装程序.exe `
+  -PayloadRoot desktop/dist/offline-payload
+```
+
+报告中 `ok` 为 `true` 表示全部检查通过。
 
 ## GitHub Actions
 
@@ -75,6 +111,13 @@ Windows `winget` 安装。
 - `workflow_dispatch` 手动构建。
 - 修改 `desktop/**` 或该工作流时运行 PR 构建。
 - 推送 `desktop-v*` 标签时构建并创建 GitHub Release。
+
+工作流会下载固定版本的 WebView2 固定运行时、FFmpeg full build 和 Inno Setup 并校验
+SHA256，然后依次构建便携 ZIP、编译完整离线安装程序、跑安装级验收，最后把便携 ZIP 与
+离线安装程序一起作为产物上传；标签构建会把它们发布到 Release。
+
+要把产物补传到已存在的 Release（例如 `desktop-v3.0.0`），在手动触发时填写
+`publish_release_tag` 输入框即可。
 
 发布示例：
 
