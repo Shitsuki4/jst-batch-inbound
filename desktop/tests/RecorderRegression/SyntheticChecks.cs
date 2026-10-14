@@ -6,10 +6,9 @@ public static class SyntheticChecks {
  public static async Task<int> Worker(string engine,string[] original){
   if(!original.Contains("video=synthetic"))throw new InvalidOperationException("Synthetic worker refuses physical devices");
   var input=Array.IndexOf(original,"-i");
-  // CI runners can be slower than real time. The synthetic source verifies the
-  // production recording pipeline, so let lavfi produce the 30-second fixture
-  // as fast as the runner can encode it instead of adding a pacing failure mode.
-  var args=new List<string>{"-hide_banner","-loglevel","info","-n","-f","lavfi","-i","testsrc2=size=1280x720:rate=30"};
+  // Keep the fixture on the same real-time clock as a camera so the overlay
+  // update path is exercised for the full 30 seconds instead of racing EOF.
+  var args=new List<string>{"-hide_banner","-loglevel","info","-n","-re","-f","lavfi","-i","testsrc2=size=1280x720:rate=30"};
   args.AddRange(original[(input+2)..]);
   using var p=Process.Start(Recorder.StartInfo(engine,args,Environment.CurrentDirectory))!;
   // Only the test source changes; output branches, overlay, preview and q-stop remain production arguments.

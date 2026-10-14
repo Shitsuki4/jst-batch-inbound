@@ -63,15 +63,17 @@ jobs:
         shell: pwsh
         run: |
           choco install ffmpeg -y --no-progress
-          $ffmpeg = Get-ChildItem -Path @(
-            "C:\ProgramData\chocolatey\bin\ffmpeg.exe",
-            "C:\ProgramData\chocolatey\lib\ffmpeg\tools\ffmpeg\bin\ffmpeg.exe"
-          ) -ErrorAction SilentlyContinue | Select-Object -First 1
-          if (-not $ffmpeg) {
-            $ffmpeg = Get-Command ffmpeg.exe -ErrorAction SilentlyContinue
+          $ffmpegCandidates = @(
+            "C:\ProgramData\chocolatey\lib\ffmpeg\tools\ffmpeg\bin\ffmpeg.exe",
+            "C:\ProgramData\chocolatey\bin\ffmpeg.exe"
+          )
+          $ffmpegPath = $ffmpegCandidates |
+            Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
+            Select-Object -First 1
+          if (-not $ffmpegPath) {
+            $ffmpegPath = (Get-Command ffmpeg.exe -ErrorAction SilentlyContinue).Source
           }
-          if (-not $ffmpeg) { throw "ffmpeg.exe was not found after installation" }
-          $ffmpegPath = if ($ffmpeg.Source) { $ffmpeg.Source } else { $ffmpeg.FullName }
+          if (-not $ffmpegPath) { throw "ffmpeg.exe was not found after installation" }
           $ffprobePath = Join-Path (Split-Path -Parent $ffmpegPath) "ffprobe.exe"
           if (-not (Test-Path -LiteralPath $ffprobePath -PathType Leaf)) {
             throw "ffprobe.exe was not found next to $ffmpegPath"
