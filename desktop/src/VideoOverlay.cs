@@ -14,7 +14,8 @@ internal static class VideoOverlay {
  public static string Command(string text){if(text.Contains('\0'))throw new ArgumentException("叠字不能包含空字符");return "drawtext text '"+text.Replace("'","'\\''")+"'";}
  public static Task SendAsync(string endpoint,string text){Validate(endpoint);var command=Command(text);return Task.Run(()=>{
   using var socket=new RequestSocket();socket.Options.Linger=TimeSpan.Zero;socket.Connect(endpoint);
-  if(!socket.TrySendFrame(TimeSpan.FromSeconds(1),command)||!socket.TryReceiveFrameString(TimeSpan.FromSeconds(2),out var reply))throw new IOException("叠字控制超时，未收到录像进程确认");
+  if(!socket.TrySendFrame(TimeSpan.FromSeconds(2),command))throw new IOException("叠字控制发送超时，录像进程未接收");
+  if(!socket.TryReceiveFrameString(TimeSpan.FromSeconds(5),out var reply))throw new IOException("叠字控制确认超时，未收到录像进程确认");
   if(!reply.StartsWith("0 ",StringComparison.Ordinal))throw new IOException("录像进程拒绝叠字更新："+reply);
  });}
 }
