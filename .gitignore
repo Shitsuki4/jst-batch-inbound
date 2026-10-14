@@ -11,8 +11,12 @@ design-previews/
 diagnostics/
 reference/
 **/build/
+**/bin/
+**/obj/
 **/__pycache__/
 **/*.pyc
+**/.pytest_cache/
+**/TestResults/
 **/data/
 **/dist/
 **/导出/

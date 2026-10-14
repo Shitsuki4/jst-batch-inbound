@@ -1,0 +1,125 @@
+using System.Text.Json;
+using Receiving.Native;
+public static class CoreChecks {
+ public static List<string> Run(string root) {
+  Directory.CreateDirectory(root);var passed=new List<string>();
+  void Check(bool ok,string name){if(!ok)throw new Exception(name);passed.Add(name);}
+  void Reject(Action f,string name){var rejected=false;try{f();}catch(ArgumentException){rejected=true;}catch(IOException){rejected=true;}catch(InvalidOperationException){rejected=true;}Check(rejected,name);}
+  var config=Path.Combine(root,"native-settings.json");
+  var defaults=UserSettings.Read(config);
+  Check(defaults.ShowPreviewOnStartup&&defaults.AutoRecordEnabled&&!File.Exists(config),"首次启动监控和扫码录制默认开启，读取不写盘");
+  Check(!defaults.DiskConfigured,"默认开启不伪造磁盘阈值或录制就绪");
+  File.WriteAllText(config,"{\"SchemaVersion\":2,\"WarningGb\":6,\"StopGb\":2}");
+  var legacy=UserSettings.Read(config);
+  Check(legacy.ShowPreviewOnStartup&&legacy.AutoRecordEnabled&&legacy.SchemaVersion==3&&legacy.WarningGb==6,"旧配置缺失新开关时开启，保留已有阈值并迁移版本");
+  File.WriteAllText(config,"{\"Width\":800,\"Height\":700}");
+  Check(UserSettings.Read(config).Width==420&&UserSettings.Read(config).Height==370,"无版本旧浮窗尺寸迁移保持兼容");
+  legacy.AutoRecordEnabled=false;legacy.ShowPreviewOnStartup=false;legacy.Write(config);
+  var disabled=UserSettings.Read(config);
+  Check(!disabled.AutoRecordEnabled&&!disabled.ShowPreviewOnStartup,"明确关闭两个开关后重读仍关闭");
+  disabled.SoundVolume=43;disabled.Write(config);
+  Check(!UserSettings.Read(config).AutoRecordEnabled&&!UserSettings.Read(config).ShowPreviewOnStartup&&UserSettings.Read(config).SoundVolume==43,"其他设置保存不重置已关闭开关");
+  disabled.AutoRecordEnabled=true;disabled.ShowPreviewOnStartup=true;disabled.Write(config);
+  Check(UserSettings.Read(config).AutoRecordEnabled&&UserSettings.Read(config).ShowPreviewOnStartup,"重新开启并重启配置回读仍开启");
+  var goodBytes=File.ReadAllBytes(config);disabled.WarningGb=1;
+  Reject(()=>disabled.Write(config),"无效配置写入失败");
+  Check(File.ReadAllBytes(config).SequenceEqual(goodBytes),"无效保存不覆盖原配置");disabled.WarningGb=6;
+  Directory.CreateDirectory(config+".tmp");
+  var failedWrite=false;try{disabled.Write(config);}catch(Exception e)when(e is IOException or UnauthorizedAccessException){failedWrite=true;}
+  Check(failedWrite&&File.ReadAllBytes(config).SequenceEqual(goodBytes),"磁盘临时路径写入失败保留原配置");Directory.Delete(config+".tmp");
+  foreach(var bad in new[]{"{broken","null","{\"AutoRecordEnabled\":null}","{\"Camera\":null}"}){
+   File.WriteAllText(config,bad);var failedRead=false;try{UserSettings.Read(config);}catch(Exception e)when(e is JsonException or IOException or ArgumentException){failedRead=true;}
+   Check(failedRead&&File.ReadAllText(config)==bad,"损坏配置拒绝读取且原字节保留："+bad);
+  }
+  var webSettings=new UserSettings{Engine=Environment.ProcessPath!,Directory=root,WarningGb=6,StopGb=2,AutoRecordEnabled=false};
+  using(var draft=JsonDocument.Parse("{\"showPreviewOnStartup\":false,\"soundVolume\":41}")){
+   var edited=UserSettings.FromWeb(webSettings,draft.RootElement);edited.Write(config);
+   Check(!UserSettings.Read(config).ShowPreviewOnStartup&&!UserSettings.Read(config).AutoRecordEnabled,"网页修改启动监控并保存不绕过独立自动录像开关");
+  }
+  using(var bypass=JsonDocument.Parse("{\"autoRecordEnabled\":true}"))Reject(()=>UserSettings.FromWeb(webSettings,bypass.RootElement),"通用设置不能绕过明确确认启用自动录像");
+  Reject(()=>new UserSettings{Camera=null!}.Validate(false,false),"损坏配置的null字符串被明确拒绝");
+  Reject(()=>new UserSettings{Width=double.NaN}.Validate(false,false),"损坏浮窗尺寸被明确拒绝");
+  Reject(()=>new UserSettings{WarningGb=decimal.MaxValue,StopGb=1}.Validate(false),"超大GB配置被拒绝，不进入字节换算溢出");
+  var s=new UserSettings();Reject(()=>s.Validate(false),"未设置GB时拒绝就绪，不擅自补默认阈值");
+  foreach(var (warn,stop) in new[]{(0m,0m),(2m,2m),(1m,2m),(2m,-1m)}){s.WarningGb=warn;s.StopGb=stop;Reject(()=>s.Validate(false),"拒绝无效阈值 "+warn+"/"+stop);}
+  s.WarningGb=6.5m;s.StopGb=1.25m;s.Validate(false);Check(s.DiskConfigured,"软件支持自定义小数GB阈值");
+  s.PhotoEnabled=false;s.NotesEnabled=true;s.ProtectionEnabled=true;s.ZoomEnabled=true;s.CleanupDays=180;s.OverlaySku=true;s.OverlayQuantity=true;
+  var clone=s.Copy();Check(clone.WarningGb==6.5m&&clone.NotesEnabled&&clone.ProtectionEnabled&&clone.ZoomEnabled&&!clone.PhotoEnabled&&clone.CleanupDays==180&&clone.OverlaySku,"配置复制保留所有新开关与数值");
+  Check(HotkeySpec.Parse("alt+CTRL+f8").Text=="Ctrl+Alt+F8","全局组合键规范化");
+  Reject(()=>HotkeySpec.Parse("F8"),"拒绝无修饰键的全局键");Reject(()=>HotkeySpec.Parse("Shift+A"),"拒绝可抢占扫码字符的全局键");
+  s.HotkeyPreview="Ctrl+Alt+F8";s.HotkeyStop="Alt+Ctrl+F8";Reject(()=>s.Validate(false),"不同动作不能保存重复快捷键");s.HotkeyStop="";s.HotkeysEnabled=true;s.Validate(false);
+  s.TrackingRuleEnabled=false;s.ValidateTracking("123-1");Check(true,"默认物流格式不限");s.TrackingRuleEnabled=true;s.TrackingPrefixes="SF,YT";s.TrackingMinLength=6;s.ValidateTracking("SF1234");Reject(()=>s.ValidateTracking("AB1234"),"可选前缀长度规则只校验完整原号");
+  var context=new VideoContext{Source="普通",SessionId=11,BatchId=12,Tracking="SF123456",Purchases=new(){new("PO1","EXT1")}};var at=new DateTimeOffset(2026,10,8,12,30,40,TimeSpan.FromHours(8));
+  var folder=ArchiveLayout.Folder(root,context,at);Check(folder.EndsWith(Path.Combine("2026年10月8日","PO1-EXT1","SF123456")),"按中文日期/采购外部成对/物流归档");
+  var file=ArchiveLayout.Reserve(root,context,context.Key,at);Check(Path.GetFileName(file.File)=="SF123456.mp4","首段名为物流号.mp4");
+  var next=ArchiveLayout.Reserve(root,context,context.Key,at);Check(Path.GetFileName(next.File)=="SF123456_123040_1.mp4"&&next.File!=file.File,"续录时分秒加序号且不覆盖首段");
+  var more=Enumerable.Range(0,8).AsParallel().Select(_=>ArchiveLayout.Reserve(root,context,context.Key,at).File).ToArray();Check(more.Distinct().Count()==8,"并发预留不覆盖已有片段或sidecar");
+  var multi=context.Copy();multi.Source="联合";multi.Purchases=new(){new("POA","OUTA"),new("POB","")};multi.Tracking="M1";
+  Check(ArchiveLayout.Folder(root,multi,at).Contains("POA-OUTA__POB-无外部单号"),"多采购成对拼接，缺外部号保留占位");
+  multi.Purchases=Enumerable.Range(1,8).Select(i=>new PurchaseLink("PURCHASE"+i+new string('P',40),"EXT"+new string('E',40))).ToList();
+  Check(ArchiveLayout.Folder(root,multi,at).Contains("联合批次11"),"多采购过长才降级为联合批次，完整关联仍在索引");
+  Check(ArchiveLayout.Component("A/B")!=ArchiveLayout.Component("A?B"),"清理文件名后仍以哈希区分碰撞");Check(!ArchiveLayout.Component("CON").Equals("CON"),"Windows设备名安全处理");
+  Reject(()=>ArchiveLayout.Checked(root,Path.Combine(root,"..","outside.mp4")),"拒绝越过录像根目录的路径");
+  var modes=CameraMode.Parse("vcodec=mjpeg min s=1280x720 fps=15 max s=1280x720 fps=30\npixel_format=yuyv422 min s=640x480 fps=15 max s=640x480 fps=30");
+  Check(CameraMode.Choose(modes,"1280x720",30).Format=="mjpeg","自动格式只在同分辨率同帧率中选择");Reject(()=>CameraMode.Choose(modes,"1920x1080",30),"高分辨率不静默降档");Reject(()=>CameraMode.Choose(Array.Empty<CameraMode>(),"1280x720",30),"没有兼容模式时明确失败");
+  var high=CameraMode.Parse("vcodec=mjpeg min s=3840x2160 fps=7.5 max s=3840x2160 fps=7.5\npixel_format=nv12 min s=2560x1440 fps=29.97 max s=2560x1440 fps=29.97\nvcodec=mjpeg min s=7680x4320 fps=5 max s=7680x4320 fps=5");
+  Check(CameraMode.Choose(high,"3840x2160",7.5).Fps==7.5&&CameraMode.Choose(high,"2560x1440",29.97,"nv12").Width==2560&&CameraMode.Choose(high,"7680x4320",5).Height==4320,"2K/4K/8K及低帧率、小数帧率按设备报告保留");
+  Reject(()=>CameraMode.Choose(high,"3840x2160",30),"4K低帧率不能捏造30fps");Reject(()=>CameraMode.Choose(high,"3840x2160",7.5,"nv12"),"不能跨格式拼接档位");
+  new UserSettings{Resolution="3840x2160",FrameRate=7.5}.Validate(false,false);Check(true,"高分辨率小数帧率配置兼容");
+  var four=CameraMode.Choose(high,"3840x2160",7.5);four.VerifyInput("Stream #0:0: Video: mjpeg, yuvj422p, 3840x2160, 7.5 fps");Reject(()=>four.VerifyInput("Stream #0:0: Video: mjpeg, 1920x1080, 7.5 fps"),"实际降分辨率不能报就绪");Reject(()=>four.VerifyInput("Stream #0:0: Video: mjpeg, 3840x2160, 5 fps"),"实际降帧率不能报就绪");
+  var overlay=new UserSettings{OverlayPurchase=true,OverlayOuter=true,OverlaySku=true,OverlayQuantity=true};context.LastSku="SKU-A";context.ConfirmedQuantity=6;
+  var text=Recorder.OverlayText(overlay,context,at);Check(text.Contains("SKU-A")&&text.Contains("数量：6")&&text.Contains("EXT1")&&text.Contains("2026-10-08"),"叠字包含六类已确认业务字段");
+  overlay.OverlaySku=false;overlay.OverlayQuantity=false;Check(!Recorder.OverlayText(overlay,context,at).Contains("SKU-A")&&!Recorder.OverlayText(overlay,context,at).Contains("数量"),"独立关闭商品/数量叠字");
+  Check(text!=Recorder.OverlayText(new UserSettings{OverlayPurchase=true,OverlayOuter=true,OverlaySku=true,OverlayQuantity=true},context,at.AddSeconds(1)),"叠字时间可逐秒更新");
+  var unplanned=new VideoContext{Source="无采购单",SessionId=77,BatchId=78,Tracking="NOPO1"};
+  var old=ArchiveLayout.Reserve(root,unplanned,unplanned.Key,at.AddDays(-200));File.WriteAllBytes(old.File,new byte[]{1,2,3,4});old.State="saved";old.EndAt=at.AddDays(-199);ArchiveLayout.Write(root,old);
+  var library=new VideoLibrary(root);Check(!library.List().Single(x=>x.Id==old.Id).PendingArchive,"无采购录像先在原目录保存");
+  var linked=unplanned.Copy();linked.Purchases=new(){new("BACKPO","BACKEXT")};library.Associate(linked);
+  var pending=library.List("BACKEXT").Single();Check(pending.PendingArchive&&File.Exists(old.File),"后补采购只更新关联索引，可按外部号搜到，尚不搬文件");
+  var target=library.ArchiveTarget(pending);Reject(()=>library.ArchiveConfirmed(pending,target,null,false),"未确认不能归档旧录像");Reject(()=>library.ArchiveConfirmed(pending,target,old.Id,true),"正在录像的片段不能移动");
+  var moved=library.ArchiveConfirmed(pending,target,null,true);Check(File.Exists(moved)&&!File.Exists(old.File)&&File.ReadAllBytes(moved).SequenceEqual(new byte[]{1,2,3,4}),"停录且确认后归档，媒体字节不变且只存一份");
+  var archived=library.List("BACKPO").Single();Check(!archived.PendingArchive&&archived.Segment.Id==old.Id&&archived.Segment.PreviousFile==old.File,"归档保留稳定ID和旧路径追溯");
+  var candidates=library.CleanupCandidates(90,at,null);Check(candidates.Count==1&&candidates[0].Id==old.Id,"普通清理仅含超龄已保存片段，排除starting");
+  Check(library.CleanupCandidates(0,at,null).Count==0&&library.CleanupCandidates(90,at,old.Id).Count==0,"不按天数或当前在录不列候选");
+  library.Edit(archived,"售后现场备注",true,null);Check(library.CleanupCandidates(90,at,null).Count==0,"售后保护始终排除普通清理，即使后来关闭功能开关");
+  var protectedItem=library.List("售后").Single();library.Edit(protectedItem,protectedItem.Note,false,null);var selected=library.CleanupCandidates(90,at,null);
+  Reject(()=>library.DeleteConfirmed(selected,90,at,null,false),"未明确确认不删除");
+  var deleted=library.DeleteConfirmed(selected,90,at,null,true);Check(deleted.Count==1&&deleted.Errors.Count==0&&!File.Exists(moved),"只删除用户已勾选确认的隔离候选，不递归删除目录");
+  // A malicious sidecar cannot cause reads/moves/deletes outside the selected root.
+  var poison=file.File+".json";file.File=Path.GetFullPath(Path.Combine(root,"..","outside.mp4"));File.WriteAllText(poison,JsonSerializer.Serialize(file));
+  Check(library.List().All(x=>x.Id!=file.Id)&&library.Warnings.Count>0,"篡改索引路径被拒绝且显示警告");
+  var safeContext=new VideoContext{Source="无采购单",SessionId=910,BatchId=911,Tracking="SAFE"};
+  var safe=ArchiveLayout.Reserve(root,safeContext,safeContext.Key,at.AddDays(-200));File.WriteAllBytes(safe.File,new byte[]{1,2,3});safe.State="saved";safe.EndAt=at.AddDays(-199);ArchiveLayout.Write(root,safe);
+  var preview=library.CleanupCandidates(90,at,null).Single(i=>i.Id==safe.Id);File.WriteAllBytes(safe.File,new byte[]{1,2,3,4});
+  var changed=library.DeleteConfirmed(new[]{preview},90,at,null,true);Check(changed.Count==0&&changed.Errors.Count==1&&File.Exists(safe.File),"清理确认时重新检查媒体大小；变化后不删除");
+  var valid=library.List().Single(i=>i.Id==safe.Id);
+  using(var recorder=new RecorderScope(root)){
+   recorder.Value.RefreshMetadataAsync(safe.File).GetAwaiter().GetResult();
+   Reject(()=>recorder.Value.SetEvidenceAsync("未开启备注",false).GetAwaiter().GetResult(),"备注未开启时Recorder拒绝写入");
+   Reject(()=>recorder.Value.SetEvidenceAsync("",true).GetAwaiter().GetResult(),"保护未开启时Recorder拒绝修改");
+   File.Delete(safe.File);
+   Reject(()=>recorder.Value.SetEvidenceAsync("",false).GetAwaiter().GetResult(),"文件被删除后Recorder不重建旧sidecar");
+   recorder.Value.RefreshMetadataAsync(safe.File).GetAwaiter().GetResult();Check(recorder.Value.Current==null,"已删除片段刷新后不再占用当前录像状态");
+  }
+  var index=Path.Combine(root,"video-associations.json");File.WriteAllText(index,"{broken");
+  Reject(()=>library.Associate(safeContext),"损坏关联索引不能被新关联静默覆盖");Check(File.ReadAllText(index)=="{broken","关联写入失败后原坏索引原样保留");
+  foreach(var invalid in new[]{
+   "{\"无采购单:910\":null}",
+   "{\"无采购单:910\":{\"Source\":\"无采购单\",\"SessionId\":910,\"Purchases\":null}}",
+   "{\"无采购单:910\":{\"Source\":\"无采购单\",\"SessionId\":910,\"Purchases\":[null]}}",
+   "{\"无采购单:910\":{\"Source\":\"无采购单\",\"SessionId\":910,\"Purchases\":[{\"Po\":\"PO\",\"Outer\":null}]}}",
+   "{\"无采购单:910\":{\"Source\":\"普通\",\"SessionId\":910}}"
+  }) {
+   File.WriteAllText(index,invalid);
+   Reject(()=>library.Associate(safeContext),"合法JSON中无效关联结构不能静默覆盖");
+   Check(File.ReadAllText(index)==invalid,"拒绝无效嵌套关联后原索引原样保留");
+   library.List();Check(library.Warnings.Any(w=>w.StartsWith("关联索引读取失败")),"无效关联可见告警，不让空引用中断录像列表");
+  }
+  return passed;
+ }
+ sealed class RecorderScope : IDisposable {
+  public Recorder Value {get;}
+  public RecorderScope(string root){Value=new Recorder{DirectoryPath=root};}
+  public void Dispose()=>Value.DisposeAsync().AsTask().GetAwaiter().GetResult();
+ }
+}

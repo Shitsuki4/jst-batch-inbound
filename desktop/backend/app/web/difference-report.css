@@ -1,0 +1,54 @@
+.diff-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:12px 0 6px}.diff-toolbar label{display:flex;align-items:center;gap:6px;font-weight:600;cursor:pointer}.diff-toolbar input{width:17px;height:17px}.diff-copy-buttons{display:flex;gap:8px;flex-wrap:wrap}.diff-copy-status{color:#1f6feb;font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere}.diff-count{color:#334155;font-size:13px;margin:8px 0}.report-empty{text-align:center!important;padding:22px!important;color:#334155}.diff-copy-fallback:not(:empty){padding:12px;background:#fff7e7;border:1px solid #ead6a5;border-radius:8px}.diff-copy-fallback img{display:block;max-width:100%;height:auto}.difference-report .round-progress{margin-bottom:6px}@media(max-width:600px){.diff-copy-buttons .btn{white-space:normal;min-height:40px}}
+
+.diff-order-ids{font-size:13px;overflow-wrap:anywhere;line-height:1.7}.diff-manual-text{display:block;width:100%;min-height:100px;box-sizing:border-box;margin-top:8px}
+
+/* 2.0.12: status belongs to the whole row, not just a tiny badge. */
+.diff-legend{display:flex;gap:8px 14px;flex-wrap:wrap;margin:10px 0;color:#374151;font-size:14px;line-height:1.6}
+.diff-legend span{display:inline-flex;align-items:center;gap:6px}
+.diff-legend i{display:inline-block;width:12px;height:12px;border:1px solid currentColor;border-radius:3px}
+.diff-legend .complete{color:#14532d}.diff-legend .complete i{background:#a5d6a7}
+.diff-legend .difference{color:#713f12}.diff-legend .difference i{background:#fff176}
+.diff-legend .extra{color:#7f1d1d}.diff-legend .extra i{background:#e0e0e0}
+.diff-legend .unknown{color:#374151}.diff-legend .unknown i{background:#e0e0e0}
+.modal:has(.difference-report){width:min(980px,100%)}
+.difference-report .round-table{font-size:15px}
+.difference-report .round-table th{font-size:14px;line-height:1.6;padding:10px 8px}
+.difference-report .round-table td{padding:12px 10px;line-height:1.6}
+.difference-report .round-table .pi-code{font-size:clamp(16px,1.25vw,19px);font-weight:700;color:#26384b;letter-spacing:0}
+.difference-report .round-table .pi-name{font-size:clamp(16px,1.2vw,18px);font-weight:600;color:#24354a}
+.difference-report .round-table .pi-barcode{font-size:15px;color:#334155}
+.difference-report .round-table .pi-label,.difference-report .round-table .pi-spec-inline{font-size:14px;color:#334155}
+.difference-report .round-table .pi-erp{font-size:14px;line-height:1.5}
+.difference-report .round-table .pi-plan,.difference-report .round-table .pi-recv{font-size:clamp(22px,1.8vw,26px);overflow-wrap:anywhere}
+.difference-report .round-mark{font-size:15px;font-weight:600;white-space:normal;overflow-wrap:anywhere}
+.difference-report .round-table .report-complete>td{background:#a5d6a7}
+.difference-report .round-table .report-difference>td{background:#fff176}
+.difference-report .round-table .report-extra>td{background:#e0e0e0}
+.difference-report .round-table .report-unknown>td{background:#e0e0e0}
+.difference-report .report-complete .round-mark{background:#dff0e5;color:#14532d}
+.difference-report .report-difference .round-mark{background:#ffefc4;color:#713f12}
+.difference-report .report-extra .round-mark{background:#fce0e1;color:#7f1d1d}
+.difference-report .report-unknown .round-mark{background:#e2e8f0;color:#374151}
+.difference-report .report-complete .pi-product{box-shadow:inset 3px 0 #2e7d32}
+.difference-report .report-difference .pi-product{box-shadow:inset 3px 0 #f9a825}
+.difference-report .report-extra .pi-product{box-shadow:inset 3px 0 #c62828}
+.difference-report .report-unknown .pi-product{box-shadow:inset 3px 0 #616161}
+/* Narrow dialogs use one product card per row rather than shrinking the text. */
+@media(max-width:650px){
+ .difference-report .round-table,.difference-report .round-table tbody{display:block;width:100%}
+ .difference-report .round-table thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+ .difference-report .round-table tbody tr{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));margin-bottom:10px;border-bottom:1px solid #dce4ed}
+ .difference-report .round-table td{display:block;min-width:0;padding:10px 8px;border:0}
+ .difference-report .round-table .pi-product{grid-column:1/-1}
+ .difference-report .round-table td[data-label]::before{content:attr(data-label);display:block;font-size:13px;font-weight:400;color:#334155;margin-bottom:3px}
+ .difference-report .round-table .report-empty{grid-column:1/-1}
+ .difference-report .round-table .pi-code,.difference-report .round-table .pi-name{font-size:17px}
+ .difference-report .round-table .pi-barcode{font-size:15px}
+ .difference-report .round-mark{font-size:15px}
+ .difference-report .diff-copy-buttons{width:100%}
+ .difference-report .diff-copy-buttons .btn{flex:1}
+ .difference-report .table-wrap{border:0}
+}
+
+/* Dark text retains at least 4.5:1 contrast on the stronger row fills. */
+.difference-report .round-table .pi-recv{color:#154080}
