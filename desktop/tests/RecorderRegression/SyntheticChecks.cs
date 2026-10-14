@@ -6,7 +6,10 @@ public static class SyntheticChecks {
  public static async Task<int> Worker(string engine,string[] original){
   if(!original.Contains("video=synthetic"))throw new InvalidOperationException("Synthetic worker refuses physical devices");
   var input=Array.IndexOf(original,"-i");
-  var args=new List<string>{"-hide_banner","-loglevel","info","-n","-re","-f","lavfi","-i","testsrc2=size=1280x720:rate=30"};
+  // CI runners can be slower than real time. The synthetic source verifies the
+  // production recording pipeline, so let lavfi produce the 30-second fixture
+  // as fast as the runner can encode it instead of adding a pacing failure mode.
+  var args=new List<string>{"-hide_banner","-loglevel","info","-n","-f","lavfi","-i","testsrc2=size=1280x720:rate=30"};
   args.AddRange(original[(input+2)..]);
   using var p=Process.Start(Recorder.StartInfo(engine,args,Environment.CurrentDirectory))!;
   // Only the test source changes; output branches, overlay, preview and q-stop remain production arguments.
@@ -31,7 +34,7 @@ public static class SyntheticChecks {
    Check(r.Ready,"模拟确认物流号触发现有录制器并收到首帧");
    var id=r.Current!.Id;await r.StartAsync(context.Tracking,context.Key,context);Check(r.Current.Id==id,"重复物流不重启或覆盖录像");
    var clock=Stopwatch.StartNew();long firstSize=new FileInfo(r.Current.File).Length;
-   while(Volatile.Read(ref previewFrames)<155){if(clock.Elapsed.TotalSeconds>60)throw new TimeoutException("合成编码60秒内未输出30秒画面");await r.HealthAsync();Check(r.Ready,"合成录制健康检查 "+(int)clock.Elapsed.TotalSeconds);if(clock.Elapsed.TotalSeconds>3&&context.LastSku==""){context.LastSku="TEST-SKU";context.ConfirmedQuantity=2;await r.UpdateContextAsync(context);}await Task.Delay(1000);}
+   while(Volatile.Read(ref previewFrames)<155){if(clock.Elapsed.TotalSeconds>60)throw new TimeoutException("合成编码60秒内未输出30秒画面");await r.HealthAsync();Check(r.Ready,$"合成录制健康检查 {(int)clock.Elapsed.TotalSeconds}s（状态：{r.Status}；帧年龄：{r.FrameAge:0.0}s）");if(clock.Elapsed.TotalSeconds>3&&context.LastSku==""){context.LastSku="TEST-SKU";context.ConfirmedQuantity=2;await r.UpdateContextAsync(context);}await Task.Delay(1000);}
    Check(new FileInfo(r.Current.File).Length>firstSize,"录制期间文件实际增长");
    await r.StopAsync("30秒合成自动录制检验");Check(!r.Active&&r.Current.State=="saved"&&r.Current.ExitCode==0,"q停止成功，现有ffprobe验证并标记已保存");
    var file=r.Current.File;
