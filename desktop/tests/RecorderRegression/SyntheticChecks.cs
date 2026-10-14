@@ -33,7 +33,7 @@ public static class SyntheticChecks {
    Check(r.Ready,"模拟确认物流号触发现有录制器并收到首帧");
    var id=r.Current!.Id;await r.StartAsync(context.Tracking,context.Key,context);Check(r.Current.Id==id,"重复物流不重启或覆盖录像");
    var clock=Stopwatch.StartNew();long firstSize=new FileInfo(r.Current.File).Length;
-   while(Volatile.Read(ref previewFrames)<155){if(clock.Elapsed.TotalSeconds>60)throw new TimeoutException("合成编码60秒内未输出30秒画面");await r.HealthAsync();Check(r.Ready,$"合成录制健康检查 {(int)clock.Elapsed.TotalSeconds}s（状态：{r.Status}；帧年龄：{r.FrameAge:0.0}s）");if(clock.Elapsed.TotalSeconds>3&&context.LastSku==""){context.LastSku="TEST-SKU";context.ConfirmedQuantity=2;await r.UpdateContextAsync(context);}await Task.Delay(1000);}
+   while(Volatile.Read(ref previewFrames)<155){if(clock.Elapsed.TotalSeconds>60)throw new TimeoutException("合成编码60秒内未输出30秒画面");await r.HealthAsync();var health=$"合成录制健康检查 {(int)clock.Elapsed.TotalSeconds}s（状态：{r.Status}；帧年龄：{r.FrameAge:0.0}s；原因：{r.Current?.Reason}；退出码：{r.Current?.ExitCode?.ToString()??"未知"}）";Check(r.Ready,r.Ready?health:health+"\n"+r.Diagnostics);if(clock.Elapsed.TotalSeconds>3&&context.LastSku==""){context.LastSku="TEST-SKU";context.ConfirmedQuantity=2;await r.UpdateContextAsync(context);}await Task.Delay(1000);}
    Check(new FileInfo(r.Current.File).Length>firstSize,"录制期间文件实际增长");
    await r.StopAsync("30秒合成自动录制检验");Check(!r.Active&&r.Current.State=="saved"&&r.Current.ExitCode==0,"q停止成功，现有ffprobe验证并标记已保存");
    var file=r.Current.File;
