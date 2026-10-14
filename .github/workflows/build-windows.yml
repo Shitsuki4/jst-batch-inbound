@@ -1,0 +1,78 @@
+name: Build Windows EXE
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  pull_request:
+    paths:
+      - ".github/workflows/build-windows.yml"
+      - "扫码入库助手/**"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Package EXE
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: 扫码入库助手
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: 扫码入库助手/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install "pyinstaller==6.22.3"
+
+      - name: Validate Python sources
+        run: python -m compileall -q app
+
+      - name: Build EXE
+        run: python -m PyInstaller build_exe.spec --noconfirm
+
+      - name: Verify EXE and create archive
+        shell: pwsh
+        run: |
+          $exe = "dist/扫码入库助手.exe"
+          if (-not (Test-Path -LiteralPath $exe)) {
+            throw "EXE was not produced: $exe"
+          }
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $exe).Hash
+          "SHA256=$hash" | Out-File -Encoding utf8 dist/SHA256.txt
+          Compress-Archive -Path $exe -DestinationPath "dist/jst-batch-inbound-windows-x64.zip" -Force
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: jst-batch-inbound-windows-x64
+          path: |
+            扫码入库助手/dist/扫码入库助手.exe
+            扫码入库助手/dist/jst-batch-inbound-windows-x64.zip
+            扫码入库助手/dist/SHA256.txt
+          if-no-files-found: error
+
+      - name: Publish tagged release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            扫码入库助手/dist/扫码入库助手.exe
+            扫码入库助手/dist/jst-batch-inbound-windows-x64.zip
+            扫码入库助手/dist/SHA256.txt
+          generate_release_notes: true
