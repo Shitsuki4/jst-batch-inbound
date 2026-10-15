@@ -7,6 +7,7 @@ param(
     [string]$FfmpegArchive = "",
     [string]$FfmpegArchiveSha256 = "",
     [string]$FfmpegBuildDir = "",
+    [string]$InstallerName = "",
     [Parameter(Mandatory = $true)][string]$InnoCompiler
 )
 
@@ -224,7 +225,15 @@ $payloadBytes = ($payloadFiles | Measure-Object -Property Length -Sum).Sum
 Write-Host ("Offline payload: {0} files, {1:N0} bytes" -f $payloadFiles.Count, $payloadBytes)
 
 Write-Host "== Compile offline installer =="
-& $InnoCompiler "/Qp" "/DPayloadDir=$payloadRoot" "/DOutputDir=$installerDir" "/DAppVersion=$Version" $installerSource
+$isccArgs = @("/Qp", "/DPayloadDir=$payloadRoot", "/DOutputDir=$installerDir", "/DAppVersion=$Version")
+if ($InstallerName) {
+    # Release uploads reject non-ASCII asset names, so callers that publish the
+    # installer can request an ASCII base name while local builds keep the
+    # Chinese default from offline_setup.iss.
+    $isccArgs += "/DOutputBaseFilename=$InstallerName"
+}
+$isccArgs += $installerSource
+& $InnoCompiler @isccArgs
 if ($LASTEXITCODE -ne 0) {
     throw "ISCC failed with exit code $LASTEXITCODE"
 }

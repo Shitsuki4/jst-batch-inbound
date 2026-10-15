@@ -142,6 +142,7 @@ jobs:
             -WebView2Cab $env:WEBVIEW2_CAB `
             -WebView2CabSha256 $env:WEBVIEW2_CAB_SHA `
             -FfmpegBuildDir $env:FFMPEG_BUILD_DIR `
+            -InstallerName "ReceivingAssistant-3.0.0-Offline-Setup" `
             -InnoCompiler $env:INNO_COMPILER
 
       - name: Verify offline installer (silent install, reinstall, uninstall)
@@ -198,3 +199,20 @@ jobs:
           ) + @(Get-ChildItem "desktop/dist/installer/*.exe" | ForEach-Object { $_.FullName })
           gh release upload $tag @files --clobber
           if ($LASTEXITCODE -ne 0) { throw "gh release upload failed: $LASTEXITCODE" }
+
+      - name: Set offline installer asset label
+        if: ${{ startsWith(github.ref, 'refs/tags/desktop-v') || inputs.publish_release_tag != '' }}
+        shell: pwsh
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The asset file name must stay ASCII (release uploads drop non-ASCII
+          # characters), so expose the Chinese name through the asset label.
+          $tag = if ("${{ github.ref }}".StartsWith("refs/tags/")) { "${{ github.ref_name }}" } else { "${{ inputs.publish_release_tag }}" }
+          $name = "ReceivingAssistant-3.0.0-Offline-Setup.exe"
+          $label = "收货小助手-3.0.0-离线完整安装程序.exe"
+          $assetId = gh api "repos/$env:GITHUB_REPOSITORY/releases/tags/$tag" --jq ".assets[] | select(.name == `"$name`") | .id"
+          if ($assetId) {
+            gh api -X PATCH "repos/$env:GITHUB_REPOSITORY/releases/assets/$assetId" -f "label=$label" | Out-Null
+          }

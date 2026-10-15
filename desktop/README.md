@@ -84,6 +84,10 @@ powershell -ExecutionPolicy Bypass -File desktop/build-offline-windows.ps1 `
 
 已在本机解压好 FFmpeg 时，可改用 `-FfmpegBuildDir <含 bin\ffmpeg.exe 的目录>`，跳过压缩包解压。
 
+安装程序默认沿用中文文件名。GitHub Release 上传会丢弃文件名里的非 ASCII 字符，因此
+工作流额外传 `-InstallerName ReceivingAssistant-3.0.0-Offline-Setup`，让发布产物使用 ASCII
+文件名，再通过 Release 的 asset label 显示中文名。本机构建不传该参数即保持中文文件名。
+
 离线安装程序会把 `.NET 自包含宿主 + Python 后端 + FFmpeg/ffprobe + WebView2 固定运行时`
 一起打进安装包，安装与启动都无需联网下载这些依赖（ERP 业务仍需要网络）。它会写入
 `installed-mode.txt`，程序据此把业务数据放到 `%LOCALAPPDATA%\ReceivingAssistant\v3`，
