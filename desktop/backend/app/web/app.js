@@ -13,7 +13,7 @@
   var pending = null;         // 扫码后待确认数量：{code, batch_id, label}
 
   $('#btn-inbound-current').onclick = function () {
-    confirmPendingThen(function () { if (S.session) window.openInbound(S.session.id); });
+    runSerial(function () { return confirmPendingThen(function () { if (S.session) window.openInbound(S.session.id); }); });
   };
   document.addEventListener('inbound-updated', function () { refreshAfterMutation(); refreshDiffDialog(); });
   function inboundButton(id) {
@@ -739,12 +739,10 @@
     var v = this.value.trim();
     this.value = '';
     if (!v) return;
-    if (pending && mode === 'item') {
-      // 直接把这一笔按默认 1 入账，再处理刚扫到的新编码
-      submitScan(v);
-      return;
-    }
-    submitScan(v);
+    // 扫码一律排队串行处理：上一件「入账 + 解析」完成后才处理下一件，
+    // 快速连扫时后一件不会覆盖前一件的待确认数量（前一件不会以 0 丢失）。
+    // 有待确认数量时，下一次扫码会先把上一笔按数量框里的数量入账。
+    runSerial(function () { return submitScan(v); });
   });
 
   /* 待确认数量框：回车=确认，Esc=取消本笔 */
@@ -752,7 +750,7 @@
     var q = $('#pending-qty');
     if (!q) return;
     q.addEventListener('keydown', function (e) {
-      if (e.key === 'Enter') { e.preventDefault(); confirmPending(); }
+      if (e.key === 'Enter') { e.preventDefault(); if (!e.repeat) confirmPending(); }
       else if (e.key === 'Escape') { e.preventDefault(); cancelPending(); }
     });
     // 数量框失焦不自动确认（避免误触）。只有当用户没在操作别的控件时才把光标拉回来，
@@ -766,17 +764,61 @@
     });
   })();
 
+  /* -------- 扫码串行队列 + 幂等提交 -------- */
+  var scanQueue = Promise.resolve(), scanQueued = 0;
+  function runSerial(job) {
+    scanQueued++;
+    var run = scanQueue.then(function () { return job(); });
+    scanQueue = run.then(done, done);
+    function done() { scanQueued--; }
+    return run;
+  }
+  // 每次实际扫码 / 确认生成一个操作编号；网络重试复用同一编号，服务端只入账一次。
+  function newOpId() {
+    if (window.crypto && crypto.randomUUID) return crypto.randomUUID().replace(/-/g, '');
+    var a = new Uint8Array(16); crypto.getRandomValues(a);
+    return Array.prototype.map.call(a, function (v) { return ('0' + v.toString(16)).slice(-2); }).join('');
+  }
+  // 商品数量只能是整数（与服务端校验一致）
+  function pendingQty() {
+    var raw = String($('#pending-qty').value || '').trim();
+    if (!/^\d+$/.test(raw) || Number(raw) < 1 || Number(raw) > 1000000000) return null;
+    return Number(raw);
+  }
+  /* 两条确认路径（回车/按钮确认、扫下一件自动确认）共用同一个请求体 */
+  function buildConfirmBody(p, q) {
+    var b = { code: p.code, batch_id: p.batch_id, sid: S.session && S.session.id, qty: q, client_op_id: p.op_id };
+    if (p.choose) b.item = p.choose;
+    else { b.expected_sku_id = p.expected_sku_id; b.expected_matched = p.expected_matched; }
+    return b;
+  }
+  /* 提交一笔待确认数量；网络失败时用同一个 client_op_id 重试一次（服务端去重，不会多算） */
+  function postConfirm(p, q) {
+    var path = p.choose ? '/api/item/choose' : '/api/item/scan', body = buildConfirmBody(p, q);
+    return api(path, { method: 'POST', body: body }).catch(function () {
+      return api(path, { method: 'POST', body: body });
+    });
+  }
+  /* 取走当前待确认（发请求前就清空，同一笔不可能被提交两次） */
+  function takePending() {
+    var p = pending;
+    clearPending();
+    return p;
+  }
+
   function confirmPending() {
     if (!pending) return;
-    var p = pending, q = Math.max(0, num($('#pending-qty').value));
-    api(p.choose ? '/api/item/choose' : '/api/item/scan', {
-      method: 'POST',
-      body: p.choose
-        ? { item: p.choose, code: p.code, batch_id: p.batch_id, sid: S.session && S.session.id, qty: q }
-        : { code: p.code, batch_id: p.batch_id, sid: S.session && S.session.id, qty: q,
-            expected_sku_id: p.expected_sku_id, expected_matched: p.expected_matched }
-    }).then(function (r) {
-      clearPending();
+    var target = pending;
+    // 只确认按下回车/按钮那一刻的这一笔；排在前面的扫码已经替它入账时什么也不做
+    return runSerial(function () { if (pending === target) return confirmPendingNow(); });
+  }
+
+  function confirmPendingNow() {
+    if (!pending) return Promise.resolve();
+    var q = pendingQty();
+    if (q === null) { toast('数量必须是大于0的整数（商品数量不能有小数）', 'warn'); pendingFocus(); return Promise.resolve(); }
+    var p = takePending();
+    return postConfirm(p, q).then(function (r) {
       if (!r.ok) { handleFail(r); refocus(); return; }
       S.lines = r.lines; if (r.items) S.items = r.items; S.progress = r.progress;
       renderLines(); renderPoItems(); renderStatus();
@@ -789,7 +831,7 @@
         flash(nm + '  →  ' + fmtNum(q), 'ok'); beep(1318, 0.06);
       }
       refocus();
-    }).catch(function () { clearPending(); permAlert(); refocus(); });
+    }).catch(function () { permAlert('网络中断，本笔是否已入账未确认，请核对明细后再补扫'); refocus(); });
   }
 
   function cancelPending() {
@@ -804,7 +846,7 @@
   $('#btn-pending-cancel').onclick = function () { cancelPending(); };
 
   function submitScan(code) {
-    if (!code) return;
+    if (!code) return Promise.resolve();
     if (mode === 'tracking') return scanTracking(code);
     return scanItem(code);
   }
@@ -818,9 +860,9 @@
       flash('仍在收货：' + a.po_id, 'warn');
       beep(660, 0.06);
       refocus();
-      return;
+      return Promise.resolve();
     }
-    api('/api/tracking/scan', { method: 'POST', body: { tracking_no: code, sid: a && a.id } }).then(function (r) {
+    return api('/api/tracking/scan', { method: 'POST', body: { tracking_no: code, sid: a && a.id } }).then(function (r) {
       if (!r.ok) {
         if (r.msg === '当前账号无此操作权限') return handleFail(r);
         // 常见错误（如结单后误扫）用轻提示，别弹「无权限」吓人
@@ -852,27 +894,25 @@
     // 若扫到的其实是另一个已存在的物流单号，直接切过去，避免误判为未知商品
     var hit = (S.batches || []).filter(function (b) { return b.tracking_no === code; })[0];
     if (hit) {
-      confirmPendingThen(function () {
-        switchTracking(hit.id, code);
+      return confirmPendingThen(function () {
+        return switchTracking(hit.id, code);
       });
-      return;
     }
     // 先确认上一笔待确认的数量（默认 1），再解析这一笔
-    confirmPendingThen(function () { resolveItem(code); });
+    return confirmPendingThen(function () { return resolveItem(code); });
   }
 
-  /* 把上一笔待确认的按当前数量入账，成功后再执行 next */
+  /* 把上一笔待确认的按当前数量入账，完成后再执行 next（返回 Promise，供串行队列等待） */
   function confirmPendingThen(next) {
-    if (!pending) { next(); return; }
-    var p = pending, q = Math.max(0, num($('#pending-qty').value));
-    pending = null;
-    api(p.choose ? '/api/item/choose' : '/api/item/scan', {
-      method: 'POST',
-      body: p.choose
-        ? { item: p.choose, code: p.code, batch_id: p.batch_id, sid: S.session && S.session.id, qty: q }
-        : { code: p.code, batch_id: p.batch_id, sid: S.session && S.session.id, qty: q }
-    }).then(function (r) {
-      clearPending();
+    if (!pending) return Promise.resolve(next());
+    var q = pendingQty();
+    if (q === null) {
+      // 数量框里不是整数：不入账也不丢弃上一笔，留给用户改正；本次扫码不处理
+      toast('上一件的数量必须是整数，请先改正并确认后再扫下一件', 'warn'); beep(180, 0.16); pendingFocus();
+      return Promise.resolve();
+    }
+    var p = takePending();
+    return postConfirm(p, q).then(function (r) {
       if (r.ok && r.lines) {
         S.lines = r.lines;
         if (r.items) S.items = r.items;
@@ -885,8 +925,11 @@
       } else if (!r.ok) {
         handleFail(r);
       }
-      next();
-    }).catch(function () { clearPending(); permAlert(); next(); });
+      return next();
+    }, function () {
+      // 结果未确认：不继续处理下一件，避免在不确定状态下继续累加
+      permAlert('网络中断，上一件是否已入账未确认，请核对明细后再扫');
+    });
   }
 
   function clearPending() {
@@ -896,7 +939,7 @@
   }
 
   function showPending(res, code, label, chooseItem) {
-    pending = { code: code, batch_id: res.batch_id || S.current_batch, label: label || code,
+    pending = { op_id: newOpId(), code: code, batch_id: res.batch_id || S.current_batch, label: label || code,
                 choose: chooseItem || null, expected_sku_id: res.item && res.item.sku_id,
                 expected_matched: !res.unmatched };
     $('#pb-name').textContent = label || code;
@@ -915,7 +958,7 @@
 
   function switchTracking(bid, code) {
     S.current_batch = bid;
-    api('/api/state?batch_id=' + bid).then(function (st) {
+    return api('/api/state?batch_id=' + bid).then(function (st) {
       S = st; renderLines(); renderPoItems(); renderStatus();
       setMode('item', true);
       window.dispatchEvent(new CustomEvent('native-receipt',{detail:{kind:'tracking',tracking_no:code,key:'普通:'+S.session.id+':'+bid}}));
@@ -925,7 +968,7 @@
 
   /* 解析一个商品编码：命中唯一商品则进入「待确认数量」；多候选则弹选择 */
   function resolveItem(code) {
-    api('/api/item/scan', {
+    return api('/api/item/scan', {
       method: 'POST',
       body: { code: code, batch_id: S.current_batch, sid: S.session && S.session.id, qty: 0 }
     }).then(function (r) {
@@ -944,10 +987,14 @@
      图片来自商品资料接口（pic 字段），异步补位：先弹框，图到了再淡入。 */
   function showCandidates(r) {
     suppressRefocus = Date.now() + 3000;
+    if (ProductPicker.isOpen()) return;
+    // 选择框打开期间扫码队列暂停，选定 / 取消后才处理下一件
+    var release, wait = new Promise(function (ok) { release = ok; });
     ProductPicker.open({rows:r.candidates, code:r.code,
       owner:S.session?.owner_co_id, auth:S.session?.auth_co_id,
-      onCancel:refocus,
+      onCancel:function () { release(); refocus(); },
       onChoose:function(it) {
+        release();
         showPending({batch_id:S.current_batch}, r.code, it.name, {
           poi_id:it.poi_id || '', sku_id:it.sku_id, i_id:it.i_id || '',
           sku_code:it.sku_code || '', name:it.name, spec:it.spec || '', outside_purchase:!!it.outside_purchase
@@ -956,6 +1003,7 @@
         beep(880, .05);
       }
     });
+    return wait;
   }
 
   $('#btn-skip-tracking').onclick = function () {
@@ -1129,7 +1177,7 @@
     if ((el = e.target.closest('.js-bl-switch'))) {
       var id = +el.dataset.id;
       if (id === S.current_batch) return;
-      confirmPendingThen(function () { switchTracking(id, trackingNoOf(id)); });
+      runSerial(function () { return confirmPendingThen(function () { return switchTracking(id, trackingNoOf(id)); }); });
       return;
     }
     if ((el = e.target.closest('.js-bl-del'))) {
@@ -1198,7 +1246,7 @@
         var line = (S.lines || []).filter(function (l) { return l.id === id; })[0];
         if (!line) return;
         if (b.dataset.act === 'del') { delLine(id); return; }
-        var step = Math.max(0.01, num(S.settings && S.settings.scan_step) || 1);
+        var step = Math.max(1, Math.round(num(S.settings && S.settings.scan_step)) || 1);   // 数量只能是整数
         setQty(id, Math.max(0, num(line.qty) + (b.dataset.act === 'inc' ? step : -step)));
       };
     });
@@ -1805,7 +1853,7 @@
   }
 
   window.ReceivingApp = { navigate: switchTab, canNavigate: navigationReady,
-    isBusy: function () { return !!(pending || window.ReceiptCopy?.isBusy() || writesPending || poRefreshing || pauseReportBusy || finishBusy || window.ProductPicker?.isOpen() || window.ReceivingWorkspace?.busy()); } };
+    isBusy: function () { return !!(pending || scanQueued || window.ReceiptCopy?.isBusy() || writesPending || poRefreshing || pauseReportBusy || finishBusy || window.ProductPicker?.isOpen() || window.ReceivingWorkspace?.busy()); } };
   document.addEventListener('settings:saved', function (ev) {
     S.settings = Object.assign(S.settings || {}, ev.detail);
     if (ev.detail.default_id_type) $('#id-type').value = ev.detail.default_id_type;
