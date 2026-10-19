@@ -105,7 +105,8 @@ begin
       Item := Processes.ItemIndex(I);
       if not VarIsNull(Item.ExecutablePath) then
       begin
-        Path := Lowercase(Item.ExecutablePath);
+        Path := Item.ExecutablePath;
+        Path := Lowercase(Path);
         if Copy(Path, 1, Length(Prefix)) = Prefix then
         begin
           Result := True;
