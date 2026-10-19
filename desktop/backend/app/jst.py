@@ -17,6 +17,7 @@ import os
 import re
 import ssl
 import sys
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -161,8 +162,14 @@ def _owner_name(row):
 # ---------------------------------------------------------------- 客户端
 
 class JstClient(object):
+    # Serializes cookie writers (absorb/apply) so two concurrent responses cannot lose
+    # each other's update; class-level so test fakes that skip __init__ still have it.
+    _cookie_lock = threading.Lock()
+
     def __init__(self, logger=None, timeout=25):
-        self.cookies = {}          # name -> 原始（已 URL 编码）取值
+        # name -> 原始（已 URL 编码）取值。写入一律"复制后整体替换"（copy-on-write），
+        # 读取方拿到的是某一时刻的完整快照，不会遇到 dictionary changed size during iteration。
+        self.cookies = {}
         self.uid = ""
         self.coid = ""
         self.uname = ""
@@ -176,7 +183,8 @@ class JstClient(object):
 
     # ---------------- 基础 HTTP ----------------
     def _cookie_header(self):
-        return "; ".join("%s=%s" % (k, v) for k, v in self.cookies.items() if v not in (None, ""))
+        ck = self.cookies   # 取一次引用即为快照：写方只整体替换、从不原地修改
+        return "; ".join("%s=%s" % (k, v) for k, v in list(ck.items()) if v not in (None, ""))
 
     def _request(self, url, body=None, extra_headers=None, referer=None, is_json=False, timeout=None):
         data = None
@@ -271,10 +279,13 @@ class JstClient(object):
         if not k or k.lower() in ("path", "expires", "max-age", "domain",
                                   "secure", "httponly", "samesite", "priority"):
             return
-        if v.lower() in ("", "deleted", "expired"):
-            self.cookies.pop(k, None)
-        else:
-            self.cookies[k] = v
+        with self._cookie_lock:
+            ck = dict(self.cookies)
+            if v.lower() in ("", "deleted", "expired"):
+                ck.pop(k, None)
+            else:
+                ck[k] = v
+            self.cookies = ck
 
     def _json_login_post(self, url, payload, timeout=None):
         """POST 登录系接口，返回 (dict, meta)；HTTP 层异常转成 BizError。"""
@@ -290,8 +301,10 @@ class JstClient(object):
         ck = {str(k): ("" if v is None else str(v)) for k, v in (ck or {}).items()}
         if not ck.get("u_id") or not ck.get("u_co_id"):
             raise LoginError("验证码/账号校验后未返回完整ERP登录身份，请使用下方官方网页登录并完成安全验证（不会误报登录成功）")
-        self.cookies = dict(ck)
-        self.cookies["u_lastLoginType"] = ck.get("u_lastLoginType") or self.cookies.get("u_lastLoginType") or "ap"
+        new = dict(ck)
+        new["u_lastLoginType"] = ck.get("u_lastLoginType") or self.cookies.get("u_lastLoginType") or "ap"
+        with self._cookie_lock:
+            self.cookies = new
         self._vs_cache = {}
         self._sku_cache = {}
         try:
@@ -422,7 +435,7 @@ class JstClient(object):
         if data.get("hasRisk") or data.get("idaasHasRisk"):
             raise LoginError("需要完成官方安全验证，请点击下方官方网页登录，在官方窗口内完成验证")
         # A previous account must not satisfy identity checks for a new SMS login.
-        ck = {k: v for k, v in self.cookies.items()
+        ck = {k: v for k, v in list(self.cookies.items())
               if k not in ("u_id", "u_co_id", "u_name", "u_co_name")}
         for line in meta.get("set_cookie") or []:
             part = line.split(";", 1)[0].strip()
