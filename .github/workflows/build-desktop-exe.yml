@@ -361,3 +361,35 @@ jobs:
           }
           set_label "ReceivingAssistant-$APP_VERSION-Offline-Setup.exe" "收货小助手-$APP_VERSION-离线完整安装程序.exe"
           set_label "ReceivingAssistant-Deps-$APP_VERSION-Setup.exe" "收货小助手-$APP_VERSION-运行依赖安装程序.exe"
+
+      - name: Add gh-proxy download links to release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Prepend a gh-proxy.com mirror section to the release body. The marker block is
+          # replaced on re-runs (attach mode) so the links never duplicate.
+          body=$(gh release view "$RELEASE_TAG" --json body --jq '.body // ""')
+          body=$(printf '%s\n' "$body" | awk '
+            /<!-- gh-proxy-links:start -->/ {skip=1; next}
+            /<!-- gh-proxy-links:end -->/ {skip=0; next}
+            !skip {print}
+          ')
+          {
+            echo '<!-- gh-proxy-links:start -->'
+            echo '## 国内加速下载（gh-proxy.com）'
+            echo
+            echo '> 以下链接由 [gh-proxy.com](https://gh-proxy.com) 加速，文件与官方 Release 完全一致，可用 `SHA256SUMS.txt` 校验。'
+            echo
+            for asset in \
+              "jst-batch-inbound-desktop-${APP_VERSION}-win-x64.zip" \
+              "ReceivingAssistant-${APP_VERSION}-Offline-Setup.exe" \
+              "ReceivingAssistant-Deps-${APP_VERSION}-Setup.exe" \
+              "SHA256SUMS.txt"; do
+              echo "- [${asset}](https://gh-proxy.com/https://github.com/${GH_REPO}/releases/download/${RELEASE_TAG}/${asset})"
+            done
+            echo '<!-- gh-proxy-links:end -->'
+            echo
+            printf '%s\n' "$body"
+          } > release-notes.md
+          gh release edit "$RELEASE_TAG" --notes-file release-notes.md
+          echo "Updated release notes with gh-proxy links for $RELEASE_TAG"
