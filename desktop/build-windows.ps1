@@ -155,7 +155,7 @@ if ($RunSynthetic) {
 }
 
 Write-Host "== Publish native WPF application =="
-& $Dotnet publish $nativeProject -c $Configuration -r $Runtime --self-contained true -o $nativeOut
+& $Dotnet publish $nativeProject -c $Configuration -r $Runtime --self-contained true -o $nativeOut "-p:Version=$Version"
 if ($LASTEXITCODE -ne 0) {
     throw "dotnet publish failed with exit code $LASTEXITCODE"
 }
