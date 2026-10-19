@@ -16,7 +16,7 @@ public sealed partial class MainWindow:Window {
   if(UiTest.Active)root=UiTest.Output;
   if(UiTest.Hidden){ShowActivated=false;ShowInTaskbar=false;Opacity=0;}
   Directory.CreateDirectory(root);
-  Title="收货小助手 3.0.1 · 完整版";Width=1450;Height=950;MinWidth=1024;MinHeight=700;Background=new SolidColorBrush(Color.FromRgb(242,246,248));FontFamily=new FontFamily("Microsoft YaHei UI");FontSize=14;
+  Title="收货小助手 3.0.2 · 完整版";Width=1450;Height=950;MinWidth=1024;MinHeight=700;Background=new SolidColorBrush(Color.FromRgb(242,246,248));FontFamily=new FontFamily("Microsoft YaHei UI");FontSize=14;
   try{settings=UserSettings.Read(Path.Combine(root,"native-settings.json"));}
   catch(Exception ex){settings=new();settingsLoadWarning="视频配置读取失败，原文件保留，自动录像关闭；请在设置中核对后显式保存："+ex.Message;settingsLoadFailed=true;}
   enabled.IsChecked=settings.AutoRecordEnabled&&!settingsLoadFailed;
@@ -104,7 +104,7 @@ public sealed partial class MainWindow:Window {
 }
 public static class Program {
  [STAThread]public static void Main(string[] args){
-  if(args.Contains("--dependency-check")){var check=Dependencies.Check().GetAwaiter().GetResult();File.WriteAllText(args[Array.IndexOf(args,"--dependency-check")+1],JsonSerializer.Serialize(check));Environment.ExitCode=check.Ready?0:1;return;}
+  if(args.Contains("--dependency-check")){var check=Dependencies.Check().GetAwaiter().GetResult();File.WriteAllText(args[Array.IndexOf(args,"--dependency-check")+1],JsonSerializer.Serialize(new{check.WebView,check.Video,check.Engine,check.Detail,check.Ready,BrowserFolder=AppPaths.BrowserFolder,AppPaths.Installed}));Environment.ExitCode=check.Ready?0:1;return;}
   if(args.Contains("--ui-self-test"))UiTest.Configure(args);
   if(args.Contains("--backend-self-test")){BackendAcceptance.Run(args).GetAwaiter().GetResult();return;}
   if(args.Contains("--self-test")){try{Acceptance.Run(args).GetAwaiter().GetResult();}catch(Exception e){System.IO.File.WriteAllText(Path.Combine(AppContext.BaseDirectory,"self-test-error.txt"),e.ToString());Environment.ExitCode=1;}return;}
