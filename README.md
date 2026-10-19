@@ -1,10 +1,10 @@
-# 扫码入库助手（聚水潭）
+# 收货小助手 / 扫码入库助手（聚水潭）
 
-仓库包含两套可独立构建的 Windows 客户端：
+仓库只保留 3.0 桌面版 [`desktop`](desktop)：WPF 宿主负责监控浮窗、扫码自动录像和录像索引，
+Python 本地服务负责聚水潭业务、SQLite、PDA 和导出。
 
-- [`desktop`](desktop)：3.0 桌面版。WPF 宿主负责监控浮窗、扫码自动录像和录像索引，Python
-  本地服务负责聚水潭业务、SQLite、PDA 和导出。
-- [`扫码入库助手`](扫码入库助手)：旧版 Python + 原生 HTML/JS 单文件 EXE。
+旧版 Python + 原生 HTML/JS 单文件 EXE（`扫码入库助手/` 目录，最后版本 2.0.21）已从 `main`
+删除，完整源码保留在标签 [`legacy-final-2.0.21`](https://github.com/Shitsuki4/jst-batch-inbound/tree/legacy-final-2.0.21)。
 
 ## 桌面版 3.0
 
@@ -15,46 +15,30 @@
 构建便携包：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File desktop/build-windows.ps1
+powershell -ExecutionPolicy Bypass -File desktop/build-windows.ps1 -Version 3.0.0
 ```
 
 产物为 `desktop/dist/portable` 和
-`desktop/dist/jst-batch-inbound-desktop-3.0.0-win-x64.zip`。完整构建与测试说明见
+`desktop/dist/jst-batch-inbound-desktop-<版本>-win-x64.zip`。完整构建与测试说明见
 [`desktop/README.md`](desktop/README.md)。
 
+## 发布
+
 桌面工作流 [`.github/workflows/build-desktop-exe.yml`](.github/workflows/build-desktop-exe.yml)
-支持手动触发、`desktop/**` PR 和 `desktop-v*` 标签。标签构建会创建 GitHub Release。
+支持手动触发、`desktop/**` PR 和 `desktop-v*` 标签。
+
+- 版本号以 `desktop/src/Receiving.Native.csproj` 的 `<Version>` 为准。打 `desktop-vX.Y.Z`
+  标签前先改 csproj；标签版本与 csproj 不一致时构建直接失败。
+- 标签构建会创建 GitHub Release，资产名使用标签里的版本号。
+- 手动触发时可填 `publish_release_tag`（格式 `desktop-vX.Y.Z`，仅限 `main` 分支），把产物追加到
+  已有 Release；同名资产已存在时不会覆盖，会直接失败。
 
 ```powershell
 git tag desktop-v3.0.0
 git push origin desktop-v3.0.0
 ```
 
-## 旧版单文件客户端
-
-```powershell
-cd 扫码入库助手
-python -m pip install -r requirements.txt
-python app/server.py
-```
-
-默认访问 `http://127.0.0.1:8765`，端口被占用时会自动顺延。
-
-旧版打包 EXE：
-
-```powershell
-cd 扫码入库助手
-python -m pip install -r requirements.txt pyinstaller
-python -m PyInstaller build_exe.spec --noconfirm
-```
-
-产物为 `扫码入库助手/dist/扫码入库助手.exe`。首次运行时会在 EXE 同目录生成 `data/` 和
-`导出/`，升级 EXE 不会覆盖这两个目录。
-
-旧版工作流 [`.github/workflows/build-windows.yml`](.github/workflows/build-windows.yml) 仅支持
-手动触发和旧路径 PR 构建，不再随 `main` 推送或 `v*` 标签自动运行。
-
 ## GitHub Actions 构建结果
 
-两个工作流都会上传 EXE/ZIP、后端可执行文件和 SHA256 校验文件。桌面工作流还运行 Python
-回归、录像器核心回归和 FFmpeg 合成源 30 秒录像验证。
+工作流会上传便携 ZIP、离线完整安装程序和 SHA256 校验文件，并运行 Python 回归、录像器核心
+回归、FFmpeg 合成源 30 秒录像验证，以及离线安装程序的安装 / 覆盖升级 / 卸载验收。
