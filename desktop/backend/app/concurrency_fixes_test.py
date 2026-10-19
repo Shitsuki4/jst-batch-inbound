@@ -366,6 +366,30 @@ class IntegerQtyTests(Base):
         self.assertFalse(r['ok'])
 
 
+class IntegerQtyFrontendTests(unittest.TestCase):
+    """无采购单收货 / 联合收货 pages: quantity inputs are integer-only."""
+    WEB = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'web')
+
+    def read(self, name):
+        with open(os.path.join(self.WEB, name), encoding='utf-8') as f:
+            return f.read()
+
+    def test_unplanned_and_joint_inputs_are_integer_only(self):
+        import re
+        for page in ('unplanned.html', 'joint.html'):
+            html = self.read(page)
+            self.assertNotIn('step="any"', html, page)
+            for tag in re.findall(r'<input[^>]*(?:id="(?:step|qty)"|name="qty")[^>]*>', html):
+                self.assertIn('step="1"', tag, (page, tag))
+                self.assertIn('inputmode="numeric"', tag, (page, tag))
+        for script in ('unplanned.js', 'joint.js'):
+            js = self.read(script)
+            self.assertIn('function wholeQty', js, script)
+            self.assertIn('商品数量不能有小数', js, script)
+            self.assertNotIn('step="any"', js, script)
+            self.assertNotIn("qty:Number($(", js, script)
+
+
 # ---------------------------------------------------------------- 5a. same SKU on several PO lines
 class DuplicateSkuLineTests(unittest.TestCase):
     def setUp(self):
