@@ -7,7 +7,8 @@ param(
 
 # End-to-end acceptance for the full offline installer: silent install, bundled
 # dependency check with a minimal PATH, hash parity with the payload, a reinstall
-# that must preserve user data, and a silent uninstall that must also preserve it.
+# that must preserve user data while purging stale program files ([InstallDelete]), and a
+# silent uninstall that must also preserve user data.
 
 $ErrorActionPreference = "Stop"
 
@@ -133,7 +134,17 @@ try {
     $sentinel = Join-Path $userDataRoot ("installer-test-" + [guid]::NewGuid().ToString("N") + ".txt")
     Set-Content -LiteralPath $sentinel -Value "acceptance-only" -Encoding ASCII
 
-    Write-Host "== Reinstall (must preserve user data) =="
+    # Simulate leftovers from an older build; [InstallDelete] must purge these program-only dirs.
+    $staleFiles = @()
+    foreach ($relative in @("backend\_internal", "runtime\webview2")) {
+        $dir = Join-Path $Target $relative
+        if (-not (Test-Path -LiteralPath $dir -PathType Container)) { throw "Installed tree is missing $relative" }
+        $stale = Join-Path $dir ("stale-from-old-build-" + [guid]::NewGuid().ToString("N") + ".txt")
+        Set-Content -LiteralPath $stale -Value "stale" -Encoding ASCII
+        $staleFiles += $stale
+    }
+
+    Write-Host "== Reinstall (must preserve user data, purge stale program files) =="
     $code = Invoke-Process -FilePath $Installer -Arguments @(
         "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/NOICONS", "/TASKS=", "/DIR=$Target")
     if ($code -ne 0) { throw "Reinstall exited with code $code" }
@@ -141,6 +152,23 @@ try {
         throw "Sentinel file changed during reinstall"
     }
     $checks.Add("Reinstall preserved the independent user data directory")
+    foreach ($stale in $staleFiles) {
+        if (Test-Path -LiteralPath $stale) { throw "Stale file survived reinstall: $stale" }
+    }
+    foreach ($relative in @("backend\Receiving.Service.exe", "runtime\webview2\msedgewebview2.exe")) {
+        $source = Join-Path $PayloadRoot $relative
+        $installed = Join-Path $Target $relative
+        if (-not (Test-Path -LiteralPath $installed -PathType Leaf)) { throw "Reinstall is missing $relative" }
+        if ((Get-FileHash -Algorithm SHA256 -LiteralPath $source).Hash -ne (Get-FileHash -Algorithm SHA256 -LiteralPath $installed).Hash) {
+            throw "Hash mismatch for $relative after reinstall"
+        }
+    }
+    $payloadInternal = @(Get-ChildItem -LiteralPath (Join-Path $PayloadRoot "backend\_internal") -Recurse -File).Count
+    $installedInternal = @(Get-ChildItem -LiteralPath (Join-Path $Target "backend\_internal") -Recurse -File).Count
+    if ($payloadInternal -ne $installedInternal) {
+        throw "backend\_internal file count differs after reinstall: payload $payloadInternal, installed $installedInternal"
+    }
+    $checks.Add("Reinstall purged stale files in backend\_internal and runtime\webview2 and restored them from the payload")
 
     Write-Host "== Silent uninstall =="
     $uninstaller = Join-Path $Target "unins000.exe"
