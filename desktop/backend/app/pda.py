@@ -4,7 +4,6 @@ import hashlib
 import hmac
 import ipaddress
 import json
-import math
 import secrets
 import socket
 import ssl
@@ -15,11 +14,17 @@ from datetime import datetime, timedelta, timezone
 from http.cookies import SimpleCookie
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from store import validate_qty
 
 ASSETS = {"/", "/pda.html", "/pda.js", "/style.css", "/pda.css", "/inventory.js", "/inbound.js", "/operations.js", "/ux.js", "/receipt-editor.js", "/receiving-round.js"}
 GETS = {"/api/inventory/partners", "/api/inventory/config", "/api/inventory/lookup", "/api/inventory/history", "/api/inbound/options", "/api/inbound/preview", "/api/session/detail", "/api/operations"}
 POSTS = {"/api/line/edit", "/api/inventory/preview", "/api/inventory/submit", "/api/inventory/verify", "/api/inbound/create", "/api/inbound/resume", "/api/tracking/scan", "/api/item/scan", "/api/item/choose", "/api/operations/note"}
 RECEIPT = {"/api/tracking/scan", "/api/item/scan", "/api/item/choose"}
+PAIR_BODY_MAX = 1024          # unauthenticated pairing body cap
+BODY_MAX = 65536
+BODY_DEADLINE = 5.0           # whole body must arrive within this many seconds
+PAIR_PER_IP_PER_MIN = 10      # pairing attempts per source IP per minute
+PAIR_MAX_FAILURES = 5         # wrong codes before the current pairing code is burned
 
 class SecureServer(ThreadingHTTPServer):
     daemon_threads = True
@@ -35,7 +40,11 @@ class PdaHost:
         self.sessions={}
         self.pair_code=""
         self.pair_until=0
-        self.attempts=[]
+        self.attempts={}        # source ip -> [timestamps] within the last minute
+        self.pair_failures=0
+        # Guards sessions / pairing state: guard() and pairing run outside the global
+        # business lock, while desktop requests change the same state under it.
+        self.lock=threading.RLock()
         self.host=""
         self.port=0
         self.pin=""
@@ -45,9 +54,11 @@ class PdaHost:
         return str(self.app.JST.coid)+":"+str(self.app.JST.uid) if self.app.JST.uid else ""
 
     def invalidate(self):
-        self.sessions.clear()
-        self.pair_code=""
-        self.pair_until=0
+        with self.lock:
+            self.sessions={}
+            self.pair_code=""
+            self.pair_until=0
+            self.pair_failures=0
 
     def addresses(self):
         out=set()
@@ -117,19 +128,23 @@ class PdaHost:
             srv.server_close()
 
     def status(self):
-        if self.identity!=self.who():
-            self.invalidate()
-            self.identity=self.who()
-        now=time.time()
-        self.sessions={k:v for k,v in self.sessions.items() if v["expires"]>now}
+        with self.lock:
+            if self.identity!=self.who():
+                self.invalidate()
+                self.identity=self.who()
+            now=time.time()
+            self.sessions={k:v for k,v in self.sessions.items() if v["expires"]>now}
+            sessions=list(self.sessions.values())
         return {"enabled":bool(self.server),"addresses":self.addresses(),"url":("https://%s:%d"%(self.host,self.port)) if self.server else "",
-            "fingerprint":self.pin if self.server else "", "devices":[{k:v[k] for k in ("id","name","created","expires")} for v in self.sessions.values()]}
+            "fingerprint":self.pin if self.server else "", "devices":[{k:v[k] for k in ("id","name","created","expires")} for v in sessions]}
 
     def pairing(self):
         self.status()
         if not self.server or not self.who(): raise ValueError("请先登录并启用PDA服务")
-        self.pair_code=str(secrets.randbelow(90000000)+10000000)
-        self.pair_until=time.time()+300
+        with self.lock:
+            self.pair_code=str(secrets.randbelow(90000000)+10000000)
+            self.pair_until=time.time()+300
+            self.pair_failures=0
         obj={"url":self.status()["url"], "pin":self.pin, "code":self.pair_code}
         import qrcode
         payload = "JSTPDA1:"+base64.urlsafe_b64encode(json.dumps(obj,separators=(",",":")).encode()).decode()
@@ -141,21 +156,35 @@ class PdaHost:
         return {"code":self.pair_code,"expires":self.pair_until,"text":payload,
                 "qr":"data:image/svg+xml;base64,"+base64.b64encode(svg.encode()).decode()}
 
-    def pair(self, code, name):
+    def pair(self, code, name, ip=""):
         self.status()
-        now=time.time()
-        self.attempts=[t for t in self.attempts if t>now-60]
-        if len(self.attempts)>=10: raise ValueError("配对请求过多，请一分钟后再试")
-        self.attempts.append(now)
-        if not self.who() or not self.pair_code or now>self.pair_until or not hmac.compare_digest(str(code),self.pair_code):
-            raise ValueError("配对码无效或过期，请在电脑端重新生成")
-        if len(self.sessions)>=20: raise ValueError("最多20台配对设备，请先撤销不用的设备")
-        name=str(name).strip()[:60]
-        if not name: raise ValueError("请输入设备名称")
-        self.pair_code=""
-        token=secrets.token_urlsafe(32)
-        self.sessions[hashlib.sha256(token.encode()).hexdigest()]={"id":secrets.token_hex(8),"name":name,"created":now,"expires":now+8*3600,"identity":self.who()}
-        return token
+        with self.lock:
+            now=time.time()
+            # Per source IP: one noisy LAN device can no longer block everyone else's pairing.
+            self.attempts={k:[t for t in v if t>now-60] for k,v in self.attempts.items()}
+            self.attempts={k:v for k,v in self.attempts.items() if v}
+            mine=self.attempts.setdefault(str(ip),[])
+            if len(mine)>=PAIR_PER_IP_PER_MIN: raise ValueError("配对请求过多，请一分钟后再试")
+            mine.append(now)
+            if not self.who() or not self.pair_code or now>self.pair_until:
+                raise ValueError("配对码无效或过期，请在电脑端重新生成")
+            if not hmac.compare_digest(str(code),self.pair_code):
+                self.pair_failures+=1
+                if self.pair_failures>=PAIR_MAX_FAILURES:
+                    # Burn the code: guessing can't continue across sources, the desktop regenerates.
+                    self.pair_code=""
+                    self.pair_until=0
+                    self.pair_failures=0
+                    raise ValueError("配对码输错次数过多，已作废；请在电脑端重新生成配对码")
+                raise ValueError("配对码无效或过期，请在电脑端重新生成")
+            if len(self.sessions)>=20: raise ValueError("最多20台配对设备，请先撤销不用的设备")
+            name=str(name).strip()[:60]
+            if not name: raise ValueError("请输入设备名称")
+            self.pair_code=""
+            self.pair_failures=0
+            token=secrets.token_urlsafe(32)
+            self.sessions[hashlib.sha256(token.encode()).hexdigest()]={"id":secrets.token_hex(8),"name":name,"created":now,"expires":now+8*3600,"identity":self.who()}
+            return token
 
     def authorize(self, cookie):
         self.status()
@@ -165,11 +194,13 @@ class PdaHost:
             token=c["jst_pda"].value
         except Exception:
             return None
-        sess=self.sessions.get(hashlib.sha256(token.encode()).hexdigest())
+        with self.lock:
+            sess=self.sessions.get(hashlib.sha256(token.encode()).hexdigest())
         return sess if sess and sess["identity"]==self.who() else None
 
     def revoke(self, device_id):
-        self.sessions={k:v for k,v in self.sessions.items() if v["id"]!=device_id}
+        with self.lock:
+            self.sessions={k:v for k,v in self.sessions.items() if v["id"]!=device_id}
 
     def receipt_allowed(self, s):
         if not s: return False
@@ -197,16 +228,39 @@ def make_handler(host, base):
                     self.receipt_request=None
             return super()._send(code,body,ctype,headers)
 
-        def _body(self):
+        def _body(self, limit=BODY_MAX):
             if hasattr(self,"parsed_body"): return self.parsed_body
             if self.headers.get("Transfer-Encoding"): raise ValueError("不支持分块请求")
-            size=int(self.headers.get("Content-Length") or 0)
-            if size<0 or size>65536: raise ValueError("请求过大")
+            try: size=int(self.headers.get("Content-Length") or 0)
+            except ValueError: raise ValueError("请求长度无效")
+            if size<0 or size>limit: raise ValueError("请求过大")
             if self.headers.get_content_type()!="application/json": raise ValueError("需要JSON请求")
-            value=json.loads(self.rfile.read(size).decode("utf-8"))
+            value=json.loads(self._read_exact(size).decode("utf-8"))
             if not isinstance(value,dict): raise ValueError("请求格式错误")
             self.parsed_body=value
             return value
+
+        def _read_exact(self, size, deadline=None):
+            # Total deadline for the whole body, not per recv(): a client trickling one
+            # byte at a time cannot keep a handler thread busy for long.
+            end=time.monotonic()+(BODY_DEADLINE if deadline is None else deadline)
+            chunks,got=[],0
+            try:
+                while got<size:
+                    left=end-time.monotonic()
+                    if left<=0: raise ValueError("请求体接收超时")
+                    self.connection.settimeout(left)
+                    chunk=self.rfile.read1(size-got)
+                    if not chunk: raise ValueError("请求不完整")
+                    chunks.append(chunk); got+=len(chunk)
+            except (socket.timeout, TimeoutError):
+                raise ValueError("请求体接收超时")
+            except OSError:
+                raise ValueError("请求不完整")
+            finally:
+                try: self.connection.settimeout(15)   # SecureServer's normal per-socket timeout
+                except OSError: pass
+            return b"".join(chunks)
 
         def guard(self, pairing=False):
             self.close_connection=True
@@ -243,8 +297,10 @@ def make_handler(host, base):
                 if not any(x["id"]==bid for x in app.STORE.batches(sid)):
                     raise ValueError("PDA必须选择属于当前收货单的物流子批次")
                 qty=b.get("qty")
-                if isinstance(qty,bool) or not isinstance(qty,(int,float)) or not math.isfinite(qty) or qty<0 or qty>1000000000 or (path.endswith("choose") and qty==0):
+                # Same integer rule as the desktop endpoints (shared validator); PDA must send a JSON number.
+                if isinstance(qty,bool) or not isinstance(qty,(int,float)):
                     raise ValueError("请输入有效数量，不能为负数或超过10亿")
+                validate_qty(qty,allow_zero=not path.endswith("choose"))
                 if path.endswith("choose"):
                     b["item"]=app.receipt_selection(app.STORE.get_session(sid), b)
 
@@ -274,13 +330,19 @@ def make_handler(host, base):
             self.parsed_body=None
             del self.parsed_body
             path=urllib.parse.urlparse(self.path).path
+            pairing=path=="/api/pda/pair"
+            # Authenticate and read the whole body BEFORE taking the global business lock:
+            # an unauthenticated or slow sender must never hold state_lock.
+            try:
+                if not self.guard(pairing): return
+                b=self._body(PAIR_BODY_MAX if pairing else BODY_MAX)
+                if pairing:
+                    token=host.pair(b.get("code",""),b.get("name",""),self.client_address[0])
+                    return self._send(200,json.dumps({"ok":True}),extra={"Set-Cookie":"jst_pda="+token+"; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=28800"})
+            except Exception as e:
+                return self._fail(str(e))
             with app.state_lock:
                 try:
-                    if not self.guard(path=="/api/pda/pair"): return
-                    b=self._body()
-                    if path=="/api/pda/pair":
-                        token=host.pair(b.get("code",""),b.get("name",""))
-                        return self._send(200,json.dumps({"ok":True}),extra={"Set-Cookie":"jst_pda="+token+"; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=28800"})
                     if path not in POSTS: return self._fail("PDA不能使用此接口",code=403)
                     if path in RECEIPT or path == "/api/line/edit" or path.startswith("/api/inbound/"): self.check_receipt(b)
                     if path in RECEIPT and not (path=="/api/item/scan" and b.get("qty")==0):
@@ -294,9 +356,14 @@ def make_handler(host, base):
                     return fn()
                 except Exception as e:
                     # A handler may have committed before failing. Leave reservation unknown, never replay it.
+                    if app.STORE.db.in_transaction:
+                        app.STORE.db.rollback()   # never leave a half-written transaction behind
                     if self.receipt_request:
                         with app.STORE.db:
                             app.STORE.db.execute("UPDATE pda_request SET status='unknown' WHERE id=?",(self.receipt_request,))
                         self.receipt_request=None
                     return self._fail(str(e))
+                finally:
+                    if app.STORE.db.in_transaction:
+                        app.STORE.db.rollback()
     return Handler
