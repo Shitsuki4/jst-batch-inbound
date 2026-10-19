@@ -183,12 +183,15 @@ try {
     }
     $checks.Add("Installed ffmpeg -version and ffprobe -version run successfully")
 
-    $sids = @((Get-Acl -LiteralPath $sharedWebView).Access | ForEach-Object {
-            $identity = $_.IdentityReference
-            try { $identity.Translate([System.Security.Principal.SecurityIdentifier]).Value } catch { [string]$identity }
-        })
+    # Read the rules as SIDs directly: translating "APPLICATION PACKAGE AUTHORITY\..." NTAccount names
+    # back to SIDs throws IdentityNotMappedException on .NET.
+    $rules = (Get-Acl -LiteralPath $sharedWebView).GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])
+    $sids = @($rules | ForEach-Object { $_.IdentityReference.Value })
     foreach ($sid in @("S-1-15-2-1", "S-1-15-2-2")) {
-        if ($sids -notcontains $sid) { throw "WebView2 runtime directory is missing the AppContainer ACL for $sid" }
+        if ($sids -notcontains $sid) {
+            $listing = (& (Join-Path $env:SystemRoot "System32\icacls.exe") $sharedWebView 2>&1 | Out-String)
+            throw "WebView2 runtime directory is missing the AppContainer ACL for $sid. SIDs: $($sids -join ', '). icacls:`n$listing"
+        }
     }
     $checks.Add("WebView2 runtime directory grants read/execute to ALL APPLICATION PACKAGES and ALL RESTRICTED APPLICATION PACKAGES")
 
