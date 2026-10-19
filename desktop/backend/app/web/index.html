@@ -201,7 +201,7 @@
           <span class="pb-name" id="pb-name">—</span>
           <span class="pb-code sku" id="pb-code"></span>
           <label class="pb-qty">本次数量
-            <input id="pending-qty" class="pb-qty-input" type="text" inputmode="decimal" value="1">
+            <input id="pending-qty" class="pb-qty-input" type="text" inputmode="numeric" value="1">
           </label>
           <span class="pb-unit">件</span>
           <button class="btn btn-primary btn-sm" id="btn-pending-ok">确认 <kbd>Enter</kbd></button>
@@ -342,7 +342,7 @@
         </div>
         <div class="form-row">
           <label>每次扫码累加数量</label>
-          <input id="st-step" class="input input-sm" type="number" min="0.01" step="0.01" value="1">
+          <input id="st-step" class="input input-sm" type="number" min="1" step="1" value="1">
         </div>
         <div class="form-row">
           <label>商品编码反查<br><small>69码 / 辅助码 / 商品编码都匹配不上时，
