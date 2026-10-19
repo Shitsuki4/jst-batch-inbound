@@ -1,44 +1,104 @@
-# 收货小助手 / 扫码入库助手（聚水潭）
+# 收货小助手（聚水潭扫码入库）
 
-仓库只保留 3.0 桌面版 [`desktop`](desktop)：WPF 宿主负责监控浮窗、扫码自动录像和录像索引，
-Python 本地服务负责聚水潭业务、SQLite、PDA 和导出。
+面向仓库收货台的 Windows 桌面工具：扫物流单号、扫商品条码，自动对照聚水潭采购单统计实收，
+一键生成入库单；同时按物流单号自动录制开箱视频，方便售后举证。
 
-旧版 Python + 原生 HTML/JS 单文件 EXE（`扫码入库助手/` 目录，最后版本 2.0.21）已从 `main`
-删除，完整源码保留在标签 [`legacy-final-2.0.21`](https://github.com/Shitsuki4/jst-batch-inbound/tree/legacy-final-2.0.21)。
+当前版本：**3.0.1**　·　[下载最新版](https://github.com/Shitsuki4/jst-batch-inbound/releases)
 
-## 桌面版 3.0
+## 功能
 
-首次启动默认打开监控浮窗并启用“扫描物流单号自动录像”。用户在设置中明确关闭后，状态会
-持久化，关闭软件再打开仍保持关闭。磁盘预警和停止阈值未配置时不会开始录像，30 秒测试录像
-必须由用户明确点击。
+- **扫码收货**：扫物流单号开批次，扫商品条码累加实收（同一商品扫几次记几件），数量只允许正整数。
+- **采购单对单**：自动关联聚水潭采购单，实时显示应收、实收、差异；同一 SKU 在采购单多行出现时按 SKU 合并计算。
+- **入库**：按实收生成聚水潭入库单，提交前留快照、按指纹防重复，网络超时不会自动重建，最后回读核对数量。
+- **无采购单收货 / 多采购单联合收货**：登记无单到货、多张采购单合并收货与汇总对单。
+- **PDA 联动**：安卓 PDA 通过局域网配对后扫码，配对码有按 IP 限流和输错作废保护。
+- **自动录像**：确认物流单号即开始录制，切换单号自动分段；监控浮窗可移动、缩放、置顶。
+- **导出**：差异报告、扫码流水 CSV，支持按时间、采购单、物流单号、商品编码筛选。
 
-构建便携包：
+## 安装
 
-```powershell
-powershell -ExecutionPolicy Bypass -File desktop/build-windows.ps1 -Version 3.0.1
+在 [Releases](https://github.com/Shitsuki4/jst-batch-inbound/releases) 下载：
+
+| 文件 | 适用 |
+| --- | --- |
+| `ReceivingAssistant-<版本>-Offline-Setup.exe`（约 500 MiB） | 推荐。自带 .NET、Python 后端、FFmpeg、WebView2，内网或断网电脑也能装 |
+| `jst-batch-inbound-desktop-<版本>-win-x64.zip`（约 86 MiB） | 便携版，缺依赖时首次启动会通过 `winget` 安装 |
+
+- 按当前用户安装，不需要管理员权限。
+- 业务数据、设置、登录资料在 `%LOCALAPPDATA%\ReceivingAssistant\v3`，升级和卸载默认都保留。
+- **升级前请先正常退出小助手**；业务服务还在运行时安装程序会拒绝继续，以免装出新旧混合的文件。
+- 安装包暂未做代码签名，Windows 可能提示“未知发布者”。
+
+首次使用：进入录像设置选择摄像头和录像目录，并**显式保存磁盘预警 / 停止阈值**，未配置阈值时不会开始录像。
+
+## 架构
+
+```
+desktop/
+├── src/                 WPF 宿主 Receiving.Native.exe（.NET 10）
+│                        监控浮窗、FFmpeg 录像、录像索引、WebView2 工作区
+├── backend/app/         Python 本地服务 Receiving.Service.exe
+│                        聚水潭接口、SQLite、PDA、导出、网页界面（web/）
+├── installer/           Inno Setup 离线安装包脚本与说明文档
+├── tests/               录像器回归测试
+└── build-*.ps1          构建脚本
 ```
 
-产物为 `desktop/dist/portable` 和
-`desktop/dist/jst-batch-inbound-desktop-<版本>-win-x64.zip`。完整构建与测试说明见
-[`desktop/README.md`](desktop/README.md)。
+宿主启动时为后端分配端口和令牌；后端只监听 `127.0.0.1`，并校验 Host / Origin。
+后端端口被占用时以退出码 75 退出，宿主换端口重启（最多 5 次）。
+
+## 开发
+
+需要 Windows、.NET 10 SDK、Python 3.11、WebView2、FFmpeg/ffprobe。
+
+```powershell
+# 运行宿主
+dotnet run --project desktop/src/Receiving.Native.csproj
+
+# 构建便携包（含 Python 回归与录像回归）
+powershell -ExecutionPolicy Bypass -File desktop/build-windows.ps1
+
+# 只构建不跑测试
+powershell -ExecutionPolicy Bypass -File desktop/build-windows.ps1 -SkipTests
+```
+
+后端测试（Linux / macOS 也能跑大部分）：
+
+```bash
+cd desktop/backend/app
+pip install cryptography qrcode Pillow
+python regression_runner.py        # 回归套件
+python concurrency_fixes_test.py   # 单个测试文件直接运行
+```
+
+离线安装包构建、安装级验收等完整说明见 [`desktop/README.md`](desktop/README.md)。
 
 ## 发布
 
-桌面工作流 [`.github/workflows/build-desktop-exe.yml`](.github/workflows/build-desktop-exe.yml)
-支持手动触发、`desktop/**` PR 和 `desktop-v*` 标签。
-
-- 版本号以 `desktop/src/Receiving.Native.csproj` 的 `<Version>` 为准。打 `desktop-vX.Y.Z`
-  标签前先改 csproj；标签版本与 csproj 不一致时构建直接失败。
-- 标签构建会创建 GitHub Release，资产名使用标签里的版本号。
-- 手动触发时可填 `publish_release_tag`（格式 `desktop-vX.Y.Z`，仅限 `main` 分支），把产物追加到
-  已有 Release；同名资产已存在时不会覆盖，会直接失败。
+1. 修改 `desktop/src/Receiving.Native.csproj` 里的 `<Version>`（标签版本必须与之一致，否则 CI 直接失败）。
+2. 合并到 `main` 后打标签：
 
 ```powershell
-git tag desktop-v3.0.1
-git push origin desktop-v3.0.1
+git tag desktop-vX.Y.Z
+git push origin desktop-vX.Y.Z
 ```
 
-## GitHub Actions 构建结果
+CI（[`build-desktop-exe.yml`](.github/workflows/build-desktop-exe.yml)）会构建便携 ZIP 和离线安装包，
+跑完回归与安装 / 覆盖升级 / 卸载验收后创建 GitHub Release。PR 修改 `desktop/**` 时也会自动构建。
 
-工作流会上传便携 ZIP、离线完整安装程序和 SHA256 校验文件，并运行 Python 回归、录像器核心
-回归、FFmpeg 合成源 30 秒录像验证，以及离线安装程序的安装 / 覆盖升级 / 卸载验收。
+## 版本记录
+
+### 3.0.1
+
+- 修复快速连扫时重复计数、后一件覆盖前一件导致丢件的问题；扫码改为排队处理，重试按请求编号去重。
+- 所有收货数量（含无采购单、联合收货）只允许正整数。
+- 修复同一 SKU 在采购单多行出现时差异和进度算错；商品库按原始 SKU 判重（区分大小写）。
+- 修复数据库并发读写可能提前提交半截入库数据、出错不回滚的问题。
+- 修复局域网设备可通过慢速请求卡住桌面端；PDA 配对限流改为按 IP，输错 5 次作废配对码。
+- 安装包升级时检测后台服务、清理旧版运行时文件；后端端口冲突自动换端口。
+- CI 发布加固：版本号取自 csproj、手动发布参数校验、最小权限、Action 固定 SHA。
+- 移除旧版单文件客户端（2.0.21），源码保留在标签 [`legacy-final-2.0.21`](https://github.com/Shitsuki4/jst-batch-inbound/tree/legacy-final-2.0.21)。
+
+### 3.0.0
+
+- 桌面版首发：WPF 宿主 + Python 服务，监控浮窗、扫码自动录像、离线完整安装包。
