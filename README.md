@@ -15,7 +15,7 @@ Python 本地服务负责聚水潭业务、SQLite、PDA 和导出。
 构建便携包：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File desktop/build-windows.ps1 -Version 3.0.0
+powershell -ExecutionPolicy Bypass -File desktop/build-windows.ps1 -Version 3.0.1
 ```
 
 产物为 `desktop/dist/portable` 和
@@ -34,8 +34,8 @@ powershell -ExecutionPolicy Bypass -File desktop/build-windows.ps1 -Version 3.0.
   已有 Release；同名资产已存在时不会覆盖，会直接失败。
 
 ```powershell
-git tag desktop-v3.0.0
-git push origin desktop-v3.0.0
+git tag desktop-v3.0.1
+git push origin desktop-v3.0.1
 ```
 
 ## GitHub Actions 构建结果
