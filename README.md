@@ -3,7 +3,7 @@
 面向仓库收货台的 Windows 桌面工具：扫物流单号、扫商品条码，自动对照聚水潭采购单统计实收，
 一键生成入库单；同时按物流单号自动录制开箱视频，方便售后举证。
 
-当前版本：**3.0.1**　·　[下载最新版](https://github.com/Shitsuki4/jst-batch-inbound/releases)
+当前版本：**3.0.2**　·　[下载最新版](https://github.com/Shitsuki4/jst-batch-inbound/releases)
 
 ## 功能
 
@@ -23,8 +23,10 @@
 | --- | --- |
 | `ReceivingAssistant-<版本>-Offline-Setup.exe`（约 500 MiB） | 推荐。自带 .NET、Python 后端、FFmpeg、WebView2，内网或断网电脑也能装 |
 | `jst-batch-inbound-desktop-<版本>-win-x64.zip`（约 86 MiB） | 便携版，缺依赖时首次启动会通过 `winget` 安装 |
+| `ReceivingAssistant-Deps-<版本>-Setup.exe`（运行依赖安装程序） | 与便携版配套：先运行它安装 FFmpeg/ffprobe 和 WebView2 固定运行时，便携版即可在断网电脑使用，无需 `winget`。便携 ZIP + 依赖 exe = 离线完整安装包之外的另一种离线方案 |
 
 - 按当前用户安装，不需要管理员权限。
+- 运行依赖安装程序把组件装到 `%LOCALAPPDATA%\ReceivingAssistant\runtime`，在“应用和功能”里显示为“收货小助手运行依赖”，可单独卸载，不碰业务数据。
 - 业务数据、设置、登录资料在 `%LOCALAPPDATA%\ReceivingAssistant\v3`，升级和卸载默认都保留。
 - **升级前请先正常退出小助手**；业务服务还在运行时安装程序会拒绝继续，以免装出新旧混合的文件。
 - 安装包暂未做代码签名，Windows 可能提示“未知发布者”。
@@ -83,10 +85,17 @@ git tag desktop-vX.Y.Z
 git push origin desktop-vX.Y.Z
 ```
 
-CI（[`build-desktop-exe.yml`](.github/workflows/build-desktop-exe.yml)）会构建便携 ZIP 和离线安装包，
+CI（[`build-desktop-exe.yml`](.github/workflows/build-desktop-exe.yml)）会构建便携 ZIP、离线安装包和运行依赖安装程序，
 跑完回归与安装 / 覆盖升级 / 卸载验收后创建 GitHub Release。PR 修改 `desktop/**` 时也会自动构建。
 
 ## 版本记录
+
+### 3.0.2
+
+- 新增运行依赖安装程序（`ReceivingAssistant-Deps-<版本>-Setup.exe`，本地构建名“收货小助手-<版本>-运行依赖安装程序”）：与便携 ZIP 配套，离线安装 FFmpeg/ffprobe 和 WebView2 固定运行时到 `%LOCALAPPDATA%\ReceivingAssistant\runtime`，断网电脑不再需要 `winget`。
+- 便携版查找依赖时，在程序旁 `runtime\` 之后、系统安装之前，优先使用运行依赖安装程序装好的共享组件；离线完整安装版行为不变。
+- 环境检查窗口提示：断网电脑可先运行「运行依赖安装程序」。
+- CI 构建并验收运行依赖安装程序（静默安装、`ffmpeg -version` / `ffprobe -version`、便携版依赖检查、静默卸载），随 Release 一起发布。
 
 ### 3.0.1
 
