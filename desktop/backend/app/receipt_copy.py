@@ -6,10 +6,9 @@ write lock. Lines, provenance, scoped preference and revision commit together.
 import hashlib
 import hmac
 import json
-import math
 import secrets
 
-from store import now_str
+from store import now_str, validate_qty
 
 _KEY = secrets.token_bytes(32)
 
@@ -48,8 +47,14 @@ def copy_previous(store, body, *, account, guard, validate, after_write=None):
         rows = [dict(r) for r in db.execute('SELECT * FROM line WHERE session_id=? AND batch_id=? ORDER BY id', (sid, source['id']))]
         if not rows:
             raise ValueError('上一物流单没有商品，不能复制；请先核对上一单')
-        if any(not r['sku_id'] or not math.isfinite(float(r['qty'])) or not 0 < float(r['qty']) <= 100000000 for r in rows):
-            raise ValueError('上一单存在无效商品编码或数量（须大于0且不超过一亿），请先修正')
+        if any(not r['sku_id'] for r in rows):
+            raise ValueError('上一单存在无效商品编码，请先修正')
+        for r in rows:
+            # Integer-only quantities: legacy decimal rows are readable but never copied.
+            try:
+                validate_qty(r['qty'], allow_zero=False)
+            except ValueError:
+                raise ValueError('上一单商品 '+str(r['sku_id'])+' 的数量 '+str(r['qty'])+' 不是大于0的整数（商品数量不能有小数），不能整单复制，请先修正上一单')
         validate(session, rows)
         scope = _json([account, sid, session['po_id'], session['owner_co_id'], session['auth_co_id'], session['id_type']])
         skip = bool(db.execute('SELECT 1 FROM receipt_copy_preference WHERE scope=?', (scope,)).fetchone())
