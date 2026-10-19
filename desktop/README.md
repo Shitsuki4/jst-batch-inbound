@@ -141,8 +141,10 @@ powershell -ExecutionPolicy Bypass -File desktop/build-offline-windows.ps1 `
 文件名，再通过 Release 的 asset label 显示中文名。本机构建不传该参数即保持中文文件名。
 
 离线安装程序会把 `.NET 自包含宿主 + Python 后端 + FFmpeg/ffprobe + WebView2 固定运行时`
-一起打进安装包，安装与启动都无需联网下载这些依赖（ERP 业务仍需要网络）。它会写入
-`installed-mode.txt`，程序据此把业务数据放到 `%LOCALAPPDATA%\ReceivingAssistant\v3`，
+一起打进安装包，安装与启动都无需联网下载这些依赖（ERP 业务仍需要网络）。安装完成后会为
+`runtime\webview2` 授予 AppContainer 读取/执行权限（`S-1-15-2-1` / `S-1-15-2-2`），
+否则 Windows 10 上 WebView2 渲染进程无法加载、业务界面可能闪退；覆盖升级重建该目录后也会重新授权。
+它会写入 `installed-mode.txt`，程序据此把业务数据放到 `%LOCALAPPDATA%\ReceivingAssistant\v3`，
 卸载默认保留，不覆盖旧数据。
 
 构建脚本会校验两个依赖的 SHA256、组装 `desktop/dist/offline-payload`、用 Inno Setup 编译出
@@ -150,7 +152,7 @@ powershell -ExecutionPolicy Bypass -File desktop/build-offline-windows.ps1 `
 `desktop/dist/SHA256SUMS.txt`。
 
 安装级验收（静默安装、只留 System32 的 PATH 下做依赖检查、与 payload 逐文件哈希比对、
-重装保留用户数据、静默卸载保留用户数据）：
+WebView2 AppContainer ACL、重装保留用户数据并重新授权、静默卸载保留用户数据）：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File desktop/verify-offline-installer.ps1 `

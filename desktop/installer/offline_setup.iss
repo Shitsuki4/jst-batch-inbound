@@ -68,6 +68,11 @@ Name: "{autodesktop}\收货小助手"; Filename: "{app}\Receiving.Native.exe"; W
 Name: "{autoprograms}\收货小助手使用说明"; Filename: "{app}\先读我.html"
 
 [Run]
+; WebView2 固定版本在 Windows 10 上以 AppContainer 运行渲染进程，必须给运行时目录授予
+; 读取/执行权限，否则业务界面启动即闪退（Microsoft “Distribute your app and the WebView2 Runtime” 第 6 步）。
+; 升级时 [InstallDelete] 会删除并重建 runtime\webview2，所以每次安装后都要重新授权。
+Filename: "{sys}\icacls.exe"; Parameters: """{app}\runtime\webview2"" /grant *S-1-15-2-2:(OI)(CI)(RX) /C /Q"; Flags: runhidden waituntilterminated; StatusMsg: "正在配置 WebView2 运行时权限……"
+Filename: "{sys}\icacls.exe"; Parameters: """{app}\runtime\webview2"" /grant *S-1-15-2-1:(OI)(CI)(RX) /C /Q"; Flags: runhidden waituntilterminated; StatusMsg: "正在配置 WebView2 运行时权限……"
 Filename: "{app}\Receiving.Native.exe"; Description: "启动收货小助手"; Flags: nowait postinstall skipifsilent
 
 [Code]

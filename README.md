@@ -92,6 +92,7 @@ CI（[`build-desktop-exe.yml`](.github/workflows/build-desktop-exe.yml)）会构
 
 ### 3.0.2
 
+- 修复离线完整安装程序未给 WebView2 固定运行时目录授予 AppContainer 读取/执行权限的问题：Windows 10 上业务界面可能启动即闪退。安装与覆盖升级后都会自动重新授权，验收脚本也会检查该 ACL。
 - 新增运行依赖安装程序（`ReceivingAssistant-Deps-<版本>-Setup.exe`，本地构建名“收货小助手-<版本>-运行依赖安装程序”）：与便携 ZIP 配套，离线安装 FFmpeg/ffprobe 和 WebView2 固定运行时到 `%LOCALAPPDATA%\ReceivingAssistant\runtime`，断网电脑不再需要 `winget`。
 - 便携版查找依赖时，在程序旁 `runtime\` 之后、系统安装之前，优先使用运行依赖安装程序装好的共享组件；离线完整安装版行为不变。
 - 环境检查窗口提示：断网电脑可先运行「运行依赖安装程序」。
