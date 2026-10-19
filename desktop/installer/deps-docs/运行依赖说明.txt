@@ -1,0 +1,17 @@
+﻿收货小助手运行依赖
+==================
+
+本目录由「收货小助手运行依赖安装程序」安装，供收货小助手便携版（ZIP）离线使用：
+
+- ffmpeg\     FFmpeg / ffprobe（Gyan.dev 8.1.2 full_build，GPLv3，许可见 ffmpeg\LICENSE 与 README.txt）
+              来源构建：https://github.com/GyanD/codexffmpeg/releases/tag/8.1.2
+- webview2\   Microsoft WebView2 固定版本运行时 154.0.4258.62（x64）
+
+便携版查找顺序：程序旁的 runtime\ 目录 → 本目录 → 已保存的设置 / winget / PATH。
+离线完整安装版只使用自带的运行时，不读取本目录。
+
+本目录只放程序文件。业务数据、设置和录像在 %LOCALAPPDATA%\ReceivingAssistant\v3，
+安装、升级、卸载运行依赖都不会改动它们。
+
+卸载：Windows 设置 → 应用 → 已安装的应用 → “收货小助手运行依赖”。
+卸载前请先退出收货小助手。WebView2 固定版本不会自动升级，安全更新随新版运行依赖安装程序发布。
