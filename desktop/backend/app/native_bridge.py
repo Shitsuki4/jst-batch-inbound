@@ -163,7 +163,7 @@ def install(s):
        except (ValueError,KeyError):missing.append(key)
       return oldok(h,contexts=contexts,missing=missing)
      if u.path=='/api/native/export':return oldok(h,**export_data(s,q))
-     if u.path=='/api/native/health':return oldok(h,version='3.0.1',last=s.STORE.db.execute('SELECT COALESCE(MAX(id),0) FROM native_event').fetchone()[0])
+     if u.path=='/api/native/health':return oldok(h,version='3.0.2',last=s.STORE.db.execute('SELECT COALESCE(MAX(id),0) FROM native_event').fetchone()[0])
    except Exception as e:return h._fail(str(e))
    return h._nf()
   CTX.action='program';CTX.raw='';CTX.scan_at='';CTX.device='电脑/未知'
