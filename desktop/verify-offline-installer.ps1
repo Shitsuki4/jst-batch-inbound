@@ -69,6 +69,25 @@ function Invoke-Process {
     return $process.ExitCode
 }
 
+# WebView2 fixed-version runtime must grant read/execute to the AppContainer package SIDs,
+# otherwise the renderer cannot load msedgewebview2.exe and the business window crashes on
+# Windows 10. Read the rules as SIDs directly: translating the NTAccount names back throws
+# IdentityNotMappedException on .NET.
+function Assert-WebViewAcl {
+    param([string]$WebViewRoot)
+    if (-not (Test-Path -LiteralPath $WebViewRoot -PathType Container)) {
+        throw "WebView2 runtime directory not found: $WebViewRoot"
+    }
+    $rules = (Get-Acl -LiteralPath $WebViewRoot).GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])
+    $sids = @($rules | ForEach-Object { $_.IdentityReference.Value })
+    foreach ($sid in @("S-1-15-2-1", "S-1-15-2-2")) {
+        if ($sids -notcontains $sid) {
+            $listing = (& (Join-Path $env:SystemRoot "System32\icacls.exe") $WebViewRoot 2>&1 | Out-String)
+            throw "WebView2 runtime directory is missing the AppContainer ACL for $sid. SIDs: $($sids -join ', '). icacls:`n$listing"
+        }
+    }
+}
+
 New-Item -ItemType Directory -Force -Path $verifyRoot | Out-Null
 
 $checks = New-Object System.Collections.Generic.List[string]
@@ -109,6 +128,9 @@ try {
         if ($sourceHash -ne $installedHash) { throw "Hash mismatch for $relative" }
     }
     $checks.Add("Bundled host, FFmpeg and WebView2 files match the payload byte-for-byte")
+
+    Assert-WebViewAcl -WebViewRoot (Join-Path $Target "runtime\webview2")
+    $checks.Add("WebView2 runtime directory grants read/execute to ALL APPLICATION PACKAGES and ALL RESTRICTED APPLICATION PACKAGES")
 
     if (-not $SkipDependencyCheck) {
         $out = Join-Path $verifyRoot "dependency-check.json"
@@ -169,6 +191,10 @@ try {
         throw "backend\_internal file count differs after reinstall: payload $payloadInternal, installed $installedInternal"
     }
     $checks.Add("Reinstall purged stale files in backend\_internal and runtime\webview2 and restored them from the payload")
+
+    # [InstallDelete] recreates runtime\webview2, so the AppContainer ACLs must be re-applied on upgrade.
+    Assert-WebViewAcl -WebViewRoot (Join-Path $Target "runtime\webview2")
+    $checks.Add("Reinstall re-applied the WebView2 AppContainer ACLs to the rebuilt runtime directory")
 
     Write-Host "== Silent uninstall =="
     $uninstaller = Join-Path $Target "unins000.exe"

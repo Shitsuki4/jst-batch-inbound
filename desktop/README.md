@@ -62,11 +62,63 @@ powershell -ExecutionPolicy Bypass -File desktop/build-windows.ps1 -SkipTests -R
 
 - `desktop/dist/portable/Receiving.Native.exe`
 - `desktop/dist/portable/backend/Receiving.Service.exe`
-- `desktop/dist/jst-batch-inbound-desktop-3.0.0-win-x64.zip`
+- `desktop/dist/jst-batch-inbound-desktop-3.0.2-win-x64.zip`
 - `desktop/dist/SHA256SUMS.txt`
 
 便携 ZIP（约 86 MiB）不内置 FFmpeg/WebView2 payload，适合已联网或已装好依赖的机器。
-首次启动若缺少依赖，现有检查窗口会调用 Windows `winget` 安装。
+首次启动若缺少依赖，现有检查窗口会调用 Windows `winget` 安装；断网电脑可先运行下面的
+“运行依赖安装程序”。
+
+便携版查找依赖的顺序：
+
+- FFmpeg/ffprobe：程序旁 `runtime\ffmpeg` → 运行依赖安装程序装的
+  `%LOCALAPPDATA%\ReceivingAssistant\runtime\ffmpeg` → `native-settings.json` 里保存的路径 →
+  WinGet Links → PATH。
+- WebView2：程序旁 `runtime\webview2` → `%LOCALAPPDATA%\ReceivingAssistant\runtime\webview2`
+  （须含 `msedgewebview2.exe`）→ 系统 Evergreen 运行时。
+
+离线完整安装版（存在 `installed-mode.txt`）只使用自带的 `runtime\`，不读取共享目录，行为不变。
+
+## 运行依赖安装程序
+
+与便携 ZIP 配套的独立安装程序：`便携 ZIP + 运行依赖安装程序` 是离线完整安装包之外的另一种离线方案。
+它使用与离线完整安装包相同、经 SHA256 校验的 WebView2 固定运行时 CAB 和 FFmpeg full build，
+按当前用户（无需管理员）安装到：
+
+- `%LOCALAPPDATA%\ReceivingAssistant\runtime\ffmpeg`（ffmpeg.exe、ffprobe.exe、LICENSE、README.txt，及共享构建需要的 DLL）
+- `%LOCALAPPDATA%\ReceivingAssistant\runtime\webview2`（并按微软要求为 AppContainer 授予读取/执行权限）
+
+在“应用和功能”里单独显示为“收货小助手运行依赖”，可单独卸载；升级时先清空这两个目录。
+安装、升级、卸载都不会触碰业务数据目录 `%LOCALAPPDATA%\ReceivingAssistant\v3`。
+检测到小助手正在使用这些组件（如正在录像）时会拒绝安装 / 卸载，请先正常退出小助手。
+
+```powershell
+powershell -ExecutionPolicy Bypass -File desktop/build-deps-windows.ps1 `
+  -WebView2Cab   <Microsoft.WebView2.FixedVersionRuntime.*.x64.cab> `
+  -WebView2CabSha256 <cab 的 SHA256> `
+  -FfmpegArchive <ffmpeg-*-full_build.zip 或 .7z> `
+  -FfmpegArchiveSha256 <压缩包 SHA256> `
+  -InnoCompiler  <Inno Setup 6 的 ISCC.exe>
+```
+
+同样支持 `-FfmpegBuildDir`。产物为
+`desktop/dist/deps-installer/收货小助手-<版本>-运行依赖安装程序.exe`（工作流传
+`-InstallerName ReceivingAssistant-Deps-<版本>-Setup` 得到 ASCII 文件名），哈希追加到
+`desktop/dist/SHA256SUMS.txt`。它不依赖便携包，也不会动 `desktop/dist/installer`，可以在离线完整安装包之后构建。
+
+安装级验收（静默安装、与 payload 哈希比对、`ffmpeg -version` / `ffprobe -version`、WebView2 ACL、
+便携版在只留 System32 的 PATH 下 `--dependency-check` 必须从共享目录解析到 FFmpeg 与 WebView2、
+重装清理残留、静默卸载并确认移除、业务数据目录不变）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File desktop/verify-deps-installer.ps1 `
+  -Installer desktop/dist/deps-installer/收货小助手-3.0.2-运行依赖安装程序.exe `
+  -PayloadRoot desktop/dist/deps-payload `
+  -PortableRoot desktop/dist/portable
+```
+
+报告写入 `desktop/build/verify-deps/deps-installer-report.json`。注意：验收会真实安装到当前用户的
+`%LOCALAPPDATA%\ReceivingAssistant\runtime`，若本机已装运行依赖会拒绝执行。
 
 ## 完整离线安装程序
 
@@ -85,12 +137,14 @@ powershell -ExecutionPolicy Bypass -File desktop/build-offline-windows.ps1 `
 已在本机解压好 FFmpeg 时，可改用 `-FfmpegBuildDir <含 bin\ffmpeg.exe 的目录>`，跳过压缩包解压。
 
 安装程序默认沿用中文文件名。GitHub Release 上传会丢弃文件名里的非 ASCII 字符，因此
-工作流额外传 `-InstallerName ReceivingAssistant-3.0.0-Offline-Setup`，让发布产物使用 ASCII
+工作流额外传 `-InstallerName ReceivingAssistant-3.0.2-Offline-Setup`，让发布产物使用 ASCII
 文件名，再通过 Release 的 asset label 显示中文名。本机构建不传该参数即保持中文文件名。
 
 离线安装程序会把 `.NET 自包含宿主 + Python 后端 + FFmpeg/ffprobe + WebView2 固定运行时`
-一起打进安装包，安装与启动都无需联网下载这些依赖（ERP 业务仍需要网络）。它会写入
-`installed-mode.txt`，程序据此把业务数据放到 `%LOCALAPPDATA%\ReceivingAssistant\v3`，
+一起打进安装包，安装与启动都无需联网下载这些依赖（ERP 业务仍需要网络）。安装完成后会为
+`runtime\webview2` 授予 AppContainer 读取/执行权限（`S-1-15-2-1` / `S-1-15-2-2`），
+否则 Windows 10 上 WebView2 渲染进程无法加载、业务界面可能闪退；覆盖升级重建该目录后也会重新授权。
+它会写入 `installed-mode.txt`，程序据此把业务数据放到 `%LOCALAPPDATA%\ReceivingAssistant\v3`，
 卸载默认保留，不覆盖旧数据。
 
 构建脚本会校验两个依赖的 SHA256、组装 `desktop/dist/offline-payload`、用 Inno Setup 编译出
@@ -98,11 +152,11 @@ powershell -ExecutionPolicy Bypass -File desktop/build-offline-windows.ps1 `
 `desktop/dist/SHA256SUMS.txt`。
 
 安装级验收（静默安装、只留 System32 的 PATH 下做依赖检查、与 payload 逐文件哈希比对、
-重装保留用户数据、静默卸载保留用户数据）：
+WebView2 AppContainer ACL、重装保留用户数据并重新授权、静默卸载保留用户数据）：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File desktop/verify-offline-installer.ps1 `
-  -Installer desktop/dist/installer/收货小助手-3.0.0-离线完整安装程序.exe `
+  -Installer desktop/dist/installer/收货小助手-3.0.2-离线完整安装程序.exe `
   -PayloadRoot desktop/dist/offline-payload
 ```
 
@@ -117,15 +171,15 @@ powershell -ExecutionPolicy Bypass -File desktop/verify-offline-installer.ps1 `
 - 推送 `desktop-v*` 标签时构建并创建 GitHub Release。
 
 工作流会下载固定版本的 WebView2 固定运行时、FFmpeg full build 和 Inno Setup 并校验
-SHA256，然后依次构建便携 ZIP、编译完整离线安装程序、跑安装级验收，最后把便携 ZIP 与
-离线安装程序一起作为产物上传；标签构建会把它们发布到 Release。
+SHA256，然后依次构建便携 ZIP、编译完整离线安装程序并跑安装级验收、编译运行依赖安装程序并跑验收，
+最后把便携 ZIP、离线安装程序与运行依赖安装程序一起作为产物上传；标签构建会把它们发布到 Release。
 
-要把产物补传到已存在的 Release（例如 `desktop-v3.0.0`），在手动触发时填写
+要把产物补传到已存在的 Release（例如 `desktop-v3.0.2`），在手动触发时填写
 `publish_release_tag` 输入框即可。
 
 发布示例：
 
 ```powershell
-git tag desktop-v3.0.0
-git push origin desktop-v3.0.0
+git tag desktop-v3.0.2
+git push origin desktop-v3.0.2
 ```

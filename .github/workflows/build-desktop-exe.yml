@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       publish_release_tag:
-        description: "Attach the built assets to this existing release tag, e.g. desktop-v3.0.1 (optional; main only; version must match the csproj)."
+        description: "Attach the built assets to this existing release tag, e.g. desktop-v3.0.2 (optional; main only; version must match the csproj)."
         required: false
         type: string
   push:
@@ -206,6 +206,30 @@ jobs:
             -Installer $installer.FullName `
             -PayloadRoot "desktop/dist/offline-payload"
 
+      - name: Build runtime dependency installer
+        shell: pwsh
+        run: |
+          ./desktop/build-deps-windows.ps1 `
+            -Version $env:APP_VERSION `
+            -WebView2Cab $env:WEBVIEW2_CAB `
+            -WebView2CabSha256 $env:WEBVIEW2_CAB_SHA `
+            -FfmpegBuildDir $env:FFMPEG_BUILD_DIR `
+            -InstallerName "ReceivingAssistant-Deps-$($env:APP_VERSION)-Setup" `
+            -InnoCompiler $env:INNO_COMPILER
+
+      - name: Verify runtime dependency installer (silent install, portable resolve, uninstall)
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem "desktop/dist/deps-installer/*.exe" |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+          if (-not $installer) { throw "No dependency installer was produced" }
+          Write-Host ("Dependency installer: {0} ({1:N1} MiB)" -f $installer.Name, ($installer.Length / 1MB))
+          ./desktop/verify-deps-installer.ps1 `
+            -Installer $installer.FullName `
+            -PayloadRoot "desktop/dist/deps-payload" `
+            -PortableRoot "desktop/dist/portable"
+
       - name: Upload portable artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -216,6 +240,7 @@ jobs:
             ${{ runner.temp }}/recorder-core/result.json
             ${{ runner.temp }}/recorder-synthetic/result.json
             desktop/build/verify/installer-report.json
+            desktop/build/verify-deps/deps-installer-report.json
           if-no-files-found: error
 
       - name: Upload full offline installer artifact
@@ -223,6 +248,14 @@ jobs:
         with:
           name: desktop-${{ env.APP_VERSION }}-offline-installer
           path: desktop/dist/installer/*.exe
+          if-no-files-found: error
+          compression-level: 0
+
+      - name: Upload runtime dependency installer artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: desktop-${{ env.APP_VERSION }}-deps-installer
+          path: desktop/dist/deps-installer/*.exe
           if-no-files-found: error
           compression-level: 0
 
@@ -235,6 +268,7 @@ jobs:
             desktop/dist/jst-batch-inbound-desktop-${{ env.APP_VERSION }}-win-x64.zip
             desktop/dist/SHA256SUMS.txt
             desktop/dist/installer/ReceivingAssistant-${{ env.APP_VERSION }}-Offline-Setup.exe
+            desktop/dist/deps-installer/ReceivingAssistant-Deps-${{ env.APP_VERSION }}-Setup.exe
           if-no-files-found: error
           compression-level: 0
           retention-days: 3
@@ -285,6 +319,7 @@ jobs:
           test -f "release-assets/jst-batch-inbound-desktop-$APP_VERSION-win-x64.zip"
           test -f "release-assets/SHA256SUMS.txt"
           test -f "release-assets/installer/ReceivingAssistant-$APP_VERSION-Offline-Setup.exe"
+          test -f "release-assets/deps-installer/ReceivingAssistant-Deps-$APP_VERSION-Setup.exe"
 
       - name: Publish tagged release
         if: needs.build.outputs.release_mode == 'publish'
@@ -294,6 +329,7 @@ jobs:
           files: |
             release-assets/jst-batch-inbound-desktop-${{ needs.build.outputs.version }}-win-x64.zip
             release-assets/installer/ReceivingAssistant-${{ needs.build.outputs.version }}-Offline-Setup.exe
+            release-assets/deps-installer/ReceivingAssistant-Deps-${{ needs.build.outputs.version }}-Setup.exe
             release-assets/SHA256SUMS.txt
           generate_release_notes: true
 
@@ -306,18 +342,22 @@ jobs:
           gh release upload "$RELEASE_TAG" \
             "release-assets/jst-batch-inbound-desktop-$APP_VERSION-win-x64.zip" \
             "release-assets/SHA256SUMS.txt" \
-            "release-assets/installer/ReceivingAssistant-$APP_VERSION-Offline-Setup.exe"
+            "release-assets/installer/ReceivingAssistant-$APP_VERSION-Offline-Setup.exe" \
+            "release-assets/deps-installer/ReceivingAssistant-Deps-$APP_VERSION-Setup.exe"
 
-      - name: Set offline installer asset label
+      - name: Set installer asset labels
         shell: bash
         continue-on-error: true
         run: |
           set -euo pipefail
-          # The asset file name must stay ASCII (release uploads drop non-ASCII
-          # characters), so expose the Chinese name through the asset label.
-          name="ReceivingAssistant-$APP_VERSION-Offline-Setup.exe"
-          label="收货小助手-$APP_VERSION-离线完整安装程序.exe"
-          asset_id=$(gh api "repos/$GH_REPO/releases/tags/$RELEASE_TAG" --jq ".assets[] | select(.name == \"$name\") | .id")
-          if [[ -n "$asset_id" ]]; then
-            gh api -X PATCH "repos/$GH_REPO/releases/assets/$asset_id" -f "label=$label" > /dev/null
-          fi
+          # The asset file names must stay ASCII (release uploads drop non-ASCII
+          # characters), so expose the Chinese names through the asset labels.
+          set_label() {
+            local name="$1" label="$2" asset_id
+            asset_id=$(gh api "repos/$GH_REPO/releases/tags/$RELEASE_TAG" --jq ".assets[] | select(.name == \"$name\") | .id")
+            if [[ -n "$asset_id" ]]; then
+              gh api -X PATCH "repos/$GH_REPO/releases/assets/$asset_id" -f "label=$label" > /dev/null
+            fi
+          }
+          set_label "ReceivingAssistant-$APP_VERSION-Offline-Setup.exe" "收货小助手-$APP_VERSION-离线完整安装程序.exe"
+          set_label "ReceivingAssistant-Deps-$APP_VERSION-Setup.exe" "收货小助手-$APP_VERSION-运行依赖安装程序.exe"
