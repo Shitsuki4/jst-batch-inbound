@@ -58,7 +58,7 @@
 </textarea>
 <div class="bar">
 <input id="mother" placeholder="母物流 / 整票号" aria-label="母物流 / 整票号">
-<input id="expected" type="number" min="1" placeholder="预计子件数（可选）" aria-label="预计子件数">
+<input id="expected" type="number" min="1" step="1" inputmode="numeric" placeholder="预计子件数（可选）" aria-label="预计子件数">
 <button id="new">读取采购单并创建批次</button>
 </div>
 </section>
@@ -113,7 +113,7 @@
 <strong id="pending-name">
 </strong>
 <span>本次数量</span>
-<input id="qty" type="number" min="0.000001" step="any" value="1" aria-label="本次数量">
+<input id="qty" type="number" min="1" max="1000000000" step="1" inputmode="numeric" pattern="[0-9]*" value="1" aria-label="本次数量（整数）">
 <button id="confirm-qty">确认数量并登记 ↵</button>
 <button id="cancel-qty">取消 Esc</button>
 </div>
@@ -235,7 +235,7 @@
 </label>
 <label>规格<input name="spec">
 </label>
-<label>数量<input name="qty" type="number" min="0" step="any" required>
+<label>数量（整数）<input name="qty" type="number" min="0" max="1000000000" step="1" inputmode="numeric" pattern="[0-9]*" required>
 </label>
 <button type="submit">保存</button>
 <button type="button" data-close>取消</button>

@@ -84,9 +84,11 @@ class CatalogDB:
         products, codes, seen = [], [], set()
         for it in items:
             sku = str(it.get('sku_id') or '').strip()
-            if not sku or sku.lower() in seen:
+            # catalog_item 主键 (scope, sku) 区分大小写：只拒绝完全相同的编码；
+            # 仅大小写不同的两个 SKU 是不同商品（扫码别名的小写匹配不受影响）。
+            if not sku or sku in seen:
                 raise ValueError('商品资料存在空编码或重复编码，保留旧快照')
-            seen.add(sku.lower())
+            seen.add(sku)
             products.append((scope, sku, json.dumps(it, ensure_ascii=False)))
             codes.extend((scope, code, sku) for code in aliases(it))
         now = time.time()
@@ -138,7 +140,7 @@ def fetch_catalog(client, owner, auth, progress=lambda n: None, valid=lambda: Tr
         if not rows: return result
         for row in rows:
             if not isinstance(row, dict): raise ValueError('商品资料行格式错误')
-            sku = str(row.get('sku_id') or '').strip().lower()
+            sku = str(row.get('sku_id') or '').strip()   # exact match: SKU is case-sensitive
             if not sku or sku in seen: raise ValueError('分页出现重复/空商品编码，保留旧快照')
             row_owner = str(row.get('owner_co_id') if row.get('owner_co_id') is not None else '').strip()
             # 部分版本的自有数据用 0；不能把其它货主的数据静默装进当前范围。

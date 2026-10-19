@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """本地 SQLite 数据层 + 差异校验 + 导出（CSV / XLSX）。"""
 import json
+import math
 import os
 import sqlite3
 import time
@@ -145,6 +146,18 @@ CREATE TABLE IF NOT EXISTS receipt_copy_log (
     snapshot_json TEXT NOT NULL, at TEXT NOT NULL
 );
 
+-- 前端每次实际扫码/确认生成一个 client_op_id，网络重试时复用；同一个编号只入账一次。
+CREATE TABLE IF NOT EXISTS client_op (
+    id            TEXT PRIMARY KEY,
+    path          TEXT NOT NULL,
+    digest        TEXT NOT NULL,
+    line_id       INTEGER,
+    qty           REAL,
+    added         REAL,
+    response_json TEXT,
+    created_at    TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS saved_account (
     name         TEXT PRIMARY KEY,
     kind         TEXT,
@@ -155,6 +168,60 @@ CREATE TABLE IF NOT EXISTS saved_account (
 
 def now_str(fmt="%Y-%m-%d %H:%M:%S"):
     return datetime.now().strftime(fmt)
+
+
+MAX_QTY = 1000000000
+QTY_ERROR = "数量必须是整数（商品数量不能有小数），且不能为负数或超过10亿"
+
+
+def validate_qty(value, allow_zero=False):
+    """Shared receipt-quantity validator: whole numbers only, 0 <= n <= 1e9.
+
+    Rejects bool, NaN/inf, negatives, fractions and absurd values. Integral floats
+    (3.0) and numeric strings ("3", "3.0") are accepted and returned as int.
+    """
+    if isinstance(value, bool) or value is None:
+        raise ValueError(QTY_ERROR)
+    if isinstance(value, int):
+        n = value
+    else:
+        try:
+            f = float(value.strip() if isinstance(value, str) else value)
+        except (TypeError, ValueError):
+            raise ValueError(QTY_ERROR)
+        if not math.isfinite(f) or not f.is_integer():
+            raise ValueError(QTY_ERROR)
+        n = int(f)
+    if n < 0 or n > MAX_QTY or (n == 0 and not allow_zero):
+        raise ValueError(QTY_ERROR)
+    return n
+
+
+def _plan_qty(value):
+    try:
+        f = float(value or 0)
+        return f if math.isfinite(f) else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def plan_by_key(items):
+    """Purchase lines aggregated per receipt key ("sku:" + sku_id), first-seen order.
+
+    A purchase order can list the same SKU on several lines. Receipts are stored per
+    SKU key, so every comparison (diff report, PO summary, left-panel items, the
+    "done elsewhere" rows) must compare against the SKU total, like purchase_balance
+    and the inbound preview already do."""
+    out = {}
+    for it in items or []:
+        key = "sku:" + str(it.get("sku_id"))
+        row = out.get(key)
+        if row is None:
+            row = out[key] = {"key": key, "sku_id": it.get("sku_id"), "sku_code": it.get("sku_code"),
+                              "name": it.get("name"), "spec": it.get("spec"), "plan": 0.0, "lines": []}
+        row["plan"] += _plan_qty(it.get("qty"))
+        row["lines"].append(it)
+    return out
 
 
 class Store(object):
@@ -239,6 +306,11 @@ class Store(object):
 
     def _migrate(self):
         """轻量迁移：旧记录不回填猜测的收货基线。"""
+        try:
+            with self.db:   # 去重记录只需覆盖网络重试窗口，保留 30 天足够
+                self.db.execute("DELETE FROM client_op WHERE created_at < datetime('now','localtime','-30 days')")
+        except sqlite3.Error:
+            pass
         cols = {r["name"] for r in self.db.execute("PRAGMA table_info(inbound_batch)")}
         if "line_scoped" not in cols:
             self.db.execute("ALTER TABLE inbound_batch ADD COLUMN line_scoped INTEGER NOT NULL DEFAULT 0")
@@ -268,13 +340,13 @@ class Store(object):
         return r["v"] if r else default
 
     def set_kv(self, k, v):
-        self.db.execute("INSERT INTO kv(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v", (k, v))
-        self.db.commit()
+        with self.db:
+            self.db.execute("INSERT INTO kv(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v", (k, v))
 
     def set_many(self, d):
-        for k, v in d.items():
-            self.db.execute("INSERT INTO kv(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v", (k, str(v)))
-        self.db.commit()
+        with self.db:
+            for k, v in d.items():
+                self.db.execute("INSERT INTO kv(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v", (k, str(v)))
 
     # ---------------- 常用登录账号 ----------------
     def save_account(self, name, kind="pw"):
@@ -282,11 +354,11 @@ class Store(object):
         name = (name or "").strip()
         if not name:
             return
-        self.db.execute(
-            "INSERT INTO saved_account(name,kind,last_used_at) VALUES(?,?,?) "
-            "ON CONFLICT(name) DO UPDATE SET kind=excluded.kind, last_used_at=excluded.last_used_at",
-            (name, kind, now_str()))
-        self.db.commit()
+        with self.db:
+            self.db.execute(
+                "INSERT INTO saved_account(name,kind,last_used_at) VALUES(?,?,?) "
+                "ON CONFLICT(name) DO UPDATE SET kind=excluded.kind, last_used_at=excluded.last_used_at",
+                (name, kind, now_str()))
 
     def list_accounts(self, limit=8):
         rows = self.db.execute(
@@ -295,8 +367,8 @@ class Store(object):
         return [dict(r) for r in rows]
 
     def del_account(self, name):
-        self.db.execute("DELETE FROM saved_account WHERE name=?", ((name or "").strip(),))
-        self.db.commit()
+        with self.db:
+            self.db.execute("DELETE FROM saved_account WHERE name=?", ((name or "").strip(),))
 
     # ---------------- 采购单收货单 ----------------
     # state 语义：
@@ -335,26 +407,25 @@ class Store(object):
         old = self.find_session_by_po(po_id, head.get("owner_co_id", ""), head.get("auth_co_id", ""))
         ts = now_str()
         from purchase_snapshot import capture
-        capture(self, dict(head, po_id=po_id), json.dumps(items, ensure_ascii=False), ts, 'first_query')
-        if old and old["state"] != "closed":
-            self.db.execute(
-                "UPDATE session SET input_no=?, id_type=?, supplier=?, wh_name=?, status=?, po_date=?,"
-                " owner_co_id=?, auth_co_id=?, outer_po_id=?, items_json=? WHERE id=?",
-                (input_no, id_type, head.get("supplier", ""), head.get("wh_name", ""),
-                 head.get("status", ""), head.get("po_date", ""), head.get("owner_co_id", ""),
-                 head.get("auth_co_id", ""), head.get("outer_po_id", ""),
-                 json.dumps(items, ensure_ascii=False), old["id"]))
-            self.db.commit()
-            return old["id"]
-        cur = self.db.execute(
-            "INSERT INTO session(input_no,po_id,outer_po_id,id_type,supplier,wh_name,status,po_date,"
-            "owner_co_id,auth_co_id,state,started_at,items_json,round_baseline_json) VALUES(?,?,?,?,?,?,?,?,?,?,'active',?,?,?)",
-            (input_no, po_id, head.get("outer_po_id", ""), id_type, head.get("supplier", ""),
-             head.get("wh_name", ""), head.get("status", ""), head.get("po_date", ""),
-             head.get("owner_co_id", ""), head.get("auth_co_id", ""), ts,
-             json.dumps(items, ensure_ascii=False), json.dumps(items, ensure_ascii=False)))
-        self.db.commit()
-        return cur.lastrowid
+        with self.db:   # snapshot capture + session write are one atomic unit
+            capture(self, dict(head, po_id=po_id), json.dumps(items, ensure_ascii=False), ts, 'first_query')
+            if old and old["state"] != "closed":
+                self.db.execute(
+                    "UPDATE session SET input_no=?, id_type=?, supplier=?, wh_name=?, status=?, po_date=?,"
+                    " owner_co_id=?, auth_co_id=?, outer_po_id=?, items_json=? WHERE id=?",
+                    (input_no, id_type, head.get("supplier", ""), head.get("wh_name", ""),
+                     head.get("status", ""), head.get("po_date", ""), head.get("owner_co_id", ""),
+                     head.get("auth_co_id", ""), head.get("outer_po_id", ""),
+                     json.dumps(items, ensure_ascii=False), old["id"]))
+                return old["id"]
+            cur = self.db.execute(
+                "INSERT INTO session(input_no,po_id,outer_po_id,id_type,supplier,wh_name,status,po_date,"
+                "owner_co_id,auth_co_id,state,started_at,items_json,round_baseline_json) VALUES(?,?,?,?,?,?,?,?,?,?,'active',?,?,?)",
+                (input_no, po_id, head.get("outer_po_id", ""), id_type, head.get("supplier", ""),
+                 head.get("wh_name", ""), head.get("status", ""), head.get("po_date", ""),
+                 head.get("owner_co_id", ""), head.get("auth_co_id", ""), ts,
+                 json.dumps(items, ensure_ascii=False), json.dumps(items, ensure_ascii=False)))
+            return cur.lastrowid
 
     def activate_session(self, sid):
         """把某张单设为「当前收货中」。同时把上一张 active 的单自动挂起，避免两张都亮着。
@@ -365,21 +436,21 @@ class Store(object):
         s = self.get_session(sid)
         if not s or s["state"] == "closed":
             raise ValueError("该轮已结束，请新建收货轮次，不能重开历史记录")
-        self.db.execute("UPDATE session SET state='paused', paused_at=? WHERE state='active' AND id<>?",
-                        (now_str(), sid))
-        self.db.execute("UPDATE session SET state='active', ended_at=NULL, paused_at=NULL WHERE id=?", (sid,))
-        self.db.commit()
+        with self.db:
+            self.db.execute("UPDATE session SET state='paused', paused_at=? WHERE state='active' AND id<>?",
+                            (now_str(), sid))
+            self.db.execute("UPDATE session SET state='active', ended_at=NULL, paused_at=NULL WHERE id=?", (sid,))
 
     def pause_session(self, sid):
         """退出批次：挂起，数据全部保留"""
-        self.db.execute("UPDATE session SET state='paused', paused_at=? WHERE id=? AND state='active'",
-                        (now_str(), sid))
-        self.db.commit()
+        with self.db:
+            self.db.execute("UPDATE session SET state='paused', paused_at=? WHERE id=? AND state='active'",
+                            (now_str(), sid))
 
     def close_session(self, sid):
-        self.db.execute("UPDATE session SET state='closed', ended_at=? WHERE id=? AND state<>'closed'",
-                        (now_str(), sid))
-        self.db.commit()
+        with self.db:
+            self.db.execute("UPDATE session SET state='closed', ended_at=? WHERE id=? AND state<>'closed'",
+                            (now_str(), sid))
 
     # ---------------- 子批次 ----------------
     def batches(self, sid):
@@ -401,9 +472,9 @@ class Store(object):
         if r:
             return dict(r), False
         ts = now_str()
-        cur = self.db.execute("INSERT INTO batch(session_id,tracking_no,first_scan_at) VALUES(?,?,?)",
-                              (sid, tracking_no, ts))
-        self.db.commit()
+        with self.db:
+            cur = self.db.execute("INSERT INTO batch(session_id,tracking_no,first_scan_at) VALUES(?,?,?)",
+                                  (sid, tracking_no, ts))
         row = self.db.execute("SELECT * FROM batch WHERE id=?", (cur.lastrowid,)).fetchone()
         return dict(row), True
 
@@ -470,11 +541,13 @@ class Store(object):
         if not (code or "").strip():
             return
         if not info:
-            self.db.execute(
-                "INSERT INTO sku_cache(code,hit,owner_co_id,updated_at) VALUES(?,0,?,?) "
-                "ON CONFLICT(code) DO UPDATE SET hit=0, owner_co_id=excluded.owner_co_id, updated_at=excluded.updated_at",
-                (code, str(owner_co_id or ""), now_str()))
-        else:
+            with self.db:
+                self.db.execute(
+                    "INSERT INTO sku_cache(code,hit,owner_co_id,updated_at) VALUES(?,0,?,?) "
+                    "ON CONFLICT(code) DO UPDATE SET hit=0, owner_co_id=excluded.owner_co_id, updated_at=excluded.updated_at",
+                    (code, str(owner_co_id or ""), now_str()))
+            return
+        with self.db:
             self.db.execute(
                 "INSERT INTO sku_cache(code,hit,sku_id,i_id,name,spec,sku_code,enabled,pic,owner_co_id,updated_at)"
                 " VALUES(?,1,?,?,?,?,?,?,?,?,?) ON CONFLICT(code) DO UPDATE SET "
@@ -484,12 +557,11 @@ class Store(object):
                 (code, info.get("sku_id", ""), info.get("i_id", ""), info.get("name", ""),
                  info.get("spec", ""), info.get("sku_code", ""), info.get("enabled", ""),
                  info.get("pic", ""), str(owner_co_id or ""), now_str()))
-        self.db.commit()
 
     def sku_cache_clear(self):
-        n = self.db.execute("SELECT COUNT(*) c FROM sku_cache").fetchone()["c"]
-        self.db.execute("DELETE FROM sku_cache")
-        self.db.commit()
+        with self.db:
+            n = self.db.execute("SELECT COUNT(*) c FROM sku_cache").fetchone()["c"]
+            self.db.execute("DELETE FROM sku_cache")
         return n
 
     def sku_cache_count(self):
@@ -497,15 +569,15 @@ class Store(object):
 
     # ---------------- 删除 ----------------
     def del_line(self, line_id):
-        self.db.execute("DELETE FROM line WHERE id=?", (line_id,))
-        self.db.commit()
+        with self.db:
+            self.db.execute("DELETE FROM line WHERE id=?", (line_id,))
 
     def del_batch(self, batch_id):
         """删除子批次及其全部明细行"""
-        n = self.db.execute("SELECT COUNT(*) c FROM line WHERE batch_id=?", (batch_id,)).fetchone()["c"]
-        self.db.execute("DELETE FROM line WHERE batch_id=?", (batch_id,))
-        self.db.execute("DELETE FROM batch WHERE id=?", (batch_id,))
-        self.db.commit()
+        with self.db:
+            n = self.db.execute("SELECT COUNT(*) c FROM line WHERE batch_id=?", (batch_id,)).fetchone()["c"]
+            self.db.execute("DELETE FROM line WHERE batch_id=?", (batch_id,))
+            self.db.execute("DELETE FROM batch WHERE id=?", (batch_id,))
         return n
 
     def del_session(self, sid):
@@ -514,10 +586,10 @@ class Store(object):
             raise ValueError("该收货批次存在入库记录，不可删除")
         b = self.db.execute("SELECT COUNT(*) c FROM batch WHERE session_id=?", (sid,)).fetchone()["c"]
         n = self.db.execute("SELECT COUNT(*) c FROM line WHERE session_id=?", (sid,)).fetchone()["c"]
-        self.db.execute("DELETE FROM line WHERE session_id=?", (sid,))
-        self.db.execute("DELETE FROM batch WHERE session_id=?", (sid,))
-        self.db.execute("DELETE FROM session WHERE id=?", (sid,))
-        self.db.commit()
+        with self.db:
+            self.db.execute("DELETE FROM line WHERE session_id=?", (sid,))
+            self.db.execute("DELETE FROM batch WHERE session_id=?", (sid,))
+            self.db.execute("DELETE FROM session WHERE id=?", (sid,))
         return {"batches": b, "lines": n}
 
     def rename_batch(self, batch_id, tracking_no):
@@ -533,29 +605,55 @@ class Store(object):
             (r["session_id"], tracking_no, batch_id)).fetchone()
         if dup:
             raise ValueError("该收货批次下已有同名物流单号")
-        self.db.execute("UPDATE batch SET tracking_no=? WHERE id=?", (tracking_no, batch_id))
-        self.db.commit()
+        with self.db:
+            self.db.execute("UPDATE batch SET tracking_no=? WHERE id=?", (tracking_no, batch_id))
 
     # ---------------- 明细行 ----------------
-    def add_qty(self, batch_id, sid, payload, step):
+    # ---------------- 客户端操作去重 ----------------
+    def client_op_get(self, op_id):
+        if not op_id:
+            return None
+        r = self.db.execute("SELECT * FROM client_op WHERE id=?", (op_id,)).fetchone()
+        return dict(r) if r else None
+
+    def _client_op_insert(self, op, line_id, qty, added):
+        # Same transaction as the quantity write: either both land or neither does.
+        self.db.execute("INSERT INTO client_op(id,path,digest,line_id,qty,added,created_at) VALUES(?,?,?,?,?,?,?)",
+                        (op["id"], op["path"], op["digest"], line_id, qty, added, now_str()))
+
+    def client_op_finish(self, op_id, response):
+        if not op_id:
+            return
+        with self.db:
+            self.db.execute("UPDATE client_op SET response_json=? WHERE id=?",
+                            (json.dumps(response, ensure_ascii=False), op_id))
+
+    def add_qty(self, batch_id, sid, payload, step, op=None):
+        """累加实收（同一物流子批次同一商品重复扫码继续累加）。
+
+        op = {"id","path","digest"}：可选的客户端操作编号，与数量写入同一事务落库，
+        同一编号的重复请求由调用方先查 client_op_get 后直接回放，不再累加。"""
         now = now_str()
         key = "sku:" + str(payload.get("key") or payload.get("sku_id"))
-        r = self.db.execute("SELECT * FROM line WHERE batch_id=? AND key=?", (batch_id, key)).fetchone()
-        if r:
-            q = float(r["qty"]) + step
-            if q <= 0:
-                q = 0
-            self.db.execute("UPDATE line SET qty=?, updated_at=? WHERE id=?", (q, now, r["id"]))
-            self.db.commit()
-            return self.db.execute("SELECT * FROM line WHERE id=?", (r["id"],)).fetchone()["id"], q
-        cur = self.db.execute(
-            "INSERT INTO line(session_id,batch_id,poi_id,key,sku_id,i_id,sku_code,name,spec,qty,matched,updated_at)"
-            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-            (sid, batch_id, payload.get("poi_id", ""), key, payload.get("sku_id", ""),
-             payload.get("i_id", ""), payload.get("sku_code", ""), payload.get("name", ""),
-             payload.get("spec", ""), step, 1 if payload.get("matched", True) else 0, now))
-        self.db.commit()
-        return cur.lastrowid, step
+        with self.db:
+            r = self.db.execute("SELECT * FROM line WHERE batch_id=? AND key=?", (batch_id, key)).fetchone()
+            if r:
+                q = float(r["qty"]) + step
+                if q <= 0:
+                    q = 0
+                self.db.execute("UPDATE line SET qty=?, updated_at=? WHERE id=?", (q, now, r["id"]))
+                lid = r["id"]
+            else:
+                cur = self.db.execute(
+                    "INSERT INTO line(session_id,batch_id,poi_id,key,sku_id,i_id,sku_code,name,spec,qty,matched,updated_at)"
+                    " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (sid, batch_id, payload.get("poi_id", ""), key, payload.get("sku_id", ""),
+                     payload.get("i_id", ""), payload.get("sku_code", ""), payload.get("name", ""),
+                     payload.get("spec", ""), step, 1 if payload.get("matched", True) else 0, now))
+                lid, q = cur.lastrowid, step
+            if op:
+                self._client_op_insert(op, lid, q, step)
+        return lid, q
 
     def edit_receipt_line(self, line_id, sid, batch_id, values, expected):
         """Local receipt metadata only. Never modifies ERP or the purchase baseline."""
@@ -597,15 +695,13 @@ class Store(object):
                  purchase.get("poi_id", ""), purchase.get("i_id", ""), now_str(), line_id))
         return dict(self.db.execute("SELECT * FROM line WHERE id=?", (line_id,)).fetchone())
 
-    def set_qty(self, line_id, qty):
-        try:
-            qty = float(qty)
-        except Exception:
-            raise ValueError("数量不合法")
-        if qty < 0:
-            qty = 0
-        self.db.execute("UPDATE line SET qty=?, updated_at=? WHERE id=?", (qty, now_str(), line_id))
-        self.db.commit()
+    def set_qty(self, line_id, qty, op=None):
+        qty = validate_qty(qty, allow_zero=True)
+        with self.db:
+            self.db.execute("UPDATE line SET qty=?, updated_at=? WHERE id=?", (qty, now_str(), line_id))
+            if op:
+                self._client_op_insert(op, line_id, qty, None)
+        return qty
 
     # ---------------- 汇总 / 差异 ----------------
     def received_summary(self, sid):
@@ -658,35 +754,53 @@ class Store(object):
         from receiving_round import view
         return view(self, sid)
 
+    def _base_items(self, sid):
+        s = self.get_session(sid)
+        if not s:
+            return None
+        try:
+            return json.loads(s["items_json"] or "[]")
+        except Exception:
+            return []
+
+    def sku_comparison(self, sid, base=None):
+        """采购单按 SKU 合并后的应收 / 实收对照（diff_report、po_received_summary、
+        左栏 po_items、"已在别的单号收满" 行共用，同一 SKU 多行时数字一致）。
+
+        返回 (planned, extras)：planned 为 {key: 行}，含 plan/recv/diff/done/over；
+        extras 为采购单里没有、但实收出现了的 received_summary 行。"""
+        if base is None:
+            base = self._base_items(sid) or []
+        planned = plan_by_key(base)
+        recv = {r["key"]: r for r in self.received_summary(sid)}
+        for key, row in planned.items():
+            got = recv.pop(key, None)
+            r = float(got["qty"] or 0) if got else 0.0
+            row.update(recv=r, diff=r - row["plan"], done=abs(r - row["plan"]) < 1e-6,
+                       over=r > row["plan"] + 1e-6)
+        return planned, list(recv.values())
+
     def po_received_summary(self, sid):
         """采购单维度逐商品实收汇总：每个采购单商品的应收 / 实收（全单合计）/ 差异。
 
         与差异表的区别：这里**不管是否一致都列出来**，是采购单该收什么的完整对照，
         供记录页「查看明细与差异」上方显示；差异表只列不一致的行。
+        同一 SKU 在采购单出现多行时按 SKU 合并成一行（应收为各行之和）。
         """
-        s = self.get_session(sid)
-        if not s:
+        base = self._base_items(sid)
+        if base is None:
             return []
-        try:
-            base = json.loads(s["items_json"] or "[]")
-        except Exception:
-            base = []
-        recv = {r["key"]: r for r in self.received_summary(sid)}
+        planned, extras = self.sku_comparison(sid, base)
         rows = []
-        for it in base:
-            key = "sku:" + str(it.get("sku_id"))
-            got = recv.pop(key, None)
-            r = float(got["qty"]) if got else 0.0
-            plan = float(it.get("qty") or 0)
+        for p in planned.values():
             rows.append({
-                "sku_id": it.get("sku_id"), "sku_code": it.get("sku_code"),
-                "name": it.get("name"), "spec": it.get("spec"),
-                "plan": plan, "recv": r, "diff": r - plan,
-                "done": abs(r - plan) < 1e-6,
-                "over": r > plan + 1e-6,
+                "sku_id": p["sku_id"], "sku_code": p["sku_code"],
+                "name": p["name"], "spec": p["spec"],
+                "plan": p["plan"], "recv": p["recv"], "diff": p["diff"],
+                "done": p["done"], "over": p["over"],
             })
         # 采购单里没有、但实收出现了的（计划外）也一并列出，避免漏看
-        for k, v in recv.items():
+        for v in extras:
             rows.append({
                 "sku_id": v.get("sku_id"), "sku_code": v.get("sku_code"),
                 "name": v.get("name"), "spec": v.get("spec"),
@@ -710,30 +824,23 @@ class Store(object):
         return self.batches(sid)
 
     def diff_report(self, sid):
-        s = self.get_session(sid)
-        if not s:
+        base = self._base_items(sid)
+        if base is None:
             raise ValueError("采购单不存在")
-        try:
-            base = json.loads(s["items_json"] or "[]")
-        except Exception:
-            base = []
-        recv = {r["key"]: r for r in self.received_summary(sid)}
+        planned, extras = self.sku_comparison(sid, base)
         rows = []
-        for it in base:
-            key = "sku:" + str(it.get("sku_id"))
-            got = recv.pop(key, None)
-            r = float(got["qty"]) if got else 0.0
-            plan = float(it.get("qty") or 0)
-            if abs(r - plan) < 1e-6:
+        for p in planned.values():
+            if p["done"]:
                 continue                       # 一致的行不进差异表
+            r, plan = p["recv"], p["plan"]
             rows.append({
-                "sku_id": it.get("sku_id"), "sku_code": it.get("sku_code"),
-                "name": it.get("name"), "spec": it.get("spec"),
+                "sku_id": p["sku_id"], "sku_code": p["sku_code"],
+                "name": p["name"], "spec": p["spec"],
                 "plan": plan, "recv": r, "diff": r - plan,
                 "reason": ("多收 %g" % (r - plan)) if r > plan else ("少收 %g" % (plan - r)),
                 "kind": "diff",
             })
-        for k, v in recv.items():
+        for v in extras:
             rows.append({
                 "sku_id": v.get("sku_id"), "sku_code": v.get("sku_code"),
                 "name": v.get("name"), "spec": v.get("spec"),

@@ -68,6 +68,27 @@ class JointTest(unittest.TestCase):
         # Additional real quantity can be recorded without reusing occupied quantities.
         self.add('A',1);self.assertEqual(self.s.state(self.sid)['batches'][0]['lines'][0]['available'],1)
         self.change('cancel',stage_sid=r['stages'][0]['sid']);self.assertEqual(self.s.state(self.sid)['batches'][0]['lines'][0]['reserved'],0)
+    def test_integer_only_quantities_and_allocations(self):
+        self.batch('123-1')
+        for n in [1.5,'2.5',True,None,-1]:
+            with self.assertRaises(ValueError,msg=repr(n)):self.add('A',n)
+        self.add('A',4);self.add('B','2')
+        line=self.s.state(self.sid)['batches'][0]['lines'][0]
+        with self.assertRaises(ValueError):self.change('edit',line_id=line['id'],sku_id='A',name='商品A',sku_code='',spec='',qty=3.5)
+        pid=self.s.state(self.sid)['purchases'][0]['id']
+        for n in [1.5,'0.5',True,0,'',None,-2]:
+            with self.assertRaises(ValueError,msg=repr(n)) as cm:self.change('plan',mode='purchase_only',allocations=[dict(line_id=line['id'],purchase_id=pid,qty=n)],confirmed=True)
+            self.assertIn('整数',str(cm.exception))
+        self.assertEqual(self.s.state(self.sid)['stages'],[])
+        r=self.change('plan',mode='purchase_only',allocations=[dict(line_id=line['id'],purchase_id=pid,qty='3')],confirmed=True)
+        self.assertEqual(r['stages'][0]['total'],3)
+        # Reserved line: decimal edit rejected before the reservation comparison
+        with self.assertRaises(ValueError):self.change('edit',line_id=line['id'],sku_id='A',name='商品A',sku_code='',spec='',qty='3.5')
+    def test_legacy_decimal_rows_readable(self):
+        self.batch('123-1');self.add('A',4)
+        self.s.store.db.execute("UPDATE line SET qty=2.5 WHERE session_id=?",(self.sid,));self.s.store.db.commit()
+        r=self.s.state(self.sid);self.assertEqual(r['total'],2.5);self.assertEqual(r['batches'][0]['lines'][0]['available'],2.5)
+        self.assertTrue(self.s.export(self.sid));self.assertEqual(self.s.history()[0]['total'],2.5)
     def test_group_outside_two_modes_and_explicit_target(self):
         self.batch('X1');self.add('X',2);r=self.s.state(self.sid);self.assertEqual(next(r for r in r['rows'] if r['sku_id']=='X')['kind'],'extra')
         a=[dict(line_id=r['batches'][0]['lines'][0]['id'],purchase_id=r['purchases'][0]['id'],qty=2)]

@@ -87,6 +87,33 @@ class UnplannedTest(unittest.TestCase):
         for n in [float('nan'),float('inf'),-1]:
             with self.assertRaises(ValueError):self.add('A',n)
         self.assertEqual(self.s.state(self.sid)['total'],1)
+    def test_integer_only_quantities(self):
+        self.batch('T');self.add('A','3')
+        for n in [1.5,'2.5',True,False,None,'',' ','abc','1e-3',1000000001]:
+            with self.assertRaises(ValueError,msg=repr(n)):self.add('A',n)
+        with self.assertRaises(ValueError):self.add('B',0)
+        line=self.s.state(self.sid)['batches'][0]['lines'][0]
+        self.assertEqual(line['qty'],3)
+        for n in [2.5,'0.5',True,None,-1]:
+            with self.assertRaises(ValueError,msg=repr(n)):self.change('edit',line_id=line['id'],sku_id='A',name='商品A',sku_code='',spec='',qty=n)
+        self.assertEqual(self.s.state(self.sid)['total'],3)
+        self.change('edit',line_id=line['id'],sku_id='A',name='商品A',sku_code='',spec='',qty=4.0)
+        self.assertEqual(self.s.state(self.sid)['total'],4)
+        # edit-to-zero keeps its existing semantics
+        s=self.change('edit',line_id=line['id'],sku_id='A',name='商品A',sku_code='',spec='',qty=0)
+        self.assertEqual(s['total'],0)
+    def test_legacy_decimal_rows_readable_not_copied(self):
+        self.batch('OLD');self.add('A',1)
+        self.s.store.db.execute("UPDATE line SET qty=2.5 WHERE batch_id=?",(self.bid,));self.s.store.db.commit()
+        s=self.s.state(self.sid);self.assertEqual(s['total'],2.5);self.assertIn('OLD',self.s.export(self.sid).decode('utf-8-sig'))
+        self.assertEqual(self.s.history()[0]['total'],2.5)
+        self.add('A',1);self.assertEqual(self.s.state(self.sid)['total'],3.5)  # integer add onto legacy row works
+        self.batch('NEW')
+        with self.assertRaises(ValueError) as cm:self.change('copy_preview')
+        self.assertIn('小数',str(cm.exception))
+        # ERP purchase plan quantities are read, not entered: still tolerated
+        self.j.detail_rows=[dict(sku_id='A',qty=3.5,in_qty=0,poi_id='11',name='商品A')]
+        self.assertEqual(self.match()['rows'][0]['kind'],'good')
     def test_ambiguous_scan_no_silent_choice(self):
         self.s.lookup=lambda *a,**k:[dict(sku_id='A',name='A'),dict(sku_id='B',name='B')]
         self.batch('T');s=self.change('scan',code='BAR',qty=1);self.assertTrue(s['selection_required']);self.assertEqual(self.s.state(self.sid)['total'],0)

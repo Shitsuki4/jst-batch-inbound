@@ -5,6 +5,7 @@
 本地服务使用 http.server + sqlite3；PDA HTTPS 证书使用 cryptography。
 前端为原生 HTML/JS，浏览器用 Edge --app 无边框窗口打开，跨进程零冗余。
 """
+import hashlib
 import html
 import logging
 from logging.handlers import RotatingFileHandler
@@ -77,7 +78,7 @@ _LOG.info("进程启动 pid=%s；正在初始化本地数据", os.getpid())
 sys.path.insert(0, HERE)
 from jst import (JstClient, BizError, LoginError, CaptchaError,  # noqa: E402
                  normalize_po_row, normalize_po_item, match_item, match_item_by_any)
-from store import Store, now_str  # noqa: E402
+from store import Store, now_str, validate_qty, plan_by_key  # noqa: E402
 from catalog import CatalogDB, CatalogSync, scope_key
 from login_memory import LoginMemory
 from inbound import InboundService, InboundError  # noqa: E402
@@ -343,6 +344,17 @@ def _partners_cache_ok(d):
         return False
 
 
+# 每次登录/切换账号清缓存时 +1。慢请求在登录前发出、登录后才返回时，
+# 用它判断结果已过期，不能把旧账号的货主/分仓清单写回缓存。
+PARTNERS_GEN = 0
+
+
+def invalidate_partners():
+    global PARTNERS_GEN
+    PARTNERS_GEN += 1
+    STORE.set_many({"partners_json": "", "partners_ts": "0"})
+
+
 def load_partners(refresh=False):
     """货主与分仓清单。接口结果缓存 12 小时；取不到时允许返回空列表，不影响收货主流程。
 
@@ -364,11 +376,16 @@ def load_partners(refresh=False):
             log("partners 缓存过期(版本/字段升级)，重新拉取")
         except Exception:
             pass
+    gen, ident = PARTNERS_GEN, (JST.uid, JST.coid)
     try:
         data = {"owners": JST.partners(), "wms": JST.wms_list(), "ts": now_str(),
                 "ver": PARTNERS_CACHE_VER}
         if not data["owners"] and not data["wms"]:
             raise BizError("empty partner list")
+        if gen != PARTNERS_GEN or ident != (JST.uid, JST.coid):
+            # 拉取期间登录身份变了：这份清单属于旧账号，既不缓存也不返回
+            log("partners 拉取期间账号已切换，丢弃旧结果")
+            return {"owners": [], "wms": [], "err": True, "err_msg": "登录账号已切换，请重新读取清单"}
         STORE.set_many({"partners_json": json.dumps(data, ensure_ascii=False),
                         "partners_ts": str(time.time())})
         return data
@@ -596,12 +613,24 @@ def po_items(sid, bid=0):
         base = json.loads(s["items_json"] or "[]")
     except Exception:
         base = []
-    recv_map = {r["key"]: float(r["qty"] or 0) for r in STORE.received_summary(sid)}
+    # 同一 SKU 在采购单出现多行时，实收按 SKU 合计（与差异表、purchase_balance、
+    # 入库预览一致），再按采购单顺序逐行分摊：先填满前面的行，超收记在该 SKU 最后一行。
+    # 这样每行 recv 之和 = SKU 实收合计，不会每行都显示总数。
+    planned, _ = STORE.sku_comparison(sid, base)
+    left = {k: p["recv"] for k, p in planned.items()}
+    last_idx = {}
+    for i, it in enumerate(base):
+        last_idx["sku:" + str(it.get("sku_id"))] = i
     out = []
     for i, it in enumerate(base):
         key = "sku:" + str(it.get("sku_id"))
         plan = float(it.get("qty") or 0)
-        got = recv_map.get(key, 0.0)
+        if last_idx[key] == i:
+            got = left[key]
+        else:
+            got = min(max(plan, 0.0), left[key])
+        left[key] -= got
+        sku = planned[key]
         out.append({
             "idx": i, "poi_id": it.get("poi_id"), "sku_id": it.get("sku_id"),
             "i_id": it.get("i_id"), "sku_code": it.get("sku_code"),
@@ -609,6 +638,7 @@ def po_items(sid, bid=0):
             "plan": plan, "recv": got,
             "done": abs(got - plan) < 1e-6,
             "over": got > plan + 1e-6,
+            "sku_plan": sku["plan"], "sku_recv": sku["recv"],
         })
     return out
 
@@ -641,14 +671,14 @@ def cur_lines(sid, bid):
         base = json.loads((STORE.get_session(sid) or {}).get("items_json") or "[]")
     except Exception:
         base = []
-    recv_map = {r["key"]: float(r["qty"] or 0) for r in STORE.received_summary(sid)}
+    planned, _ = STORE.sku_comparison(sid, base)   # 同一 SKU 多行按合计判断是否收满
     seq = 0
     for it in base:
         key = "sku:" + str(it.get("sku_id"))
         if key in present:
             continue                       # 本单号已经有这一行，不重复
-        plan = float(it.get("qty") or 0)
-        got = recv_map.get(key, 0.0)
+        present.add(key)                   # 同一 SKU 多行只沉底展示一次
+        plan, got = planned[key]["plan"], planned[key]["recv"]
         if plan <= 0 or abs(got - plan) > 1e-6:
             continue                       # 只在别的单号正好收满时才沉底展示
         lines.append({
@@ -747,6 +777,48 @@ def cross_receipt_guard(store,sid):
         if not own or own[0]!=j['group_sid'] or j['status']!='complete':
             raise ValueError('此采购单在其他来源 / 联合批次已有入库或待核实记录，请核对并继续原单，禁止重复开单')
 INBOUND.cross_guard=cross_receipt_guard
+
+def scan_step():
+    """设置里的「每次累加数量」：必须是正整数；历史上存了非法值（小数/负数）时按 1 处理。"""
+    try:
+        return validate_qty(STORE.get_kv("scan_step", "1") or "1")
+    except ValueError:
+        return 1
+
+
+CLIENT_OP_RE = re.compile(r"^[A-Za-z0-9_-]{8,80}$")
+
+
+def client_op(b, path, fields):
+    """(op, previous) for an optional client_op_id; (None, None) when absent.
+
+    One id per physical scan / confirmation, reused by the client on retry. The
+    digest covers the business fields so a reused id with different content is
+    refused instead of silently replayed."""
+    op_id = b.get("client_op_id")
+    if op_id in (None, ""):
+        return None, None
+    if not isinstance(op_id, str) or not CLIENT_OP_RE.match(op_id):
+        raise ValueError("操作编号格式无效")
+    digest = hashlib.sha256(json.dumps(fields, sort_keys=True, ensure_ascii=False, default=str)
+                            .encode("utf-8")).hexdigest()
+    op = {"id": op_id, "path": path, "digest": digest}
+    return op, STORE.client_op_get(op_id)
+
+
+def _rollback_open_transaction(path=""):
+    """Roll back anything a request left uncommitted on the shared STORE connection.
+
+    Every successful store write commits itself (``with self.db:``), so an open
+    transaction at the end of a request means a write failed part-way (for example
+    a trigger RAISE(ABORT) after an earlier statement). Discard it."""
+    try:
+        if STORE.db.in_transaction:
+            STORE.db.rollback()
+            log("%s: 已回滚未提交的本地写入" % path)
+    except Exception as e:
+        log("%s: rollback failed: %s" % (path, e))
+
 
 # ---------------------------------------------------------------- HTTP
 
@@ -887,9 +959,23 @@ class Handler(BaseHTTPRequestHandler):
             return self._fail('图文未完整复制，请确认剪贴板未被占用后重试', code=503)
 
     # ---------- GET ----------
+    # These GETs never touch STORE / JST and must stay responsive while a long POST
+    # holds state_lock (heartbeat feeds the watchdog). Every other /api/* GET runs
+    # under state_lock so it cannot interleave with a locked POST on the shared
+    # SQLite connection or the shared JstClient session.
+    LOCK_FREE_GETS = frozenset(("/api/heartbeat", "/api/pda/download/status",
+                                "/api/report/clipboard/status"))
+
     def do_GET(self):
-        global LAST_HEARTBEAT
         if not self._desktop_guard(): return
+        path = urllib.parse.urlparse(self.path).path
+        if path.startswith("/api/") and path not in self.LOCK_FREE_GETS:
+            with state_lock:
+                return self._do_get()
+        return self._do_get()
+
+    def _do_get(self):
+        global LAST_HEARTBEAT
         u = urllib.parse.urlparse(self.path)
         path, qs = u.path, urllib.parse.parse_qs(u.query)
         q = {k: v[0] for k, v in qs.items()}
@@ -1258,9 +1344,15 @@ class Handler(BaseHTTPRequestHandler):
             self._desktop_body = self._body()
             fn = getattr(self, "_post_" + path.strip("/").replace("/", "_").replace("-", "_"), self._nf)
             with state_lock:
-                if path in ("/api/login", "/api/login/restore", "/api/sms/login", "/api/qr/finish", "/api/logout"):
-                    LAN.invalidate()
-                return fn()
+                try:
+                    if path in ("/api/login", "/api/login/restore", "/api/sms/login", "/api/qr/finish", "/api/logout"):
+                        LAN.invalidate()
+                    return fn()
+                finally:
+                    # A handler that failed (or caught its own error) must never leave a
+                    # half-written transaction on the shared connection for the next
+                    # request's commit() to publish.
+                    _rollback_open_transaction(path)
         except Exception as e:
             log("%s crash: %s" % (path, e))
             try:
@@ -1478,6 +1570,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._fail("校验采购单明细开关只能为0或1")
             if k == "scan_ignore_disabled" and v not in ("0", "1"):
                 return self._fail("扫码忽略禁用商品开关只能为0或1")
+            if k == "scan_step":
+                try:
+                    v = str(validate_qty(b[k]))
+                except ValueError:
+                    return self._fail("每次累加数量必须是正整数（商品数量不能有小数）")
             # 单号类型只收合法值；auto = 界面「自动识别」（四种类型轮换）
             if k == "default_id_type" and v not in ID_TYPES + ["auto"]:
                 continue
@@ -1490,7 +1587,7 @@ class Handler(BaseHTTPRequestHandler):
     def _post_api_login_restore(self):
         result = LOGIN_MEMORY.restore(JST, lambda: JstClient(timeout=10))
         if result['restored']:
-            STORE.set_many({'partners_json': '', 'partners_ts': '0'})
+            invalidate_partners()
         return self._ok(**result)
 
     def _post_api_login_preferences(self):
@@ -1525,7 +1622,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._fail("登录失败，请稍后重试")
         log("login OK uid=%s coid=%s" % (info.get("uid"), info.get("coid")))
         warning = LOGIN_MEMORY.completed(JST, b, acc, 'pw')
-        STORE.set_many({'partners_json': '', 'partners_ts': '0'})
+        invalidate_partners()
         return self._ok(user=info, warning=warning)
 
     # ---------------- 短信验证码登录 ----------------
@@ -1580,7 +1677,7 @@ class Handler(BaseHTTPRequestHandler):
         SMS_STATE["cid"] = ""
         log("sms login OK uid=%s" % info.get("uid"))
         warning = LOGIN_MEMORY.completed(JST, b, mobile, 'sms')
-        STORE.set_many({'partners_json': '', 'partners_ts': '0'})
+        invalidate_partners()
         return self._ok(user=info, warning=warning)
 
     # ---------------- 扫码登录（微信 / 钉钉） ----------------
@@ -1631,7 +1728,7 @@ class Handler(BaseHTTPRequestHandler):
         JST.uid = JST.coid = JST.uname = JST.coname = ""
         JST._vs_cache = {}
         JST._sku_cache = {}
-        STORE.set_many({"partners_json": "", "partners_ts": "0"})
+        invalidate_partners()
 
     def _po_create(self):
         """创建收货批次：查一张采购单并把它置为当前收货。
@@ -1762,6 +1859,31 @@ class Handler(BaseHTTPRequestHandler):
         return self._ok(diff=rows, progress=prog, batches=batches, session=session_payload(s["id"]),
                         receiving_round=STORE.receiving_round(s["id"]))
 
+    def _replay_client_op(self, op, old, sid, bid=None):
+        """Duplicate client_op_id: return the original result, never add again."""
+        if old["path"] != op["path"] or old["digest"] != op["digest"]:
+            return self._fail("同一操作编号的请求内容不一致，未重复入账；请刷新后核对实收")
+        try:
+            resp = json.loads(old["response_json"]) if old.get("response_json") else None
+        except ValueError:
+            resp = None
+        if not isinstance(resp, dict):
+            resp = {"ok": True, "line_id": old["line_id"], "qty": old["qty"], "added": old["added"]}
+        resp["duplicate"] = True
+        # 附上当前明细，避免界面回到旧快照；数量本身不再变化
+        if sid:
+            resp["items"] = po_items(sid)
+            resp["progress"] = STORE.progress(sid)
+            if bid:
+                resp["lines"] = cur_lines(sid, bid)
+        resp.pop("ok", None)
+        return self._ok(**resp)
+
+    def _ok_op(self, op, **kw):
+        if op:
+            STORE.client_op_finish(op["id"], dict(ok=True, **kw))
+        return self._ok(**kw)
+
     def _cur_session(self, bid=0):
         """收货类操作的上下文单据：优先 body 里的 sid，其次当前 active。"""
         try:
@@ -1818,10 +1940,30 @@ class Handler(BaseHTTPRequestHandler):
         code = (b.get("code") or "").strip()
         if not code:
             return self._fail("无效条码")
-        try:
-            base = json.loads(STORE.get_session(s["id"])["items_json"] or "[]")
-        except Exception:
-            base = []
+        step = scan_step()
+        # qty 显式传入时用它的值（前端「待确认数量」，默认 1）；
+        # qty 传 0 = 只解析不通账（前端刚扫到编码、还没确认数量）；
+        # 未传 qty（旧前端/直接调用）= 按设置里的每次累加数量，保持向后兼容。
+        raw_qty = b.get("qty")
+        dry = False
+        if raw_qty is None or raw_qty == "":
+            add = step
+        else:
+            try:
+                add = validate_qty(raw_qty, allow_zero=True)
+            except ValueError as e:
+                return self._fail(str(e))
+            if add == 0:
+                dry = True
+                add = step        # dry 时不会真的入账，这个值只用于占位
+        op = None
+        if not dry:
+            try:
+                op, old = client_op(b, "/api/item/scan", {"sid": s["id"], "batch_id": bid, "code": code, "qty": add})
+            except ValueError as e:
+                return self._fail(str(e))
+            if old:
+                return self._replay_client_op(op, old, s["id"], bid)
         try:
             candidates = receipt_candidates(s, code)
         except ValueError as e:
@@ -1834,25 +1976,6 @@ class Handler(BaseHTTPRequestHandler):
             if (res["mode"] == "multi" or current_sku != str(b["expected_sku_id"])
                     or ("expected_matched" in b and bool(b["expected_matched"]) != (res["mode"] != "none"))):
                 return self._fail("商品资料或采购明细已更新，解析结果发生变化，请重新扫码核对后再确认")
-        try:
-            step = float(STORE.get_kv("scan_step", "1") or 1)
-        except Exception:
-            step = 1.0
-        # qty 显式传入时用它的值（前端「待确认数量」，默认 1）；
-        # qty 传 0 = 只解析不通账（前端刚扫到编码、还没确认数量）；
-        # 未传 qty（旧前端/直接调用）= 按设置里的每次累加数量，保持向后兼容。
-        raw_qty = b.get("qty")
-        dry = False
-        if raw_qty is None or raw_qty == "":
-            add = step
-        else:
-            try:
-                add = max(0.0, float(raw_qty))
-            except Exception:
-                add = step
-            if add == 0:
-                dry = True
-                add = step        # dry 时不会真的入账，这个值只用于占位
 
         if res["mode"] == "multi":
             return self._ok(multi=True, code=code, resolved=bool(info), dry=dry,
@@ -1879,8 +2002,8 @@ class Handler(BaseHTTPRequestHandler):
                                       "spec": payload["spec"]},
                                 batch_id=bid, msg=("采购单无此商品，已识别，待确认数量" if info else
                                 "本地资料未识别，仍可确认收货并编辑资料；入库前会核验编码，资料不存在不能入库"))
-            lid, qty = STORE.add_qty(bid, s["id"], payload, add)
-            return self._ok(unmatched=True, line_id=lid, qty=qty, code=code,
+            lid, qty = STORE.add_qty(bid, s["id"], payload, add, op=op)
+            return self._ok_op(op, unmatched=True, line_id=lid, qty=qty, code=code,
                             added=add, resolved=bool(info),
                             lines=cur_lines(s["id"], bid),
                             items=po_items(s["id"]),
@@ -1898,10 +2021,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._ok(dry=True, code=code, resolved=True, via=res.get("via", "barcode"),
                             item={k: payload[k] for k in ("sku_id", "name", "spec")},
                             batch_id=bid, msg="已识别商品，待确认数量")
-        lid, qty = STORE.add_qty(bid, s["id"], payload, add)
-        if b.get("force_sku_id"):
-            pass
-        return self._ok(line_id=lid, qty=qty, added=add, via=res.get("via", "barcode"),
+        lid, qty = STORE.add_qty(bid, s["id"], payload, add, op=op)
+        return self._ok_op(op, line_id=lid, qty=qty, added=add, via=res.get("via", "barcode"),
                         item={k: payload[k] for k in ("sku_id", "name", "spec")},
                         lines=cur_lines(s["id"], bid), items=po_items(s["id"]),
                         progress=STORE.progress(s["id"]))
@@ -1917,33 +2038,32 @@ class Handler(BaseHTTPRequestHandler):
         bid = b.get("batch_id")
         if not any(str(x["id"]) == str(bid) for x in STORE.batches(s["id"])):
             return self._fail("物流子批次与当前采购单不匹配")
+        bid = int(bid)
+        # 与 item/scan 一致：显式 qty 优先（前端「待确认数量」）；缺省用设置里的累加数
+        raw_qty = b.get("qty")
+        try:
+            add = scan_step() if raw_qty is None or raw_qty == "" else validate_qty(raw_qty)
+        except ValueError as e:
+            return self._fail(str(e))
+        sel = b.get("item") if isinstance(b.get("item"), dict) else {}
+        try:
+            op, old = client_op(b, "/api/item/choose", {"sid": s["id"], "batch_id": bid, "qty": add,
+                                "sku_id": sel.get("sku_id"), "poi_id": sel.get("poi_id"), "code": b.get("code")})
+        except ValueError as e:
+            return self._fail(str(e))
+        if old:
+            return self._replay_client_op(op, old, s["id"], bid)
         try:
             it = receipt_selection(s, b)
         except ValueError as e:
             return self._fail(str(e))
-        try:
-            step = float(STORE.get_kv("scan_step", "1") or 1)
-        except Exception:
-            step = 1.0
-        # 与 item/scan 一致：显式 qty 优先（前端「待确认数量」）；缺省用设置里的累加数
-        raw_qty = b.get("qty")
-        if raw_qty is None or raw_qty == "":
-            add = step
-        else:
-            try:
-                add = max(0.0, float(raw_qty))
-            except Exception:
-                add = step
-        import math
-        if not math.isfinite(add) or add <= 0 or add > 1000000000:
-            return self._fail("实收数量必须大于0且不超过10亿")
         matched = it["matched"]
         payload = {"key": it["sku_id"] if matched else "RAW:" + it["sku_id"],
                    "poi_id": it.get("poi_id", ""), "sku_id": it["sku_id"], "i_id": it.get("i_id", ""),
                    "sku_code": it.get("sku_code", ""), "name": it.get("name", ""),
                    "spec": it.get("spec", ""), "matched": matched}
-        lid, qty = STORE.add_qty(bid, s["id"], payload, add)
-        return self._ok(line_id=lid, qty=qty, added=add, unmatched=not matched, resolved=True,
+        lid, qty = STORE.add_qty(bid, s["id"], payload, add, op=op)
+        return self._ok_op(op, line_id=lid, qty=qty, added=add, unmatched=not matched, resolved=True,
                         item=it, lines=cur_lines(s["id"], bid), items=po_items(s["id"]),
                         progress=STORE.progress(s["id"]))
 
@@ -1962,16 +2082,29 @@ class Handler(BaseHTTPRequestHandler):
         b = self._body()
         try:
             lid = int(b.get("line_id"))
-            STORE.set_qty(lid, b.get("qty"))
-        except Exception as e:
-            log("line set fail: %s" % e)
-            return self._fail(str(e) if "入库" in str(e) else "数量修改失败")
+            qty = validate_qty(b.get("qty"), allow_zero=True)
+        except ValueError as e:
+            return self._fail(str(e) if "数量" in str(e) else "数量修改失败")
+        except Exception:
+            return self._fail("数量修改失败")
         bid = b.get("batch_id")
         s = self._cur_session(b.get("sid") or 0)
         sid = s["id"] if s else 0
-        return self._ok(lines=cur_lines(sid, bid) if bid else [],
-                        items=po_items(sid) if sid else [],
-                        progress=STORE.progress(sid) if sid else None)
+        try:
+            op, old = client_op(b, "/api/line/set", {"line_id": lid, "qty": qty})
+        except ValueError as e:
+            return self._fail(str(e))
+        if old:
+            return self._replay_client_op(op, old, sid, bid)
+        try:
+            STORE.set_qty(lid, qty, op=op)
+        except Exception as e:
+            log("line set fail: %s" % e)
+            return self._fail(str(e) if "入库" in str(e) else "数量修改失败")
+        return self._ok_op(op, line_id=lid, qty=qty,
+                           lines=cur_lines(sid, bid) if bid else [],
+                           items=po_items(sid) if sid else [],
+                           progress=STORE.progress(sid) if sid else None)
 
     def _post_api_line_del(self):
         b = self._body()
@@ -2215,7 +2348,7 @@ def qr_take_cookies():
 def _adopt_browser(ck):
     info = JST.adopt_cookies(ck)
     warning = LOGIN_MEMORY.completed(JST, QR_LOGIN_OPTIONS, kind='qr')
-    STORE.set_many({"partners_json": "", "partners_ts": "0"})
+    invalidate_partners()
     LAN.invalidate()
     log("official login OK uid=%s" % info.get("uid"))
     qr_close(wait=False)
@@ -2289,12 +2422,68 @@ def pick_port(preferred, tries=20):
     return preferred
 
 
+# Native host contract: the port it passed in JST_NATIVE_PORT is busy -> exit with
+# this code and the host retries with a new port (no silent fallback scanning, the
+# host would otherwise talk to the wrong process).
+EXIT_PORT_IN_USE = 75
+NATIVE_MUTEX_NAME = "Local\\ReceivingAssistantService"
+_NATIVE_MUTEX = None
+
+
+class StrictHTTPServer(DesktopHTTPServer):
+    # Windows SO_REUSEADDR lets a second socket bind a port that is already in use;
+    # strict native binding must fail instead, so use exclusive address use there.
+    allow_reuse_address = os.name != "nt"
+
+    def server_bind(self):
+        if os.name == "nt" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+
+def hold_native_mutex(name=NATIVE_MUTEX_NAME):
+    """Create and keep a named Windows mutex for the process lifetime so the native
+    host can see that a receiving service is alive. No-op on other platforms."""
+    global _NATIVE_MUTEX
+    if os.name != "nt" or _NATIVE_MUTEX:
+        return _NATIVE_MUTEX
+    try:
+        import ctypes
+        from ctypes import wintypes
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateMutexW.argtypes = (wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR)
+        kernel32.CreateMutexW.restype = wintypes.HANDLE
+        handle = kernel32.CreateMutexW(None, False, name)
+        if not handle:
+            log("创建服务互斥体失败 err=%s" % ctypes.get_last_error())
+            return None
+        _NATIVE_MUTEX = handle      # never closed: released by the OS when the process exits
+    except Exception as e:
+        log("创建服务互斥体失败: %s" % e)
+    return _NATIVE_MUTEX
+
+
+def create_http_server(port, native):
+    """Native mode binds strictly to the given port or exits with EXIT_PORT_IN_USE;
+    standalone mode keeps the old pick_port fallback."""
+    if native:
+        try:
+            return StrictHTTPServer(("127.0.0.1", port), Handler), port
+        except OSError as e:
+            log("原生模式端口 %d 无法绑定（%s），退出码 %d 交由宿主换端口重试" % (port, e, EXIT_PORT_IN_USE))
+            raise SystemExit(EXIT_PORT_IN_USE)
+    port = pick_port(port)
+    return DesktopHTTPServer(("127.0.0.1", port), Handler), port
+
+
 def main():
     os.makedirs(DATA, exist_ok=True)
     os.makedirs(EXPORT_DIR, exist_ok=True)
     global PORT
-    PORT = pick_port(PORT)
-    srv = DesktopHTTPServer(("127.0.0.1", PORT), Handler)
+    native = bool(os.environ.get("JST_NATIVE_PORT"))
+    if native:
+        hold_native_mutex()
+    srv, PORT = create_http_server(PORT, native)
     srv.daemon_threads = False
     if _SERVICE_LEASE:
         _SERVICE_LEASE.publish(PORT)

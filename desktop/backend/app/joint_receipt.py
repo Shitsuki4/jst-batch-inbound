@@ -224,8 +224,9 @@ class JointService:
         report=self.state(sid);lines={r['id']:r for b in report['batches'] for r in b['lines']};purchases={p['id']:p for p in report['purchases']}
         used={};grouped={};live_sets={p['id']:{str(r.get('sku_id')) for r in p['live']} for p in report['purchases']}
         for a in allocations:
-            lid,pid=int(a['line_id']),int(a['purchase_id']);n=quantity(a['qty'])
-            if n<=0 or n>100000000:raise ValueError('分配数量应大于0且不超过一亿')
+            lid,pid=int(a['line_id']),int(a['purchase_id'])
+            try:n=Decimal(qty(a.get('qty'),allow_zero=False))
+            except ValueError:raise ValueError('分配数量必须是大于0的整数（商品数量不能有小数），且不超过10亿')
             if lid not in lines or pid not in purchases:raise ValueError('明细或采购单不属于当前批次')
             sku=lines[lid]['sku_id'];scope=[k for k,v in live_sets.items() if sku in v]
             if scope and pid not in scope:raise ValueError('组内编码必须分给包含该编码的采购单')
@@ -299,7 +300,7 @@ class JointService:
                 if any(reserved.get(r['id'],0)>0 for r in self.store.batch_lines(bid)):raise ValueError('此物流含已分配 / 已提交明细，不能删除或改号')
             else:
                 lid=int(body.get('line_id') or 0);old=self.receipt.line(sid,bid,lid);n=reserved.get(lid,Decimal(0))
-                if n>0 and (action=='delete_line' or quantity(body.get('qty',0))<n or any(str(body.get(k,''))!=str(old.get(k,'')) for k in ('sku_id','name','spec','sku_code'))):raise ValueError('已占用明细不能改编码或删减到占用数量以下')
+                if n>0 and (action=='delete_line' or qty(body.get('qty',0))<n or any(str(body.get(k,''))!=str(old.get(k,'')) for k in ('sku_id','name','spec','sku_code'))):raise ValueError('已占用明细不能改编码或删减到占用数量以下')
         if action not in ('scan','resolve','manual','edit','delete_line','delete_batch','rename','note','copy_preview','copy_previous'):raise ValueError('不支持的操作')
         result=self.receipt.mutate(action,body,after_copy=lambda:self.store.db.execute('UPDATE joint_package SET finished=0 WHERE batch_id=?',(bid,)))
         if result.get('selection_required') or action=='copy_preview':return result

@@ -5,7 +5,7 @@ import io
 import json
 import math
 from decimal import Decimal
-from store import Store, now_str
+from store import Store, now_str, validate_qty, MAX_QTY, QTY_ERROR
 from inbound import InboundService, InboundError, json_text
 from jst import normalize_po_item, match_item
 
@@ -17,10 +17,37 @@ def clean(value, limit=300):
     return value
 
 
-def qty(value):
-    n = float(value)
-    if not math.isfinite(n) or n < 0 or n > 100000000:
-        raise ValueError('数量必须是有效非负数，且不超过一亿')
+def qty(value, allow_zero=True):
+    """User-entered receipt quantity: whole numbers only (shared store.validate_qty rules).
+
+    Rejects bool/None/NaN/inf/negatives/fractions/>1e9. Returns int. Zero stays
+    allowed by default because edit-to-zero keeps its existing semantics; callers
+    that require a positive number pass allow_zero=False or check explicitly.
+    """
+    return validate_qty(value, allow_zero=allow_zero)
+
+
+def stored_qty(value):
+    """Tolerant reader for legacy rows (may hold decimals) – never raises."""
+    if isinstance(value, bool):
+        return float(value)
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return n if math.isfinite(n) and n >= 0 else 0.0
+
+
+def erp_qty(value):
+    """ERP purchase-plan quantity check (not user input): finite, non-negative, <= 1e9."""
+    if isinstance(value, bool) or value is None:
+        raise ValueError('采购单数量无效')
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        raise ValueError('采购单数量无效')
+    if not math.isfinite(n) or n < 0 or n > MAX_QTY:
+        raise ValueError('采购单数量必须是有效非负数，且不超过10亿')
     return n
 
 
@@ -128,7 +155,7 @@ class UnplannedService:
         actual = {}
         for b in batches:
             for line in b['lines']:
-                if not qty(line['qty']): continue
+                if not stored_qty(line['qty']): continue
                 sku = line['sku_id']
                 if sku not in actual: actual[sku] = dict(line, recv=Decimal(0))
                 actual[sku]['recv'] += Decimal(str(line['qty']))
@@ -173,7 +200,7 @@ class UnplannedService:
             raise ValueError('采购单明细格式无效')
         items = [normalize_po_item(r) for r in values]
         if not items or any(not p['sku_id'] for p in items): raise ValueError('采购单明细为空或商品编码无效')
-        for p in items: qty(p['qty'])
+        for p in items: erp_qty(p['qty'])
         return items
 
     def write_purchase(self, sid, po_id, owner, auth, values, outer=None, supplier=None):
@@ -287,7 +314,7 @@ class UnplannedService:
         elif action in ('scan','manual'):
             self.batch(sid,bid)
             n = qty(body.get('qty',1))
-            if not n: raise ValueError('新增数量必须大于零')
+            if not n: raise ValueError('新增数量必须是大于零的整数')
             if action == 'scan':
                 code = clean(body.get('code'),200)
                 rows = self.candidates(sid,code)
@@ -300,7 +327,7 @@ class UnplannedService:
                 if not p['sku_id'] or not p['name']: raise ValueError('商品编码和名称不能为空')
             p = dict(p,matched=False)
             old = self.store.db.execute('SELECT qty FROM line WHERE batch_id=? AND sku_id=?',(bid,p['sku_id'])).fetchone()
-            qty(n + (float(old['qty']) if old else 0))
+            if n + (stored_qty(old['qty']) if old else 0) > MAX_QTY: raise ValueError(QTY_ERROR)
             self.store.add_qty(bid,sid,p,n)
         elif action in ('edit','delete_line'):
             lid=int(body.get('line_id') or 0);self.line(sid,bid,lid)

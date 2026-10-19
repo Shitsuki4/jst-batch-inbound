@@ -52,9 +52,20 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(len(self.db.lookup(self.key,'X')),2)
     def test_atomic_invalid_replacement(self):
         self.put()
-        for rows in [[{'sku_id':'B'},{'sku_id':'b'}],[],[{}]]:
+        for rows in [[{'sku_id':'B'},{'sku_id':'B'}],[],[{}]]:
             with self.assertRaises(ValueError): self.db.replace(self.key,'货主',rows)
             self.assertEqual(self.db.lookup(self.key,'690001')[0]['sku_id'],'A')
+    def test_case_only_different_skus_are_distinct(self):
+        # SKU primary key is case-sensitive: 'B' and 'b' are two products, snapshot must publish.
+        self.db.replace(self.key,'货主',[{'sku_id':'B','sku_code':'C1'},{'sku_id':'b','sku_code':'C2'}])
+        self.assertEqual(self.db.lookup(self.key,'C1')[0]['sku_id'],'B')
+        self.assertEqual(self.db.lookup(self.key,'C2')[0]['sku_id'],'b')
+        # Alias matching for scans stays case-insensitive, so both are candidates for "b".
+        self.assertEqual(sorted(r['sku_id'] for r in self.db.lookup(self.key,'B')),['B','b'])
+    def test_pagination_case_only_different_skus(self):
+        self.fake.pages=[[{'sku_id':'K','owner_co_id':'O'},{'sku_id':'k','owner_co_id':'O'}],[]]
+        rows=fetch_catalog(self.fake,'O','W')
+        self.assertEqual([r['sku_id'] for r in rows],['K','k'])
     def test_success_replaces_deleted_aliases(self):
         self.put()
         self.db.point_put(self.key,'POINT',{'sku_id':'Q'})

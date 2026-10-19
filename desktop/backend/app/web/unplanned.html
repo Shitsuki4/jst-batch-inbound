@@ -116,7 +116,7 @@
 <strong id="pending-name">
 </strong>
 <span>本次数量</span>
-<input id="step" data-edit type="number" min="0.000001" step="any" value="1" aria-label="本次数量">
+<input id="step" data-edit type="number" min="1" max="1000000000" step="1" inputmode="numeric" pattern="[0-9]*" value="1" aria-label="本次数量（整数）">
 <button id="confirm-qty" data-edit>确认数量并登记 ↵</button>
 <button id="cancel-qty">取消 Esc</button>
 </div>
@@ -208,7 +208,7 @@
 </label>
 <label>规格<input name="spec" maxlength="300">
 </label>
-<label>实收数量<input name="qty" type="number" min="0" step="any" required>
+<label>实收数量（整数）<input name="qty" type="number" min="0" max="1000000000" step="1" inputmode="numeric" pattern="[0-9]*" required>
 </label>
 <div class="bar">
 <button type="submit">保存</button>

@@ -125,7 +125,8 @@ def main():
                          ("inbound-unit", "inbound_test.py"),
                          ("inbound-http", "inbound_http_test.py"),
                          ("existing-features", "new_features_test.py"),
-                         ("batch-flow-unit", "batch_flow_test.py")]:
+                         ("batch-flow-unit", "batch_flow_test.py"),
+                         ("concurrency-fixes", "concurrency_fixes_test.py")]:
         env = dict(os.environ, PYTHONIOENCODING="utf-8", JST_DB_DIR=tempfile.gettempdir())
         r = subprocess.run([sys.executable, os.path.join(HERE, script)], cwd=ROOT, env=env,
                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
