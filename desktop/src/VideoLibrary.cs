@@ -11,9 +11,13 @@ public sealed record LibraryItem(VideoSegment Segment, VideoContext Linked, bool
  public bool Protected => Segment.Protected;
  public DateTimeOffset At => Segment.RequestedAt;
  public string File => Segment.File;
- public string ArchiveStatus => PendingArchive ? "后补采购待确认归档" : "原位保留";
+ public bool Archived => Segment.ArchivedAt != null;
+ public string ArchiveStatus => PendingArchive ? "后补采购待确认归档" : Archived ? "已归档（后补采购）" : "原位保留";
+ // Recorder stores the ffprobe duration on stop; fall back to the first-frame/end wall clock.
+ public double DurationSeconds => Segment.Duration > 0 && double.IsFinite(Segment.Duration) ? Segment.Duration : Segment.EndAt != null && Segment.FirstFrameAt != null ? Math.Max(0,(Segment.EndAt.Value-Segment.FirstFrameAt.Value).TotalSeconds) : 0;
  public bool Matches(string value) => string.IsNullOrWhiteSpace(value) || new[] { Tracking,Purchase,Outer,Note,Segment.Context.LastSku,Segment.BatchKey }.Any(v=>v.Contains(value,StringComparison.OrdinalIgnoreCase));
 }
+public sealed record LibraryDeleteResult(int Deleted, int MissingMedia, List<string> Skipped, List<string> Errors, int AssociationsPruned);
 public sealed class VideoLibrary {
  readonly string root; readonly object sync = new();
  public string Root => root;
@@ -42,6 +46,21 @@ public sealed class VideoLibrary {
    Directory.CreateDirectory(root); ArchiveLayout.Checked(root,root,true);
    var index = Associations(true); index[context.AssociationKey] = context.Copy();
    ArchiveLayout.AtomicJson(root,AssociationFile,index);
+  }
+ }
+ // Batch form used by the library view's background refresh: one validated write, only when something changed.
+ public int AssociateMany(IEnumerable<VideoContext> contexts) {
+  var list=contexts.Where(c=>c!=null&&c.SessionId>0&&c.Source!="测试").ToList(); if(list.Count==0) return 0;
+  foreach(var c in list) ValidateAssociation(c.AssociationKey,c);
+  lock(sync) {
+   Directory.CreateDirectory(root); ArchiveLayout.Checked(root,root,true);
+   var index=Associations(true); var changed=0;
+   foreach(var c in list) {
+    if(index.TryGetValue(c.AssociationKey,out var old) && JsonSerializer.Serialize(old)==JsonSerializer.Serialize(c)) continue;
+    index[c.AssociationKey]=c.Copy(); changed++;
+   }
+   if(changed>0) ArchiveLayout.AtomicJson(root,AssociationFile,index);
+   return changed;
   }
  }
  public List<LibraryItem> List(string query="") {
@@ -98,6 +117,45 @@ public sealed class VideoLibrary {
    }
    return(count,errors);
   }
+ }
+ // The one delete path used by the library UI ("删除所选", including old-recording cleanup).
+ // Re-reads every sidecar under the lock: the active recording is always skipped, protected
+ // segments are skipped unless explicitly included, and a missing media file only cleans the index.
+ public LibraryDeleteResult DeleteSelected(IReadOnlyList<LibraryItem> selected,string? activeId,bool includeProtected,bool confirmed) {
+  if(!confirmed)throw new InvalidOperationException("必须在确认框中明确确认删除");
+  lock(sync) {
+   int deleted=0,missing=0;var skipped=new List<string>();var errors=new List<string>();var touched=new HashSet<string>();
+   foreach(var shown in selected.DistinctBy(s=>s.Id)) {
+    try {
+     var sidecar=ArchiveLayout.Checked(root,shown.File+".json");
+     if(!File.Exists(sidecar)){skipped.Add(shown.Tracking+"：索引已不存在（可能已被删除）");continue;}
+     var s=ArchiveLayout.Read(root,sidecar);
+     if(s.Id!=shown.Id){errors.Add(shown.Tracking+"：索引已被其他录像替换，请刷新后重试");continue;}
+     if(s.Id==activeId){skipped.Add(shown.Tracking+"：正在录像");continue;}
+     var media=new FileInfo(ArchiveLayout.Checked(root,s.File));
+     if(s.State is "recording" or "starting" && media.Exists && DateTime.UtcNow-media.LastWriteTimeUtc<TimeSpan.FromMinutes(2)){skipped.Add(shown.Tracking+"：文件可能仍在写入");continue;}
+     if(s.Protected&&!includeProtected){skipped.Add(shown.Tracking+"：售后保护");continue;}
+     if(media.Exists&&shown.Bytes>0&&media.Length!=shown.Bytes){errors.Add(shown.Tracking+"：文件大小已变化，请刷新后重新确认");continue;}
+     if(!media.Exists)missing++;
+     var paths=OwnedFiles(s).ToArray(); // Validate the entire set before deleting anything.
+     foreach(var p in paths)File.Delete(ArchiveLayout.Checked(root,p));
+     File.Delete(sidecar);deleted++;touched.Add(s.Context.AssociationKey);
+    }catch(Exception ex){errors.Add(shown.Tracking+"："+ex.Message);}
+   }
+   var pruned=0;
+   try{pruned=PruneAssociations(touched);}catch(Exception ex){Warnings.Add("关联索引整理失败（录像已删除）："+ex.Message);}
+   return new(deleted,missing,skipped,errors,pruned);
+  }
+ }
+ // Drops association entries that only deleted segments referenced. A damaged index is left untouched.
+ int PruneAssociations(HashSet<string> candidates) {
+  if(candidates.Count==0||!File.Exists(AssociationFile))return 0;
+  Dictionary<string,VideoContext> index;try{index=Associations(true);}catch{return 0;}
+  var still=new HashSet<string>();
+  foreach(var f in ArchiveLayout.Sidecars(root)){try{still.Add(ArchiveLayout.Read(root,f).Context.AssociationKey);}catch{}}
+  var removed=candidates.Count(k=>!still.Contains(k)&&index.Remove(k));
+  if(removed>0)ArchiveLayout.AtomicJson(root,AssociationFile,index);
+  return removed;
  }
  public string ArchiveTarget(LibraryItem item) => ArchiveLayout.Candidate(root,item.Linked,item.Segment.RequestedAt);
  // Same-volume moves, explicit consent, no wildcard/recursive move, and best-effort rollback.

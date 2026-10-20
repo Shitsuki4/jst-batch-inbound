@@ -6,10 +6,10 @@ using System.Windows.Media.Imaging;
 using Microsoft.Web.WebView2.Core;
 namespace Receiving.Native;
 public static class UiTest {
- public static bool Active,SettingsOnly,SettingsReload,Hidden,LibraryOnly,HttpOnly;public static string Url="",Token="",Output="",Camera="";public static int Pid,Sid;
+ public static bool Active,SettingsOnly,SettingsReload,Hidden,HttpOnly;public static string Url="",Token="",Output="",Camera="";public static int Pid,Sid;
  static string Required(string[] args,string key){var i=Array.IndexOf(args,key);if(i<0||i+1>=args.Length||string.IsNullOrWhiteSpace(args[i+1])||args[i+1].StartsWith("--"))throw new ArgumentException("Missing "+key);return args[i+1];}
  public static void Configure(string[] args){
-  HttpOnly=args.Contains("--http-ui-only");LibraryOnly=args.Contains("--library-only");SettingsOnly=args.Contains("--settings-only")||LibraryOnly||HttpOnly;SettingsReload=args.Contains("--settings-reload");Hidden=args.Contains("--test-hidden");
+  HttpOnly=args.Contains("--http-ui-only");if(args.Contains("--library-only"))throw new ArgumentException("录像查询验收已改为独立模式：Receiving.Native.exe --library-ui-test --output <新目录> [--ffmpeg <ffmpeg.exe>]");SettingsOnly=args.Contains("--settings-only")||HttpOnly;SettingsReload=args.Contains("--settings-reload");Hidden=args.Contains("--test-hidden");
   // Old launchers must not silently acquire a camera or reuse their old output.
   if(!SettingsOnly){if(!args.Contains("--allow-camera"))throw new ArgumentException("USB acceptance requires --allow-camera and --camera; use run_usb_ui.py");Camera=Required(args,"--camera");}
   Output=Path.GetFullPath(Required(args,"--output"));using var doc=JsonDocument.Parse(File.ReadAllText(Required(args,"--fixture")));var j=doc.RootElement;

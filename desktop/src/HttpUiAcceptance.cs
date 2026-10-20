@@ -41,40 +41,40 @@ public sealed partial class MainWindow {
    var context=f.GetProperty("context").Deserialize<VideoContext>(ArchiveLayout.Json)!;
    settings.Directory=Path.Combine(root,"http-ui-recordings");settings.CleanupDays=0;rec.Configure(settings);
    Check(!Directory.Exists(rec.DirectoryPath),"new synthetic-media directory only");
-   var segment=SeedLibrary(context.Tracking,context,1);Library.Associate(context);
+   var segment=SeedLibrary(context.Tracking,context,0); // today: the library opens on 今天Library.Associate(context);
    var originals=Directory.GetFiles(rec.DirectoryPath,"*",SearchOption.AllDirectories).ToDictionary(p=>p,LibraryHash);
    File.WriteAllText(Path.Combine(root,"media-hashes-before.json"),JsonSerializer.Serialize(originals,Recorder.JsonOptions));
    async Task Open(string kind){var reply=await Js("NativeDesk.call('"+kind+"')");if(reply.TryGetProperty("error",out var e))throw new Exception(e.ToString());NoDialog();}
    await Open("export");await Open("library");
-   Check(exportWindow?.IsVisible==true&&libraryWindow?.IsVisible==true&&libraryRows.Count==1,"real WebView bridge opens populated native panels");
+   Check(exportWindow?.IsVisible==true&&libraryWindow?.IsVisible==true&&libraryView!.Rows.Count==1,"real WebView bridge opens populated native panels");
    var key=Uri.EscapeDataString(context.Key);
    string[] routes=["/api/native/health","/api/native/events?after="+backend.Cursor,"/api/native/export?mode=events","/api/native/contexts?keys="+key];
    traffic=Task.WhenAll(Enumerable.Range(0,4).Select(async worker=>{for(int i=0;i<40;i++){using var response=await backend.Get(routes[(worker+i)%routes.Length]);probes.Enqueue("ok");await Task.Delay(15);}}));
    await web.CoreWebView2.ExecuteScriptAsync("window.__httpSmokeReadDone=false;window.__httpSmokeReadErrors=[];window.__httpSmokeReadCount=0;(async()=>{try{await Promise.all(Array.from({length:4},async()=>{for(let i=0;i<10;i++){const r=await fetch(i%2?'/':'/api/state?sid="+UiTest.Sid+"');if(!r.ok)throw Error('HTTP '+r.status);await r.text();__httpSmokeReadCount++;}}));}catch(e){__httpSmokeReadErrors.push(String(e));}finally{__httpSmokeReadDone=true;}})();");
    for(int i=0;i<40;i++){
     bool miss=i%5==4;exportMode.SelectedIndex=i%2;filters["po"].Text="PO-TEST";filters["outer"].Text="EXT-TEST";filters["sku"].Text="A";filters["tracking"].Text=miss?"NO-SUCH-HTTP-UI":context.Tracking;
-    libraryQuery.Text=miss?"NO-SUCH-HTTP-UI":i%2==0?context.Tracking:"PO-TEST";
-    var exportButton=Children<Button>(exportWindow!).Single(b=>Equals(b.Content,"查询预览"));var libraryButton=Children<Button>(libraryWindow!).Single(b=>Equals(b.Content,"查询 / 刷新"));
-    var previousExport=exportGrid.ItemsSource;var previousLibrary=libraryGrid.ItemsSource;
+    libraryView!.Query.Text=miss?"NO-SUCH-HTTP-UI":i%2==0?context.Tracking:"PO-TEST";
+    var exportButton=Children<Button>(exportWindow!).Single(b=>Equals(b.Content,"查询预览"));var libraryButton=Children<Button>(libraryWindow!).Single(b=>Equals(b.Content,"刷新"));
+    var previousExport=exportGrid.ItemsSource;var previousLibrary=libraryView.Grid.ItemsSource;
     InvokeLibraryButton(exportButton);InvokeLibraryButton(libraryButton);
-    await Until(()=>dialogs.Count>0||(exportButton.IsEnabled&&libraryButton.IsEnabled&&!libraryLoading&&!ReferenceEquals(previousExport,exportGrid.ItemsSource)&&!ReferenceEquals(previousLibrary,libraryGrid.ItemsSource)),30);NoDialog();
+    await Until(()=>dialogs.Count>0||(exportButton.IsEnabled&&libraryButton.IsEnabled&&!libraryView.Loading&&!libraryView.Busy&&!ReferenceEquals(previousExport,exportGrid.ItemsSource)&&!ReferenceEquals(previousLibrary,libraryView.Grid.ItemsSource)),30);NoDialog();
     var expected=miss?0:1;var result=exportResult??throw new Exception("Missing export preview");
-    if(result.GetProperty("count").GetInt32()!=expected||exportGrid.Items.Count!=expected||libraryRows.Count!=expected||cleanupView)throw new Exception("Wrong preview/library count at round "+i);
+    if(result.GetProperty("count").GetInt32()!=expected||exportGrid.Items.Count!=expected||libraryView.Rows.Count!=expected)throw new Exception("Wrong preview/library count at round "+i);
     if(!miss){
      var expectedRows=f.GetProperty(i%2==0?"expected_events":"expected_summary").GetProperty("rows");
-     if(!JsonElement.DeepEquals(result.GetProperty("rows"),expectedRows)||libraryRows[0].Item.Id!=segment.Id||libraryRows[0].Checked)throw new Exception("Wrong fixture content at round "+i);
+     if(!JsonElement.DeepEquals(result.GetProperty("rows"),expectedRows)||libraryView.Rows[0].Item.Id!=segment.Id||libraryView.Grid.SelectedItems.Count>1)throw new Exception("Wrong fixture content at round "+i);
     }
-    rounds.Add(new{round=i,mode=i%2==0?"events":"summary",miss,export_rows=exportGrid.Items.Count,library_rows=libraryRows.Count});
+    rounds.Add(new{round=i,mode=i%2==0?"events":"summary",miss,export_rows=exportGrid.Items.Count,library_rows=libraryView.Rows.Count});
    }
    await traffic;await WaitJs("window.__httpSmokeReadDone===true",30);
    Check(probes.Count==160,"160 concurrent reads use unchanged host Backend");
    Check(await web.CoreWebView2.ExecuteScriptAsync("__httpSmokeReadCount===40 && __httpSmokeReadErrors.length===0")=="true","40 concurrent WebView reads pass");
    Check(rounds.Count==40,"40 paired real-button export/library rounds: both modes, positive and empty filters");
-   libraryQuery.Clear();filters["tracking"].Text=context.Tracking;
-   for(int i=0;i<4;i++){exportWindow!.Close();libraryWindow!.Close();await Open("export");await Open("library");if(libraryRows.Count!=1||libraryLoading)throw new Exception("Reopen library failed");}
+   libraryView!.Query.Clear();filters["tracking"].Text=context.Tracking;
+   for(int i=0;i<4;i++){exportWindow!.Close();libraryWindow!.Close();await Open("export");await Open("library");if(libraryView!.Rows.Count!=1||libraryView.Loading)throw new Exception("Reopen library failed");}
    var finalButton=Children<Button>(exportWindow!).Single(b=>Equals(b.Content,"查询预览"));var last=exportGrid.ItemsSource;InvokeLibraryButton(finalButton);
    await Until(()=>dialogs.Count>0||(finalButton.IsEnabled&&!ReferenceEquals(last,exportGrid.ItemsSource)));NoDialog();
-   Check(exportGrid.Items.Count==1&&libraryRows.Single().Item.Id==segment.Id,"four bridge close/reopen cycles preserve readable content");
+   Check(exportGrid.Items.Count==1&&libraryView!.Rows.Single().Item.Id==segment.Id,"four bridge close/reopen cycles preserve readable content");
    Shot(exportWindow!,"export-final.png");Shot(libraryWindow!,"library-final.png");
    var after=Directory.GetFiles(rec.DirectoryPath,"*",SearchOption.AllDirectories).ToDictionary(p=>p,LibraryHash);
    File.WriteAllText(Path.Combine(root,"media-hashes-after.json"),JsonSerializer.Serialize(after,Recorder.JsonOptions));

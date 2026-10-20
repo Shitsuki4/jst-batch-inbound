@@ -49,7 +49,7 @@ public sealed partial class MainWindow {
    case "diagnostics":Clipboard.SetText(rec.Diagnostics);return new{message="已复制录像诊断（不含视频），可粘贴反馈"};
    case "export":case "library":case "cleanup":
     if(await HasPending(false))throw new Exception("请先完成商品数量确认 / 保存后再打开此模块");
-    OpenNativePanel(action=="cleanup"?"library":action);if(action!="export")await LoadLibrary(action=="cleanup");return new{message="已打开"};
+    OpenNativePanel(action=="cleanup"?"library":action);if(action!="export")await OpenLibraryAsync(action=="cleanup");return new{message="已打开"};
    case "soundTest":var cue=Arg(args,"cue");if(cue is not("start" or "stop" or "saved" or "duplicate" or "error"))throw new Exception("未知提示音");if(!UiTest.Active)sounds?.Play(cue,settings,true);return new{message=sounds?.Error==""?"已按保存的音量试听（不会录入录像）":sounds?.Error};
    case "auto":
     if(args.ValueKind!=JsonValueKind.Object||!args.TryGetProperty("enabled",out var flag)||flag.ValueKind is not(JsonValueKind.True or JsonValueKind.False))throw new Exception("自动录像状态无效");
@@ -107,9 +107,11 @@ public sealed partial class MainWindow {
  void OpenNativePanel(string kind){
   var existing=kind=="export"?exportWindow:libraryWindow;if(existing!=null){existing.Activate();return;}
   var content=kind=="export"?exportContent:libraryContent;
-  var win=new Window{Title=kind=="export"?"明细导出 · 秒级扫描记录":"视频举证 · 检索 / 归档 / 清理预览",Owner=this,Width=1180,Height=760,MinWidth=820,MinHeight=580,WindowStartupLocation=WindowStartupLocation.CenterOwner,Content=content,FontFamily=FontFamily,FontSize=FontSize};
+  var win=kind=="export"
+   ?new Window{Title="明细导出 · 秒级扫描记录",Owner=this,Width=1180,Height=760,MinWidth=820,MinHeight=580,WindowStartupLocation=WindowStartupLocation.CenterOwner,Content=content,FontFamily=FontFamily,FontSize=FontSize}
+   :new Window{Title="录像查询 · 视频举证",Owner=this,Width=Math.Min(1440,Math.Max(1024,SystemParameters.WorkArea.Width-40)),Height=Math.Min(900,Math.Max(640,SystemParameters.WorkArea.Height-40)),MinWidth=1000,MinHeight=600,WindowStartupLocation=WindowStartupLocation.CenterOwner,Content=content,FontFamily=FontFamily,FontSize=FontSize};
   if(kind=="export")exportWindow=win;else libraryWindow=win;
-  win.Closed+=(_,_)=>{win.Content=null;if(kind=="export")exportWindow=null;else libraryWindow=null;};win.Show();
+  win.Closed+=(_,_)=>{if(kind!="export")libraryView?.Detach();win.Content=null;if(kind=="export")exportWindow=null;else libraryWindow=null;};win.Show();
  }
  void WriteSettings(UserSettings value)=>value.Write(Path.Combine(root,"native-settings.json"));
 }
