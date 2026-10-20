@@ -475,10 +475,9 @@ public static class LibraryDialog {
 }
 
 // Built-in player. WebView2 <video> (Chromium media stack in the pinned WebView2 runtime the app already ships)
-// plays the Recorder's fragmented MP4 (H.264, empty_moov + frag_keyframe) and seeks in it reliably;
+// plays the Recorder's fragmented MP4 (H.264, empty_moov + frag_keyframe) from a local file:// URL and seeks in it;
 // screenshots and clip export use the resolved FFmpeg so they work on the original file at full resolution.
 public sealed class LibraryPlayer : Grid {
- const string PlayerHost = "jst-player.local", VideoHost = "jst-video.local";
  readonly IVideoLibraryHost host;
  readonly Border surface = new() { Background = Brushes.Black, MinHeight = 180 };
  readonly TextBlock title = new() { FontWeight = FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(2, 0, 2, 6), Text = "未选择录像" };
@@ -492,7 +491,7 @@ public sealed class LibraryPlayer : Grid {
  public ListView Cues { get; } = new() { MinHeight = 90 };
  readonly TextBlock cueEmpty = new() { Text = "该录像没有扫码记录", Foreground = Brushes.Gray, Margin = new Thickness(8), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, IsHitTestVisible = false };
  readonly UIElement cuePanel, toolPanel, cueLabel;
- WebView2? web; Task? init; string mappedRoot = ""; bool syncing; LibraryItem? item; string lastFolder = Environment.GetFolderPath(Environment.SpecialFolder.MyPictures);
+ WebView2? web; Task? init; string playerUrl = ""; bool syncing; LibraryItem? item; string lastFolder = Environment.GetFolderPath(Environment.SpecialFolder.MyPictures);
  public event Action? FullscreenRequested; public event Action<string>? Message;
  public string? Source { get; private set; }
  public string? CurrentId => item?.Id;
@@ -551,22 +550,20 @@ public sealed class LibraryPlayer : Grid {
   s.AreDevToolsEnabled = false; s.AreDefaultContextMenusEnabled = false; s.IsStatusBarEnabled = false; s.IsZoomControlEnabled = false; s.AreHostObjectsAllowed = false; s.IsWebMessageEnabled = true;
   Directory.CreateDirectory(host.PlayerFolder);
   await File.WriteAllTextAsync(Path.Combine(host.PlayerFolder, "player.html"), PlayerHtml, new UTF8Encoding(false));
-  core.SetVirtualHostNameToFolderMapping(PlayerHost, host.PlayerFolder, CoreWebView2HostResourceAccessKind.Allow);
-  core.NavigationStarting += (_, e) => { if (!e.Uri.StartsWith("https://" + PlayerHost + "/", StringComparison.OrdinalIgnoreCase)) e.Cancel = true; };
+  // The player page and the recordings are both local files (file://). A local page may load local media;
+  // nothing else can be navigated to. (WebView2 virtual-host mapping returned MEDIA_ERR_SRC_NOT_SUPPORTED
+  // for every video in CI, including VP9 WebM, so it is not used for media.)
+  var page = Path.GetFullPath(Path.Combine(host.PlayerFolder, "player.html")); playerUrl = new Uri(page).AbsoluteUri;
+  core.NavigationStarting += (_, e) => { if (!(Uri.TryCreate(e.Uri, UriKind.Absolute, out var u) && u.IsFile && Path.GetFullPath(u.LocalPath).Equals(page, StringComparison.OrdinalIgnoreCase))) e.Cancel = true; };
   core.NewWindowRequested += (_, e) => e.Handled = true;
   core.WebMessageReceived += (_, e) => OnMessage(e.WebMessageAsJson);
   var done = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
   void Completed(object? _, CoreWebView2NavigationCompletedEventArgs e) { core.NavigationCompleted -= Completed; done.TrySetResult(e.IsSuccess); }
   core.NavigationCompleted += Completed;
-  core.Navigate($"https://{PlayerHost}/player.html");
+  core.Navigate(playerUrl);
   if (!await done.Task.WaitAsync(TimeSpan.FromSeconds(20))) throw new IOException("播放器页面未能加载");
  }
- void MapRoot(string root) {
-  if (web?.CoreWebView2 == null || root.Equals(mappedRoot, StringComparison.OrdinalIgnoreCase)) return;
-  if (mappedRoot != "") web.CoreWebView2.ClearVirtualHostNameToFolderMapping(VideoHost);
-  web.CoreWebView2.SetVirtualHostNameToFolderMapping(VideoHost, root, CoreWebView2HostResourceAccessKind.Allow); mappedRoot = root;
- }
- public static string VideoUrl(string root, string file) => $"https://{VideoHost}/" + string.Join('/', Path.GetRelativePath(root, file).Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).Select(Uri.EscapeDataString));
+ public static string VideoUrl(string root, string file) => new Uri(ArchiveLayout.Checked(root, file)).AbsoluteUri;
  async Task Exec(string script) { if (web?.CoreWebView2 == null) return; try { await web.CoreWebView2.ExecuteScriptAsync(script); } catch (Exception ex) { LastError = ex.Message; } }
 
  public async Task Load(LibraryItem target) {
@@ -581,7 +578,6 @@ public sealed class LibraryPlayer : Grid {
   overlay.Text = "正在打开…"; overlay.Visibility = Visibility.Visible;
   try { await EnsureWeb().WaitAsync(TimeSpan.FromSeconds(30)); } catch (Exception ex) { init = null; Fail("内置播放器不可用（可用「用系统播放器打开」）：" + ex.Message); return; }
   if (!current()) return;
-  MapRoot(root);
   await Exec($"player.load({JsonSerializer.Serialize(Source)},{Rate.ToString(CultureInfo.InvariantCulture)})");
  }
  // Acceptance diagnostics only: open any file under the recording root (e.g. a VP9 WebM) through the same
@@ -603,7 +599,7 @@ public sealed class LibraryPlayer : Grid {
  }
  public void Shutdown() {
   try { web?.Dispose(); } catch { }
-  web = null; init = null; surface.Child = null; mappedRoot = ""; item = null; Source = null; Opened = false; Position = 0; Duration = 0; Paused = true;
+  web = null; init = null; surface.Child = null; item = null; Source = null; Opened = false; Position = 0; Duration = 0; Paused = true;
   title.Text = "未选择录像"; overlay.Text = "双击左侧录像开始播放"; overlay.Visibility = Visibility.Visible; Cues.ItemsSource = null; cueEmpty.Visibility = Visibility.Visible; UpdateTime();
  }
  void Fail(string message) { LastError = message; overlay.Text = message; overlay.Visibility = Visibility.Visible; Message?.Invoke(message); }
