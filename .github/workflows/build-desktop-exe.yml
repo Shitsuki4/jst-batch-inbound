@@ -226,7 +226,7 @@ jobs:
             -InstallerName "ReceivingAssistant-$($env:APP_VERSION)-Offline-Setup" `
             -InnoCompiler $env:INNO_COMPILER
 
-      - name: Verify offline installer (silent install, reinstall, uninstall)
+      - name: Verify offline installer (install, shortcuts, force-close / keep / purge uninstall)
         shell: pwsh
         run: |
           $installer = Get-ChildItem "desktop/dist/installer/*.exe" |

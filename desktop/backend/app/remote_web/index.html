@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex, nofollow">
+<title>收货小助手 · 远程管理</title>
+<link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/remote.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><img src="/assets/icon.svg" alt="" width="24" height="24"><span>收货小助手 · 远程管理</span></div>
+  <div class="who" id="who" hidden><span id="who-name"></span><button type="button" class="btn ghost small" id="logout">退出</button></div>
+</header>
+
+<main>
+  <section id="login-view" class="card login" hidden>
+    <h1>管理员登录</h1>
+    <p class="hint">只读查看收货历史与录像。连续输错5次会锁定15分钟。</p>
+    <form id="login-form" autocomplete="on">
+      <label>用户名<input id="login-user" name="username" autocomplete="username" required maxlength="32" autocapitalize="off" spellcheck="false"></label>
+      <label>密码<input id="login-pass" name="password" type="password" autocomplete="current-password" required maxlength="128"></label>
+      <button class="btn primary" type="submit" id="login-btn">登录</button>
+      <p class="msg" id="login-msg" role="alert"></p>
+    </form>
+    <p class="hint small">请核对浏览器证书警告中的 SHA-256 指纹与电脑端「设置 → 远程管理页」显示的一致后再继续。</p>
+  </section>
+
+  <section id="app-view" hidden>
+    <nav class="tabs" role="tablist">
+      <button type="button" role="tab" data-tab="receipts" class="active">收货历史</button>
+      <button type="button" role="tab" data-tab="videos">录像查询</button>
+    </nav>
+
+    <div data-pane="receipts">
+      <form class="filters card" id="r-form">
+        <div class="grid">
+          <label>开始日期<input type="date" id="r-from"></label>
+          <label>结束日期<input type="date" id="r-to"></label>
+          <label>类型<select id="r-type">
+            <option value="all">全部</option>
+            <option value="po">采购单收货</option>
+            <option value="unplanned">无采购单收货</option>
+            <option value="joint">联合收货</option>
+          </select></label>
+          <label class="wide">搜索<input id="r-q" type="search" placeholder="采购单号 / 外部单号 / 物流单号 / 商品编码或名称" maxlength="100"></label>
+        </div>
+        <div class="row"><button class="btn primary" type="submit">查询</button><span class="msg" id="r-msg" role="status"></span></div>
+      </form>
+      <div id="r-list" class="list"></div>
+      <div class="row center"><button class="btn ghost" type="button" id="r-more" hidden>加载更多</button></div>
+    </div>
+
+    <div data-pane="videos" hidden>
+      <form class="filters card" id="v-form">
+        <div class="grid">
+          <label class="wide">搜索<input id="v-q" type="search" placeholder="物流单号 / 采购单号 / 外部单号 / 商品 / 备注" maxlength="100"></label>
+          <label>时间<select id="v-preset">
+            <option value="today">今天</option>
+            <option value="7" selected>近7天</option>
+            <option value="30">近30天</option>
+            <option value="90">近90天</option>
+            <option value="all">全部</option>
+            <option value="custom">自定义</option>
+          </select></label>
+          <label class="custom" hidden>开始日期<input type="date" id="v-from"></label>
+          <label class="custom" hidden>结束日期<input type="date" id="v-to"></label>
+        </div>
+        <div class="row"><button class="btn primary" type="submit">查询</button><span class="msg" id="v-msg" role="status"></span></div>
+      </form>
+      <div id="v-list" class="list"></div>
+      <div class="row center"><button class="btn ghost" type="button" id="v-more" hidden>加载更多</button></div>
+    </div>
+  </section>
+
+  <section id="detail-view" class="sheet" hidden>
+    <div class="sheet-bar"><button type="button" class="btn ghost" id="detail-back">← 返回列表</button><span id="detail-title"></span></div>
+    <div id="detail-body"></div>
+  </section>
+</main>
+<script src="/assets/remote.js"></script>
+</body>
+</html>
