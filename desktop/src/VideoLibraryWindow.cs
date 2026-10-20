@@ -217,7 +217,9 @@ public sealed class VideoLibraryView : DockPanel {
   var prot = new FrameworkElementFactory(typeof(TextBlock)); prot.SetBinding(TextBlock.TextProperty, new Binding(nameof(VideoLibraryRow.Protection))); prot.SetBinding(TextBlock.ForegroundProperty, new Binding(nameof(VideoLibraryRow.ProtectionBrush))); prot.SetValue(VerticalAlignmentProperty, VerticalAlignment.Center);
   g.Columns.Add(new DataGridTemplateColumn { Header = "保护", SortMemberPath = nameof(VideoLibraryRow.Protection), CanUserSort = true, Width = 78, CellTemplate = new DataTemplate { VisualTree = prot } });
   Text("归档", nameof(VideoLibraryRow.Archive), nameof(VideoLibraryRow.Archive), 130);
-  g.Columns.Add(new DataGridTextColumn { Header = "备注", Binding = new Binding(nameof(VideoLibraryRow.Note)), SortMemberPath = nameof(VideoLibraryRow.Note), Width = new DataGridLength(1, DataGridLengthUnitType.Star), MinWidth = 120, IsReadOnly = true });
+  // No star-sized column: with one, WPF DataGrid squeezes every fixed column down to fit instead of scrolling.
+  Text("备注", nameof(VideoLibraryRow.Note), nameof(VideoLibraryRow.Note), 240);
+  foreach (var c in g.Columns.Skip(1)) c.MinWidth = 56;
   var rowStyle = new Style(typeof(DataGridRow)); rowStyle.Setters.Add(new Setter(ToolTipProperty, new Binding(nameof(VideoLibraryRow.Tip)))); g.RowStyle = rowStyle;
   g.SelectionChanged += (_, _) => { SyncHeader(); UpdateSummary(); };
   g.MouseDoubleClick += async (_, e) => {

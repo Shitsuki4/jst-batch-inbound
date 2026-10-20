@@ -192,6 +192,7 @@ sealed class LibraryAcceptanceRunner : IVideoLibraryHost {
    var ping=new DispatcherTimer(DispatcherPriority.Normal){Interval=TimeSpan.FromMilliseconds(30)};ping.Tick+=(_,_)=>{var now=Stopwatch.GetTimestamp();maxGap=Math.Max(maxGap,Stopwatch.GetElapsedTime(last,now).TotalMilliseconds);last=now;};
    ping.Start();sw.Restart();await view.ReloadAsync();timings["reload_all_seconds"]=sw.Elapsed.TotalSeconds;ping.Stop();timings["max_ui_gap_ms"]=maxGap;
    view.Grid.UpdateLayout();var realized=Find<DataGridRow>(view.Grid).Count();timings["realized_rows"]=realized;
+   foreach(var col in view.Grid.Columns.Skip(1))Check(col.ActualWidth>=55,"列宽不被压缩："+col.Header+" "+col.ActualWidth.ToString("0"));
    Check(view.Rows.Count==10+bulk&&view.Grid.EnableRowVirtualization&&VirtualizingPanel.GetIsVirtualizing(view.Grid)&&realized<200,$"{view.Rows.Count} 行只实例化 {realized} 个行控件（虚拟化开启）");
    Check(maxGap<1500,$"后台读取 {view.Rows.Count} 段时界面最大停顿 {maxGap:0} ms");
    var cv=(ListCollectionView)CollectionViewSource.GetDefaultView(view.Grid.ItemsSource);
@@ -218,12 +219,13 @@ sealed class LibraryAcceptanceRunner : IVideoLibraryHost {
    var expectedUrl=LibraryPlayer.VideoUrl(store.Root,today1.File);
    Check(view.Player.Source==expectedUrl&&view.Player.CurrentId==today1.Id,"播放所选：内置播放器载入所选录像 "+expectedUrl);
    try{await Until(()=>view.Player.Opened||view.Player.LastError!="",40,"播放器打开");}catch(TimeoutException){}
-   soft["player_media_opened"]=view.Player.Opened;soft["player_error"]=view.Player.LastError;soft["player_duration"]=view.Player.Duration;
+   soft["player_error"]=view.Player.LastError;soft["player_duration"]=view.Player.Duration;
+   Check(view.Player.Opened&&view.Player.LastError=="","内置播放器打开 fMP4 录像（loadedmetadata，时长 "+view.Player.Duration+" 秒）"+view.Player.LastError);
    await Until(()=>view.Player.CueVersion>0,10,"扫码记录");Check(view.Player.Cues.Items.Count==2,"播放器下方列出该录像的扫码记录");
    view.Player.Cues.SelectedItem=view.Player.Cues.Items[1];await Task.Delay(100);
    Check(view.Player.LastSeek==3&&Math.Abs(view.Player.Seek.Value-3)<0.01,"点击扫码记录跳转到第 3 秒");
-   if(view.Player.Opened){try{await Until(()=>view.Player.LastSeeked is double t&&Math.Abs(t-3)<1.0,10,"seeked");}catch(TimeoutException){}}
-   soft["player_seeked_to"]=view.Player.LastSeeked;
+   await Until(()=>view.Player.LastSeeked is double t&&Math.Abs(t-3)<1.0,15,"播放器 seeked 事件");
+   Check(view.Player.LastSeeked is double sk&&Math.Abs(sk-3)<1.0,"播放器实际跳转到 "+view.Player.LastSeeked+" 秒");
    view.Player.Speed.SelectedIndex=2;await Task.Delay(50);Check(view.Player.Rate==2,"倍速 2x");view.Player.Speed.SelectedIndex=1;
    await view.Player.SeekTo(2);
    var snap=await view.Player.SnapshotTo(Path.Combine(output,"snapshot.png"));var head=File.ReadAllBytes(snap).Take(8).ToArray();
