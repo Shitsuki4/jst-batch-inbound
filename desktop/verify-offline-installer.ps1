@@ -60,6 +60,15 @@ function Test-UninstallKey {
     }
 }
 
+function Get-RegisteredUninstaller {
+    $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($uninstallKey)
+    if (-not $key) { throw "Uninstall entry not found: $uninstallKey" }
+    try { $value = [string]$key.GetValue("UninstallString") } finally { $key.Dispose() }
+    $path = $value.Trim().Trim('"')
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Registered uninstaller not found: '$value'" }
+    return $path
+}
+
 function Invoke-Process {
     param([string]$FilePath, [string[]]$Arguments, [int]$TimeoutSeconds = 600)
     $psi = New-Object System.Diagnostics.ProcessStartInfo
@@ -332,6 +341,15 @@ try {
     if ($dataDirBefore -and -not (Test-Path -LiteralPath (Join-Path $userDataRoot "data"))) {
         throw "Default silent uninstall deleted $userDataRoot\data"
     }
+    # The uninstaller deletes its own unins000.exe/.dat last; a reinstall that starts before that
+    # finishes picks unins001.exe instead. Wait so the reinstall below starts from a clean state.
+    # Not fatal: the reinstall reads the registered uninstaller from the uninstall entry anyway.
+    try {
+        Wait-Removed -Path $uninstaller -TimeoutSeconds 30
+        Wait-Removed -Path ([System.IO.Path]::ChangeExtension($uninstaller, ".dat")) -TimeoutSeconds 30
+    } catch {
+        Write-Host "Note: $($_.Exception.Message)"
+    }
     $checks.Add("Silent uninstall /FORCECLOSE ended the app's processes, removed the program, entry and shortcuts, and kept all user data (default)")
 
     Write-Host "== Reinstall after uninstall =="
@@ -339,6 +357,7 @@ try {
         "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/NOICONS", "/TASKS=", "/DIR=$Target")
     if ($code -ne 0) { throw "Reinstall after uninstall exited with code $code" }
     if (-not (Test-Path -LiteralPath (Join-Path $Target "Receiving.Native.exe") -PathType Leaf)) { throw "Reinstall after uninstall produced no Receiving.Native.exe" }
+    $uninstaller = Get-RegisteredUninstaller
     Assert-Shortcut -Path $uninstallShortcut -ExpectedTarget $uninstaller
     if ((Get-Content -LiteralPath $sentinel -Raw).Trim() -ne "acceptance-only") { throw "Sentinel file changed during reinstall after uninstall" }
     $checks.Add("Reinstall after uninstall succeeded and found the kept user data")
