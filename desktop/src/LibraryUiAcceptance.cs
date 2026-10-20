@@ -233,6 +233,16 @@ sealed class LibraryAcceptanceRunner : IVideoLibraryHost {
    Shot("library-player.png");
    Invoke(view.Player.FullscreenButton);await Until(()=>view.Fullscreen,5,"全屏");Check(window.WindowStyle==WindowStyle.None&&view.Grid.Visibility!=Visibility.Visible,"全屏：只显示播放器");
    Invoke(view.Player.FullscreenButton);await Until(()=>!view.Fullscreen,5,"退出全屏");Check(window.WindowStyle!=WindowStyle.None&&view.Grid.Visibility==Visibility.Visible,"退出全屏恢复列表");
+   // Diagnostics (soft): what this machine's WebView2 decodes, and whether the same pipeline plays a VP9 WebM.
+   try{
+    soft["webview_codecs"]=await view.Player.DiagnoseAsync();
+    var webm=Path.Combine(recordings,"diagnostic-vp9.webm");
+    var vp9=await Recorder.Run(ffmpeg,new[]{"-hide_banner","-loglevel","error","-n","-f","lavfi","-i","testsrc2=size=320x180:rate=15","-t","2","-c:v","libvpx-vp9","-b:v","200k",webm},120);
+    if(vp9.Code==0){await view.Player.ProbeAsync(webm);try{await Until(()=>view.Player.Opened||view.Player.LastError!="",20,"webm");}catch(TimeoutException){}soft["webm_pipeline_opened"]=view.Player.Opened;soft["webm_pipeline_error"]=view.Player.LastError;}
+    else soft["webm_pipeline_error"]="ffmpeg vp9: "+vp9.Err.Trim();
+    File.Delete(webm);
+   }catch(Exception ex){soft["diagnostics_error"]=ex.Message;}
+   await Select(today1);await Click("播放所选");Check(view.Player.CurrentId==today1.Id,"重新载入所选录像");
 
    // ---- note / protection
    await Select(today1);

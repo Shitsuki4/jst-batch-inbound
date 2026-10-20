@@ -575,11 +575,27 @@ public sealed class LibraryPlayer : Grid {
   title.Text = $"{target.Tracking} · {target.At.LocalDateTime:yyyy-MM-dd HH:mm:ss}"; title.ToolTip = file;
   Source = VideoUrl(root, file); UpdateTime(); _ = LoadCuesAsync(target);
   if (!File.Exists(file)) { Source = null; Fail("录像文件不存在：" + file); return; }
+  await Open(root, () => item?.Id == target.Id);
+ }
+ async Task Open(string root, Func<bool> current) {
   overlay.Text = "正在打开…"; overlay.Visibility = Visibility.Visible;
   try { await EnsureWeb().WaitAsync(TimeSpan.FromSeconds(30)); } catch (Exception ex) { init = null; Fail("内置播放器不可用（可用「用系统播放器打开」）：" + ex.Message); return; }
-  if (item?.Id != target.Id) return;
+  if (!current()) return;
   MapRoot(root);
   await Exec($"player.load({JsonSerializer.Serialize(Source)},{Rate.ToString(CultureInfo.InvariantCulture)})");
+ }
+ // Acceptance diagnostics only: open any file under the recording root (e.g. a VP9 WebM) through the same
+ // virtual-host pipeline, and report what this machine's WebView2 can decode.
+ internal async Task ProbeAsync(string file) {
+  var root = host.Store.Root; file = ArchiveLayout.Checked(root, file);
+  item = null; Opened = false; LastError = ""; Position = 0; Source = VideoUrl(root, file); var probe = Source;
+  await Open(root, () => Source == probe);
+ }
+ internal async Task<string> DiagnoseAsync() {
+  if (web?.CoreWebView2 == null) return "WebView2 未初始化";
+  await web.CoreWebView2.ExecuteScriptAsync("window.__diag=JSON.stringify({version:navigator.userAgent,avcHigh:document.createElement('video').canPlayType('video/mp4; codecs=\"avc1.640028\"'),avcBase:document.createElement('video').canPlayType('video/mp4; codecs=\"avc1.42E01E\"'),mseAvc:!!(window.MediaSource&&MediaSource.isTypeSupported('video/mp4; codecs=\"avc1.640028\"')),vp9:document.createElement('video').canPlayType('video/webm; codecs=\"vp9\"')})");
+  var raw = await web.CoreWebView2.ExecuteScriptAsync("window.__diag");
+  return JsonSerializer.Deserialize<string>(raw) ?? raw;
  }
  public async Task Clear() {
   item = null; Source = null; Opened = false; Position = 0; Duration = 0; title.Text = "未选择录像"; overlay.Text = "双击左侧录像开始播放"; overlay.Visibility = Visibility.Visible;
