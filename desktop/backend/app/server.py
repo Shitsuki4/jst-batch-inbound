@@ -91,6 +91,7 @@ from backup import BackupManager, VERSION
 from operations import Operations
 from pda import PdaHost
 from download import InstallerHost
+from remote_access import RemoteHost
 import xlsx  # noqa: E402
 import edgecookie  # noqa: E402
 import cdp  # noqa: E402
@@ -964,7 +965,7 @@ class Handler(BaseHTTPRequestHandler):
     # under state_lock so it cannot interleave with a locked POST on the shared
     # SQLite connection or the shared JstClient session.
     LOCK_FREE_GETS = frozenset(("/api/heartbeat", "/api/pda/download/status",
-                                "/api/report/clipboard/status"))
+                                "/api/report/clipboard/status", "/api/remote/status"))
 
     def do_GET(self):
         if not self._desktop_guard(): return
@@ -1041,6 +1042,8 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 return self._fail(str(e))
 
+        if path == "/api/remote/status":
+            return self._ok(**REMOTE.status())
         if path == "/api/heartbeat":
             note_beat()
             return self._ok(ts=time.time())
@@ -1540,6 +1543,21 @@ class Handler(BaseHTTPRequestHandler):
     def _post_api_pda_revoke(self):
         LAN.revoke(str(self._body().get("id") or ""))
         return self._ok(**LAN.status())
+
+    def _post_api_remote_config(self):
+        try:
+            return self._ok(msg="远程管理页设置已保存", **REMOTE.update(self._body()))
+        except ValueError as e:
+            return self._fail(str(e))
+        except OSError as e:
+            return self._fail("远程管理页设置未保存：%s" % e)
+
+    def _post_api_remote_firewall(self):
+        self._body()
+        try:
+            return self._ok(**REMOTE.open_firewall())
+        except (ValueError, OSError) as e:
+            return self._fail(str(e))
 
     def _post_api_operations_note(self):
         b = self._body()
@@ -2230,6 +2248,8 @@ def safe_filename(s):
 
 LAN = PdaHost(sys.modules[__name__])
 DOWNLOAD = InstallerHost(sys.modules[__name__], os.path.join(BUNDLE if _frozen() else HERE, "installer"))
+# 远程管理页（IPv6 直连，只读）：独立监听器与独立路由，默认关闭，绝不复用上面的 Handler。
+REMOTE = RemoteHost(DATA, receipt_db=os.path.join(DATA, "jst.db"))
 
 
 def watchdog():
@@ -2491,6 +2511,8 @@ def main():
     WATCH.start()
     CATALOG_SYNC.start()
     BACKUPS.start()
+    REMOTE.service_port = PORT
+    REMOTE.start_if_enabled()   # 默认关闭；仅在设置里启用后才监听 [::]
     log("版本 %s；服务已启动 http://127.0.0.1:%d" % (VERSION, PORT))
     log("关闭/最小化网页不会退出服务。退出前请等待保存或生成完成，再在此窗口按 Ctrl+C 或关闭此窗口。日志：data/logs/service.log")
     if os.environ.get("JST_NO_BROWSER") != "1":   # 回归测试时置 1，避免弹窗
@@ -2501,6 +2523,10 @@ def main():
         log("收到手动退出指令，等待正在处理的本机请求结束")
     finally:
         WATCH.stop.set()
+        try:
+            REMOTE.stop()
+        except Exception:
+            pass
         srv.server_close()
         log("本机服务已停止")
         if _SERVICE_LEASE:
