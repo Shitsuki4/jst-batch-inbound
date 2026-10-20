@@ -252,7 +252,7 @@ begin
   Result := '';
   if not LoadStringFromFile(DataRoot + '\native-settings.json', Raw) then
     exit;
-  S := String(Raw);
+  S := Raw;
   P := Pos('"Directory"', S);
   if P = 0 then
     exit;
@@ -290,8 +290,8 @@ end;
   native-errors.log), Backend.cs (service-exit-warning.txt) and the Python backend, which gets
   JST_DB_DIR=v3\data (server.py: *.db, backups, logs, edge-login, report-clipboard; login_memory.py:
   login-session.dpapi; pda.py: pda-private; native_entry.py / service_runtime.py: connection files).
-  The frozen backend writes exports and diag.log next to its exe: {app}\backend\导出 and
-  {app}\backend\data\diag.log. Entries containing * are file wildcards. }
+  The frozen backend writes exports and diag.log next to its exe: <app>\backend\导出 and
+  <app>\backend\data\diag.log. Entries containing * are file wildcards. }
 function CategoryPaths(const Cat: Integer): TArrayOfString;
 begin
   SetArrayLength(Result, 0);
@@ -467,16 +467,6 @@ begin
     Result := IntToStr(Bytes div 1073741824) + '.' + IntToStr(((Bytes mod 1073741824) * 10) div 1073741824) + ' GB';
 end;
 
-function AnyDataPresent(): Boolean;
-var
-  Cat: Integer;
-begin
-  Result := False;
-  for Cat := 0 to CatLast do
-    if CatPresent[Cat] then
-      Result := True;
-end;
-
 procedure UpdateCategoryBoxes(Sender: TObject);
 var
   Cat: Integer;
@@ -645,13 +635,13 @@ begin
   end;
 end;
 
-function DeletionSummary(const All: Boolean): String;
+function DeletionSummary(const Everything: Boolean): String;
 var
   Cat: Integer;
 begin
   Result := '';
   for Cat := 0 to CatLast do
-    if CatPresent[Cat] and (All or not KeepCat[Cat]) then
+    if CatPresent[Cat] and (Everything or not KeepCat[Cat]) then
       Result := Result + '• ' + CategoryName(Cat) + '（约 ' + SizeText(CatSize[Cat]) + '）：' + CategoryLocation(Cat) + #13#10;
 end;
 
@@ -725,7 +715,7 @@ begin
     Result := Name;
 end;
 
-{ Processes whose executable lives under {app} (the uninstaller's own first phase excluded).
+{ Processes whose executable lives under <app> (the uninstaller's own first phase excluded).
   Returns False when WMI could not be queried. }
 function FindAppProcesses(var Pids: TIntArray; var Summary: String): Boolean;
 var
@@ -765,7 +755,7 @@ begin
       Log('WMI process query failed: ' + GetExceptionMessage);
     end;
     for I := 0 to Names.Count - 1 do
-      Summary := Summary + '• ' + Names[I] + #13#10;
+      Summary := Summary + '• ' + Names.Strings[I] + #13#10;
   finally
     Names.Free;
   end;
@@ -793,7 +783,7 @@ var
 begin
   if GetArrayLength(Pids) = 0 then
     exit;
-  { Kill exactly the matched processes (no /T): every child we started also runs from {app}
+  { Kill exactly the matched processes (no /T): every child we started also runs from <app>
     and is matched itself, while unrelated programs the user opened stay untouched. }
   Params := '/F';
   for I := 0 to GetArrayLength(Pids) - 1 do
