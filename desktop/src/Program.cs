@@ -16,7 +16,7 @@ public sealed partial class MainWindow:Window {
   if(UiTest.Active)root=UiTest.Output;
   if(UiTest.Hidden){ShowActivated=false;ShowInTaskbar=false;Opacity=0;}
   Directory.CreateDirectory(root);
-  Title="收货小助手 3.0.2 · 完整版";Width=1450;Height=950;MinWidth=1024;MinHeight=700;Background=new SolidColorBrush(Color.FromRgb(242,246,248));FontFamily=new FontFamily("Microsoft YaHei UI");FontSize=14;
+  Title="收货小助手 3.0.3 · 完整版";Width=1450;Height=950;MinWidth=1024;MinHeight=700;Background=new SolidColorBrush(Color.FromRgb(242,246,248));FontFamily=new FontFamily("Microsoft YaHei UI");FontSize=14;
   try{settings=UserSettings.Read(Path.Combine(root,"native-settings.json"));}
   catch(Exception ex){settings=new();settingsLoadWarning="视频配置读取失败，原文件保留，自动录像关闭；请在设置中核对后显式保存："+ex.Message;settingsLoadFailed=true;}
   enabled.IsChecked=settings.AutoRecordEnabled&&!settingsLoadFailed;
