@@ -121,7 +121,8 @@ def install(s):
   if h.command=='POST':
    p=urllib.parse.urlparse(h.path).path;b=getattr(h,'_desktop_body',{});a=b.get('action')
    try:
-    if p=='/api/tracking/scan':
+    # confirm_required (无采购单提示待确认) 未建子批次：不发录像事件。
+    if p=='/api/tracking/scan' and kw.get('batch'):
      batch=kw['batch'];emit_tracking(s,'普通',batch['session_id'],batch['id'],not kw.get('created',True))
     if p in ('/api/unplanned/action','/api/joint/action') and a in ('new','tracking') and kw.get('current_batch'):
      emit_tracking(s,'联合' if p=='/api/joint/action' else '无采购单',kw['session']['id'],kw['current_batch'])

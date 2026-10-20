@@ -345,6 +345,10 @@ def make_handler(host, base):
                 try:
                     if path not in POSTS: return self._fail("PDA不能使用此接口",code=403)
                     if path in RECEIPT or path == "/api/line/edit" or path.startswith("/api/inbound/"): self.check_receipt(b)
+                    if path == "/api/tracking/scan":
+                        # PDA 请求按编号记账，必须一次落库：不走「无采购单登记」确认流程，
+                        # 只在响应里带 unplanned_hint 提示（见 server._post_api_tracking_scan）。
+                        b.pop("check_unplanned", None); b.pop("confirm_unplanned", None)
                     if path in RECEIPT and not (path=="/api/item/scan" and b.get("qty")==0):
                         rid=self.headers.get("X-Request-ID","")
                         old=app.OPERATIONS.reserve(rid,path,b,self._actor())

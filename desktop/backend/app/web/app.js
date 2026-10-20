@@ -851,7 +851,41 @@
     return scanItem(code);
   }
 
-  function scanTracking(code) {
+  // 「无采购单收货」已登记同一物流单号时的确认：选「仍在此处收货」后，
+  // 本页面会话内同一采购单 + 同一单号不再重复提示。
+  var unplannedAccepted = {};
+  function unplannedKey(sid, code) { return String(sid || '') + '|' + String(code || '').replace(/\s+/g, '').toUpperCase(); }
+  function showUnplannedHint(code, sid, hint) {
+    var rec = hint.record || {}, same = hint.kind === 'same_po';
+    try { if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); } catch (e) { }
+    var others = (hint.matches || []).length > 1 ? '<p class="muted">另有 ' + ((hint.matches || []).length - 1) + ' 条相关登记，可在无采购单收货中按物流单号查询。</p>' : '';
+    var html = '<div class="unplanned-hint" data-unplanned-hint="' + esc(hint.kind) + '">'
+      + '<p style="font-weight:700;color:' + (same ? '#d93a3a' : '#b26a00') + '">' + esc(hint.message) + '</p>'
+      + '<table class="kv"><tbody>'
+      + '<tr><th>物流单号</th><td class="mono">' + esc(code) + '</td></tr>'
+      + '<tr><th>无采购单批次</th><td class="mono">' + esc(rec.input_no || '') + '</td></tr>'
+      + '<tr><th>登记时间</th><td>' + esc(rec.registered_at || '未知') + '</td></tr>'
+      + '<tr><th>件数 / SKU数</th><td>' + esc(rec.qty) + ' 件 / ' + esc(rec.sku_count) + ' 个SKU</td></tr>'
+      + '<tr><th>当前状态</th><td>' + esc(rec.status || '') + '</td></tr>'
+      + (rec.note ? '<tr><th>备注</th><td>' + esc(rec.note) + '</td></tr>' : '')
+      + '</tbody></table>' + others
+      + '<p class="muted">尚未在本采购单建立该物流子批次。</p></div>';
+    function dismiss() { closeModal(); flash('已取消：' + code, 'warn'); refocus(); }
+    openModal(same ? '该物流单号已在无采购单中绑定本采购单' : '该物流单号已在无采购单收货登记', html, [
+      { text: same ? '去无采购单查看' : '去无采购单绑定', cls: 'btn-primary', fn: function () {
+        closeModal();
+        location.href = hint.open_url || ('/unplanned.html?sid=' + Number(rec.sid));
+      } },
+      { text: '仍在此处收货', cls: 'btn-ghost', fn: function () {
+        unplannedAccepted[unplannedKey(sid, code)] = true;
+        closeModal();
+        runSerial(function () { return scanTracking(code, true); });
+      } }
+    ], dismiss);
+    beep(320, 0.12);
+  }
+
+  function scanTracking(code, unplannedConfirmed) {
     // 扫到别的采购单号不再死拦：提示一下，由用户决定是切单还是继续。
     // （以前这里直接拒绝，导致一张单没收完、别的单完全进不来。）
     var a = S.session;
@@ -862,13 +896,20 @@
       refocus();
       return Promise.resolve();
     }
-    return api('/api/tracking/scan', { method: 'POST', body: { tracking_no: code, sid: a && a.id } }).then(function (r) {
+    var body = { tracking_no: code, sid: a && a.id, check_unplanned: true };
+    if (unplannedConfirmed || unplannedAccepted[unplannedKey(a && a.id, code)]) body.confirm_unplanned = true;
+    return api('/api/tracking/scan', { method: 'POST', body: body }).then(function (r) {
       if (!r.ok) {
         if (r.msg === '当前账号无此操作权限') return handleFail(r);
         // 常见错误（如结单后误扫）用轻提示，别弹「无权限」吓人
         toast(r.msg || '操作失败', 'err');
         beep(180, 0.16);
         refocus();
+        return;
+      }
+      if (r.confirm_required && r.unplanned_hint) {
+        // 后端尚未建子批次：由用户选择去无采购单绑定，或仍在此处收货。
+        showUnplannedHint(code, a && a.id, r.unplanned_hint);
         return;
       }
       S.current_batch = r.batch.id;
