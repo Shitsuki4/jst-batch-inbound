@@ -37,6 +37,10 @@ Assert-File $nativeDeps
 Assert-File $nativeRuntime
 Assert-File $backendExe
 Assert-Directory $backendInternal
+# Remote management page (IPv6, read-only) static assets must ship with the backend.
+foreach ($asset in @("index.html", "remote.js", "remote.css", "icon.svg")) {
+    Assert-File (Join-Path $backendInternal ("remote_web\" + $asset))
+}
 
 if (Test-Path -LiteralPath (Join-Path $package "installed-mode.txt")) {
     throw "Portable package must not contain installed-mode.txt"

@@ -1,8 +1,8 @@
-/* Five settings sections. Business settings are PATCH-like writes to their own keys;
+/* Six settings sections (远程管理页 pane is filled by remote-settings.js). Business settings are PATCH-like writes to their own keys;
    video settings are saved by the native host. Never claim a cross-store transaction. */
 (function(){'use strict';
  const $=id=>document.getElementById(id),root=document.querySelector('[data-view="settings"]');if(!root)return;
- const cards=[...root.children],groups=[['receiving','收货与扫码'],['video','视频举证'],['catalog','商品资料'],['data','数据与备份'],['devices','PDA 与设备']];
+ const cards=[...root.children],groups=[['receiving','收货与扫码'],['video','视频举证'],['catalog','商品资料'],['data','数据与备份'],['devices','PDA 与设备'],['remote','远程管理页']];
  root.innerHTML='<div class="settings-heading"><div><h2>设置</h2><p>业务与视频分别保存；切换分区保留草稿，离开前会提醒。</p></div><button class="btn btn-ghost" id="settings-return">返回收货工作台</button></div><div class="settings-workspace"><aside class="settings-nav" aria-label="设置分区">'+groups.map(([id,name])=>'<button type="button" data-settings-section="'+id+'">'+name+'<span></span></button>').join('')+'</aside><div class="settings-content">'+groups.map(([id])=>'<section data-settings-pane="'+id+'" hidden></section>').join('')+'</div></div>';
  const pane=id=>root.querySelector('[data-settings-pane="'+id+'"]');
  cards.forEach((c,i)=>pane(i===0?'receiving':i===1?'catalog':i<4?'data':'devices').append(c));
