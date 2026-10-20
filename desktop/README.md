@@ -151,8 +151,50 @@ powershell -ExecutionPolicy Bypass -File desktop/build-offline-windows.ps1 `
 `desktop/dist/installer/收货小助手-<版本>-离线完整安装程序.exe`，并把它的哈希追加到
 `desktop/dist/SHA256SUMS.txt`。
 
+### 卸载
+
+开始菜单有“卸载收货小助手”（指向 `{app}\unins000.exe`）。交互卸载先显示数据选项窗口：
+
+| 选项 | 行为 |
+| --- | --- |
+| 保留全部数据（默认） | 只删程序，与以前一致 |
+| 自定义 | 勾选要保留的类别，未勾选的删除；只有本机存在的类别可勾选，并显示占用空间 |
+| 完全卸载 | 二次确认（列出将删除的路径与大小、建议先备份录像）后删除整个 v3 目录和安装目录内的导出 |
+
+数据类别与路径（`v3` = `%LOCALAPPDATA%\ReceivingAssistant\v3`，`{app}` = 安装目录）：
+
+| 类别 | 路径 |
+| --- | --- |
+| 收货数据库与自动备份 | `v3\data\*.db*`（jst / catalog / unplanned / purchase_watch / joint_receipts，含 -wal/-shm）、`v3\data\backups`、`v3\service-exit-warning.txt` |
+| 录像文件 | `v3\录像`（含 `video-associations.json`）；设置里改到 v3 内其他目录时一并处理 |
+| 导出文件 | `{app}\backend\导出`（打包后端把导出写在 exe 旁） |
+| 本机设置与登录记忆 | `v3\native-settings.json`、`v3\data\login-session.dpapi`（DPAPI 保持登录）、`v3\data\edge-login`、`v3\data\pda-private`（PDA 配对证书） |
+| 缓存与日志 | `v3\webview-profile`、`v3\video-cues`、`v3\native-errors.log`、`v3\data\logs`、`v3\data\report-clipboard`、连接/实例文件、`{app}\backend\data`（diag.log） |
+
+删除只在 `v3` 与 `{app}` 内进行；`%LOCALAPPDATA%\ReceivingAssistant\runtime`（运行依赖安装程序）
+永远不动，录像目录改到 v3 之外时也不会删除。
+
+小助手仍在运行时（WMI 查到可执行文件位于 `{app}` 内的进程，或 `Local\ReceivingAssistantInstalled` /
+`Local\ReceivingAssistantService` 互斥体被占用），卸载程序列出进程并提供“强制结束并继续卸载 / 取消”，
+提示可能中断 ERP 写入、未保存录像会丢失。确认后在标准“确定要卸载”之后用 `taskkill /F /PID …`
+逐个结束 `{app}` 内的进程（不带 `/T`，不波及用户另外打开的程序），确认进程退出、互斥体释放后再继续；
+结束失败则中止卸载，程序和数据都不改动。之后 `AppMutex` 仍作为最后一道检查（例如便携版后端仍占用服务互斥体）。
+安装 / 覆盖升级在运行中仍然直接拒绝，不提供强制结束。
+
+静默卸载：
+
+```powershell
+unins000.exe /VERYSILENT /SUPPRESSMSGBOXES             # 保留全部数据；小助手在运行则拒绝卸载
+unins000.exe /VERYSILENT /SUPPRESSMSGBOXES /FORCECLOSE # 运行中也强制结束后继续
+unins000.exe /VERYSILENT /SUPPRESSMSGBOXES /PURGEDATA  # 删除全部数据（不可恢复）
+```
+
+### 安装级验收
+
 安装级验收（静默安装、只留 System32 的 PATH 下做依赖检查、与 payload 逐文件哈希比对、
-WebView2 AppContainer ACL、重装保留用户数据并重新授权、静默卸载保留用户数据）：
+WebView2 AppContainer ACL、重装保留用户数据并重新授权、开始菜单快捷方式含卸载入口、
+小助手运行中静默卸载被拒绝且 `/FORCECLOSE` 能结束进程并卸载、默认静默卸载保留用户数据、卸载后重装、
+`/PURGEDATA` 删除 v3 数据但不碰 `runtime` 目录）：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File desktop/verify-offline-installer.ps1 `
@@ -160,7 +202,8 @@ powershell -ExecutionPolicy Bypass -File desktop/verify-offline-installer.ps1 `
   -PayloadRoot desktop/dist/offline-payload
 ```
 
-报告中 `ok` 为 `true` 表示全部检查通过。
+报告中 `ok` 为 `true` 表示全部检查通过。`/PURGEDATA` 检查会删除本机的
+`%LOCALAPPDATA%\ReceivingAssistant\v3`，所以只在 GitHub Actions 上自动执行；本机需要时加 `-AllowDataPurge`（请先备份）。
 
 ## GitHub Actions
 
