@@ -48,6 +48,7 @@ try{
   Console.WriteLine(JsonSerializer.Serialize(new{ok=true,checks},Recorder.JsonOptions));return 0;
  }
  if(!baseline) foreach(var check in CoreChecks.Run(Path.Combine(dir,"unit"))) Check(true,check);
+ if(!baseline) foreach(var check in LibraryDeleteChecks.Run(Path.Combine(dir,"library-delete"))) Check(true,check);
  await using(var r=New("delayed")){
   var start=r.StartAsync("TEST-DELAYED","isolated");
   var pump=Pump(r,4);await Task.WhenAll(start,pump);

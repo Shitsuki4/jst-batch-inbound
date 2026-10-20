@@ -41,7 +41,7 @@ public sealed partial class MainWindow:Window {
  async Task Safe(Func<Task> f){try{await f();}catch(Exception ex){status.Text=ex.Message;MessageBox.Show(this,ex.Message,"操作未完成",MessageBoxButton.OK,MessageBoxImage.Warning);}}
  async Task Start(){
   var data=Path.Combine(root,"data");if(UiTest.Active)await backend.AttachForAcceptance(UiTest.Url,UiTest.Token,UiTest.Pid);else await backend.Start(AppContext.BaseDirectory,data);
-  var env=await CoreWebView2Environment.CreateAsync(AppPaths.BrowserFolder,Path.Combine(root,"webview-profile"));await web.EnsureCoreWebView2Async(env);
+  var env=await CoreWebView2Environment.CreateAsync(AppPaths.BrowserFolder,Path.Combine(root,"webview-profile"));webEnvironment.TrySetResult(env);await web.EnsureCoreWebView2Async(env);
   web.CoreWebView2.WebMessageReceived+=ReceiveCommand;
   if(UiTest.Active){
    web.CoreWebView2.AddWebResourceRequestedFilter("*",CoreWebView2WebResourceContext.All);
@@ -62,7 +62,7 @@ public sealed partial class MainWindow:Window {
   web.CoreWebView2.ProcessFailed+=(_,_)=>status.Text="业务界面异常。录像不会随页面销毁；请先结束录像，再重开软件，核对原单。";
   web.CoreWebView2.Navigate(backend.Url+"/");
   if(settings.ShowPreviewOnStartup&&!UiTest.Active)preview.Show();
-  timer.Start();if(UiTest.Active)_=UiTest.HttpOnly?AcceptanceHttpUi():UiTest.LibraryOnly?AcceptanceLibraryUi():UiTest.SettingsOnly?AcceptanceSettingsUi():AcceptanceUi();await PublishVideo();status.Text=settingsLoadFailed?settingsLoadWarning:!settings.DiskConfigured?"自动录像设置已恢复；请先在视频设置保存磁盘预警和停止GB，未配置不能开始录像。":enabled.IsChecked==true?"自动录像已启用，等待确认物流单号。":"自动录像已关闭，已保留本机设置。";
+  timer.Start();if(UiTest.Active)_=UiTest.HttpOnly?AcceptanceHttpUi():UiTest.SettingsOnly?AcceptanceSettingsUi():AcceptanceUi();await PublishVideo();status.Text=settingsLoadFailed?settingsLoadWarning:!settings.DiskConfigured?"自动录像设置已恢复；请先在视频设置保存磁盘预警和停止GB，未配置不能开始录像。":enabled.IsChecked==true?"自动录像已启用，等待确认物流单号。":"自动录像已关闭，已保留本机设置。";
  }
  async Task PublishVideo(){if(web.CoreWebView2==null)return;var payload=JsonSerializer.Serialize(new{enabled=enabled.IsChecked==true,ready=rec.Ready,active=rec.Active,key=rec.Current?.BatchKey??"",tracking=rec.Current?.Tracking??"",test=rec.Current?.BatchKey.StartsWith("TEST-",StringComparison.Ordinal)==true,status=rec.Status,warning=rec.Warning,diskConfigured=settings.DiskConfigured,archiveHint,cleanupHint,settingsWarning=settingsLoadWarning,effectiveMode=rec.Current?.EffectiveMode??"",hotkeyStatus=hotkeys?.Status??"未注册"});await web.CoreWebView2.ExecuteScriptAsync("window.__nativeVideo="+payload+";window.dispatchEvent(new CustomEvent('native:video',{detail:window.__nativeVideo}));");}
  async Task Poll(){if(!backend.Alive){if(rec.Active)await rec.StopAsync("业务服务退出");return;}await eventsGate.WaitAsync();try{
@@ -105,6 +105,8 @@ public sealed partial class MainWindow:Window {
 public static class Program {
  [STAThread]public static void Main(string[] args){
   if(args.Contains("--dependency-check")){var check=Dependencies.Check().GetAwaiter().GetResult();File.WriteAllText(args[Array.IndexOf(args,"--dependency-check")+1],JsonSerializer.Serialize(new{check.WebView,check.Video,check.Engine,check.Detail,check.Ready,BrowserFolder=AppPaths.BrowserFolder,AppPaths.Installed}));Environment.ExitCode=check.Ready?0:1;return;}
+  // Standalone 录像查询 UI acceptance: no backend, camera or business window (run by CI).
+  if(args.Contains("--library-ui-test")){Environment.ExitCode=LibraryUiAcceptance.Run(args);return;}
   if(args.Contains("--ui-self-test"))UiTest.Configure(args);
   if(args.Contains("--backend-self-test")){BackendAcceptance.Run(args).GetAwaiter().GetResult();return;}
   if(args.Contains("--self-test")){try{Acceptance.Run(args).GetAwaiter().GetResult();}catch(Exception e){System.IO.File.WriteAllText(Path.Combine(AppContext.BaseDirectory,"self-test-error.txt"),e.ToString());Environment.ExitCode=1;}return;}

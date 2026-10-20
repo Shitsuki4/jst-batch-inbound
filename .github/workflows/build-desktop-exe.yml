@@ -184,6 +184,37 @@ jobs:
         run: |
           ./desktop/build-windows.ps1 -SkipTests -NoClean -Version $env:APP_VERSION
 
+      - name: Run video library UI acceptance (录像查询)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $exe = (Resolve-Path -LiteralPath "desktop/dist/native/Receiving.Native.exe").Path
+          $out = Join-Path $env:RUNNER_TEMP "library-ui"
+          # WinExe: start it explicitly and wait, so the exit code is the acceptance result.
+          $p = Start-Process -FilePath $exe -ArgumentList @("--library-ui-test", "--output", "`"$out`"", "--ffmpeg", "`"$env:SYNTH_FFMPEG`"") -PassThru
+          $null = $p.Handle
+          if (-not $p.WaitForExit(420000)) { try { $p.Kill($true) } catch {}; throw "Library UI acceptance timed out" }
+          $result = Join-Path $out "library-ui-result.json"
+          if (Test-Path -LiteralPath $result) {
+            $json = Get-Content -LiteralPath $result -Raw -Encoding UTF8 | ConvertFrom-Json
+            Write-Host "ok=$($json.ok) checks=$($json.checks.Count)"
+            $json.checks | ForEach-Object { Write-Host "  PASS $_" }
+            Write-Host "soft: $($json.soft | ConvertTo-Json -Compress)"
+            Write-Host "timings: $($json.timings | ConvertTo-Json -Compress)"
+            if ($json.error) { Write-Host "ERROR: $($json.error)" }
+          } else { Write-Host "No result file was written" }
+          if ($p.ExitCode -ne 0) { throw "Library UI acceptance failed: exit $($p.ExitCode)" }
+
+      - name: Upload video library UI acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: desktop-library-ui-acceptance
+          path: |
+            ${{ runner.temp }}/library-ui/*.json
+            ${{ runner.temp }}/library-ui/*.png
+          if-no-files-found: warn
+
       - name: Build full offline installer
         shell: pwsh
         run: |
