@@ -130,14 +130,41 @@ function Wait-Removed {
     throw "Still present after $TimeoutSeconds s: $Path"
 }
 
+function Get-ShortcutTarget {
+    param([string]$Path)
+    $target = ""
+    try { $target = [string](New-Object -ComObject WScript.Shell).CreateShortcut($Path).TargetPath } catch { }
+    if (-not $target) {
+        try {
+            $folder = (New-Object -ComObject Shell.Application).Namespace((Split-Path -Parent $Path))
+            $item = $folder.ParseName((Split-Path -Leaf $Path))
+            if ($item -and $item.IsLink) { $target = [string]$item.GetLink.Path }
+        } catch { }
+    }
+    return $target
+}
+
 function Assert-Shortcut {
     param([string]$Path, [string]$ExpectedTarget)
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "Start menu shortcut not found: $Path" }
-    $shell = New-Object -ComObject WScript.Shell
-    $target = $shell.CreateShortcut($Path).TargetPath
-    if (-not [string]::Equals([System.IO.Path]::GetFullPath($target), [System.IO.Path]::GetFullPath($ExpectedTarget), [System.StringComparison]::OrdinalIgnoreCase)) {
-        throw "Shortcut $Path points at '$target', expected '$ExpectedTarget'"
+    $target = Get-ShortcutTarget -Path $Path
+    if ($target) {
+        if (-not [string]::Equals([System.IO.Path]::GetFullPath($target), [System.IO.Path]::GetFullPath($ExpectedTarget), [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Shortcut $Path points at '$target', expected '$ExpectedTarget'"
+        }
+        return
     }
+    # Neither shell API resolved the target; fall back to the link's own LinkInfo / ID list,
+    # which store the target path (ANSI and/or UTF-16).
+    $bytes = [System.IO.File]::ReadAllBytes($Path)
+    $leaf = Split-Path -Leaf $ExpectedTarget
+    $ansi = [System.Text.Encoding]::Default.GetString($bytes)
+    $wide = [System.Text.Encoding]::Unicode.GetString($bytes)
+    $wideOdd = if ($bytes.Length -gt 1) { [System.Text.Encoding]::Unicode.GetString($bytes, 1, $bytes.Length - 1) } else { "" }
+    foreach ($text in @($ansi, $wide, $wideOdd)) {
+        if ($text.IndexOf($leaf, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { return }
+    }
+    throw "Shortcut $Path does not reference $leaf ($($bytes.Length) bytes)"
 }
 
 New-Item -ItemType Directory -Force -Path $verifyRoot | Out-Null
