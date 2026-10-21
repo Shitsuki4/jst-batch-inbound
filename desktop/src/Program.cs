@@ -110,6 +110,9 @@ public static class Program {
   if(args.Contains("--ui-self-test"))UiTest.Configure(args);
   if(args.Contains("--backend-self-test")){BackendAcceptance.Run(args).GetAwaiter().GetResult();return;}
   if(args.Contains("--self-test")){try{Acceptance.Run(args).GetAwaiter().GetResult();}catch(Exception e){System.IO.File.WriteAllText(Path.Combine(AppContext.BaseDirectory,"self-test-error.txt"),e.ToString());Environment.ExitCode=1;}return;}
+  // Restore relaunch: wait (≤30s) for the previous instance to exit before taking the single-instance mutexes.
+  var restartAt=Array.IndexOf(args,"--restart-after");
+  if(restartAt>=0&&restartAt+1<args.Length&&int.TryParse(args[restartAt+1],out var previousPid)){try{using var previous=Process.GetProcessById(previousPid);previous.WaitForExit(30000);}catch(ArgumentException){}catch(InvalidOperationException){}}
   using var installedMutex=new Mutex(AppPaths.Installed,"Local\\ReceivingAssistantInstalled",out var installedFirst);if(AppPaths.Installed&&!installedFirst){MessageBox.Show("已安装的小助手正在运行，请勿重复启动。");return;}
   using var mutex=new Mutex(true,"Local\\ReceivingNativeTrial_"+Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(AppPaths.DataRoot)))[..16],out var first);if(!first){MessageBox.Show("此数据目录已有一个程序在运行，请勿重复启动。");return;}
   var app=new Application{ShutdownMode=ShutdownMode.OnMainWindowClose};app.DispatcherUnhandledException+=(_,e)=>{try{System.IO.File.AppendAllText(Path.Combine(AppPaths.DataRoot,"native-errors.log"),DateTimeOffset.Now+" "+e.Exception+"\n");}catch{}MessageBox.Show("发生异常，请先核实保存状态："+e.Exception.Message);e.Handled=true;};Theme.Apply();if(!UiTest.Active){app.ShutdownMode=ShutdownMode.OnExplicitShutdown;var setup=new DependencyWindow();setup.ShowDialog();if(!setup.Accepted){app.Shutdown();return;}}app.ShutdownMode=ShutdownMode.OnMainWindowClose;var main=new MainWindow();app.MainWindow=main;app.Run(main);
