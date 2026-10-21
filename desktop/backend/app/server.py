@@ -83,6 +83,7 @@ from catalog import CatalogDB, CatalogSync, scope_key
 from login_memory import LoginMemory
 from inbound import InboundService, InboundError  # noqa: E402
 from unplanned import UnplannedService
+import unplanned_hint
 from joint_receipt import JointService
 from codes import enabled_scan_candidates
 from purchase_watch import PurchaseWatch
@@ -796,6 +797,25 @@ class _UnplannedLazy:
         return getattr(self.instance, name)
 
 UNPLANNED = _UnplannedLazy()
+
+def unplanned_tracking_hint(session, tracking_no):
+    """普通收货扫物流单号时，只读查询「无采购单收货」是否已登记同一单号。
+
+    独立只读连接，不初始化 UNPLANNED、不写库；库不存在直接跳过。
+    任何异常只记日志，绝不阻断收货。
+    """
+    path = os.path.join(DATA, "unplanned.db")
+    if not os.path.exists(path):
+        return None
+    try:
+        return unplanned_hint.lookup(path, tracking_no, (session or {}).get("po_id") or "")
+    except Exception as e:
+        try:
+            log("unplanned tracking hint skipped: %s: %s" % (type(e).__name__, str(e)[:200]))
+        except Exception:
+            pass
+        return None
+
 
 def purchase_sources():
     stores = {'receipt': STORE}
@@ -1976,16 +1996,25 @@ class Handler(BaseHTTPRequestHandler):
             return self._fail("请先创建收货批次")
         if s["state"] == "closed":
             return self._fail("该采购单已结单", hint="如需继续收货，请重新「创建收货批次」")
-        if s["state"] == "paused" and not getattr(self, "_pda_request", False):
-            STORE.activate_session(s["id"])    # 电脑端挂着扫单号 = 顺手恢复；PDA 只建子批次，不抢电脑端当前单
         no = (b.get("tracking_no") or "").strip()
         if not no:
             return self._fail("请输入或扫描物流单号")
+        # 新物流单号才查「无采购单收货」登记；已在本单建过的子批次（补扫）不再提示。
+        hint = None
+        if not STORE.db.execute("SELECT 1 FROM batch WHERE session_id=? AND tracking_no=?", (s["id"], no)).fetchone():
+            hint = unplanned_tracking_hint(s, no)
+        # 只有桌面收货界面会传 check_unplanned=true：命中时先不建子批次，等用户确认。
+        # PDA / 原生桥 / 旧调用方不传该参数：照常建子批次，只在返回里附带 unplanned_hint。
+        if hint and b.get("check_unplanned") is True and b.get("confirm_unplanned") is not True:
+            return self._ok(confirm_required=True, unplanned_hint=hint, tracking_no=no, sid=s["id"])
+        if s["state"] == "paused" and not getattr(self, "_pda_request", False):
+            STORE.activate_session(s["id"])    # 电脑端挂着扫单号 = 顺手恢复；PDA 只建子批次，不抢电脑端当前单
         batch, created = STORE.ensure_batch(s["id"], no)
+        extra = {"unplanned_hint": hint} if hint else {}
         return self._ok(batch=batch, created=created,
                         lines=STORE.batch_lines(batch["id"]),
                         batches=STORE.batches(s["id"]),
-                        batch_id=batch["id"])
+                        batch_id=batch["id"], **extra)
 
     def _post_api_item_scan(self):
         b = self._body()
