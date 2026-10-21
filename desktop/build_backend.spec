@@ -4,7 +4,7 @@ hidden=[
  'backup','catalog','cdp','codes','download','edgecookie','inbound','inventory',
  'joint_receipt','joint_replace','jst','login_memory','native_bridge','operations',
  'pda','purchase_snapshot','purchase_watch','qrview','receipt_copy','receipt_lifecycle',
- 'remote_access','report_clipboard','service_runtime','store','unplanned','unplanned_link','xlsx',
+ 'remote_access','report_clipboard','service_runtime','store','unplanned','unplanned_link','updater','xlsx',
  'cryptography','qrcode','PIL'
 ]
 a=Analysis([str(APP/'native_entry.py')],pathex=[str(APP)],binaries=[],datas=[(str(APP/'web'),'web'),(str(APP/'remote_web'),'remote_web'),(str(APP/'installer'),'installer')],hiddenimports=hidden,hookspath=[],hooksconfig={},runtime_hooks=[],excludes=['tkinter','unittest','pydoc','doctest','test','distutils'],noarchive=False,optimize=1)

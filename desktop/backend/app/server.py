@@ -92,6 +92,7 @@ from operations import Operations
 from pda import PdaHost
 from download import InstallerHost
 from remote_access import RemoteHost
+from updater import UpdateHost, inbound_busy_reason
 import xlsx  # noqa: E402
 import edgecookie  # noqa: E402
 import cdp  # noqa: E402
@@ -135,6 +136,9 @@ state_lock = threading.RLock()
 BACKUPS = BackupManager(DATA, state_lock)
 BACKUPS.before_upgrade()
 STORE = Store(os.path.join(DATA, "jst.db"))
+# 自动更新：检查 / 下载全部在后台线程；"入库任务生成中"只读检查三个收货库，不取 state_lock。
+UPDATER = UpdateHost(DATA, busy=lambda: inbound_busy_reason(
+    [os.path.join(DATA, n) for n in ("jst.db", "unplanned.db", "joint_receipts.db")]))
 JST = JstClient()
 LOGIN_MEMORY = LoginMemory(DATA, STORE)
 QR_LOGIN_OPTIONS = {}
@@ -959,13 +963,41 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             return self._fail('图文未完整复制，请确认剪贴板未被占用后重试', code=503)
 
+    def _update_post(self, path):
+        """自动更新接口：不取 state_lock；联网工作只在 UpdateHost 的后台线程里进行。"""
+        try:
+            if hasattr(self, "_desktop_body"):
+                del self._desktop_body
+            body = self._desktop_body = self._body()
+            body = body if isinstance(body, dict) else {}
+            if path == "/api/update/settings":
+                return self._ok(**UPDATER.update_settings(body))
+            if path == "/api/update/check":
+                UPDATER.check_async(force=True)
+                return self._ok(**UPDATER.status())
+            if path == "/api/update/download":
+                ch = body.get("channel")
+                return self._ok(**UPDATER.start_download(ch if isinstance(ch, str) and ch else None))
+            if path == "/api/update/cancel":
+                return self._ok(**UPDATER.cancel_download())
+            if path == "/api/update/prepare":
+                info = UPDATER.prepare_install(recording=body.get("recording") is True)
+                return self._ok(install=info, **UPDATER.status())
+            return self._fail("接口不存在", code=404)
+        except ValueError as e:
+            return self._fail(str(e))
+        except Exception as e:
+            log("%s crash: %s" % (path, e))
+            return self._fail("更新操作失败：%s" % (str(e)[:160] or e.__class__.__name__))
+
     # ---------- GET ----------
     # These GETs never touch STORE / JST and must stay responsive while a long POST
     # holds state_lock (heartbeat feeds the watchdog). Every other /api/* GET runs
     # under state_lock so it cannot interleave with a locked POST on the shared
     # SQLite connection or the shared JstClient session.
     LOCK_FREE_GETS = frozenset(("/api/heartbeat", "/api/pda/download/status",
-                                "/api/report/clipboard/status", "/api/remote/status"))
+                                "/api/report/clipboard/status", "/api/remote/status",
+                                "/api/update/status"))
 
     def do_GET(self):
         if not self._desktop_guard(): return
@@ -1044,6 +1076,8 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/remote/status":
             return self._ok(**REMOTE.status())
+        if path == "/api/update/status":
+            return self._ok(**UPDATER.status())
         if path == "/api/heartbeat":
             note_beat()
             return self._ok(ts=time.time())
@@ -1339,6 +1373,8 @@ class Handler(BaseHTTPRequestHandler):
         if not self._desktop_guard(): return
         if path == "/api/report/clipboard":
             return self._copy_report_clipboard()
+        if path.startswith("/api/update/"):
+            return self._update_post(path)
         try:
             # Consume once even for no-argument routes; keep-alive must not treat
             # an unread JSON body as the next HTTP request.
@@ -2511,6 +2547,7 @@ def main():
     WATCH.start()
     CATALOG_SYNC.start()
     BACKUPS.start()
+    UPDATER.start()
     REMOTE.service_port = PORT
     REMOTE.start_if_enabled()   # 默认关闭；仅在设置里启用后才监听 [::]
     log("版本 %s；服务已启动 http://127.0.0.1:%d" % (VERSION, PORT))
@@ -2523,6 +2560,10 @@ def main():
         log("收到手动退出指令，等待正在处理的本机请求结束")
     finally:
         WATCH.stop.set()
+        try:
+            UPDATER.stop()
+        except Exception:
+            pass
         try:
             REMOTE.stop()
         except Exception:
