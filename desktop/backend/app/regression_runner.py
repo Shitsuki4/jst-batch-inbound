@@ -41,22 +41,40 @@ print("prepared sid=%%s bid=%%s" %% (sid, b["id"]))
 '''
 
 
-SCRIPT_TIMEOUT = int(os.environ.get("JST_REGRESSION_TIMEOUT", "600"))
+SCRIPT_TIMEOUT = int(os.environ.get("JST_REGRESSION_TIMEOUT", "420"))
+# 子进程内先于硬超时 30 秒用 faulthandler 打印全部线程栈并退出，CI 卡住时能直接看到卡在哪。
+_WRAP = ("import faulthandler,os,runpy,sys;p=sys.argv[1];sys.argv=sys.argv[1:];"
+         "sys.path.insert(0,os.path.dirname(os.path.abspath(p)));"
+         "faulthandler.dump_traceback_later(%d,exit=True);runpy.run_path(p,run_name='__main__')")
+
+
+def _say(text):
+    """Print without crashing on a non-UTF-8 console (Windows CI defaults to cp1252)."""
+    try:
+        sys.stdout.write(text + "\n")
+    except UnicodeEncodeError:
+        enc = getattr(sys.stdout, "encoding", None) or "ascii"
+        sys.stdout.write(text.encode(enc, "replace").decode(enc, "replace") + "\n")
+    sys.stdout.flush()
 
 
 def run_script(cmd, name, **kw):
     """Run one test script with a hard timeout; print progress live so a hang in CI names its script."""
+    if len(cmd) == 2 and cmd[1].endswith(".py"):
+        cmd = [cmd[0], "-c", _WRAP % max(30, SCRIPT_TIMEOUT - 30), cmd[1]]
     start = time.time()
-    print(">> %s ..." % name, flush=True)
+    _say(">> %s ..." % name)
     try:
         r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=SCRIPT_TIMEOUT, **kw)
         rc, out = r.returncode, r.stdout.decode("utf-8", "replace")
     except subprocess.TimeoutExpired as e:
-        out = (e.stdout or b"").decode("utf-8", "replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
+        raw = e.stdout or b""
+        out = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else raw
         rc = -9
         out += "\n!! %s 超时（>%ds），已终止" % (name, SCRIPT_TIMEOUT)
-        print(out[-3000:], flush=True)
-    print("<< %s rc=%s %.1fs" % (name, rc, time.time() - start), flush=True)
+    if rc != 0:
+        _say(out[-6000:])
+    _say("<< %s rc=%s %.1fs" % (name, rc, time.time() - start))
     return rc, out
 
 
@@ -165,13 +183,13 @@ def main():
             f.write("\n".join(all_log))
     except Exception:
         logpath = "(写日志失败)"
-    print("\n======== SUMMARY (full log: %s) ========" % logpath)
+    _say("\n======== SUMMARY (full log: %s) ========" % logpath)
     for n, ok, text in results:
-        print("  %-18s %s" % (n, "PASS" if ok else "FAIL"))
+        _say("  %-18s %s" % (n, "PASS" if ok else "FAIL"))
         if not ok:
             for ln in text.splitlines():
                 if "[FAIL]" in ln or ln.startswith("!!") or "Traceback" in ln or "Error" in ln:
-                    print("      " + ln)
+                    _say("      " + ln)
     return 1 if any(not ok for _, ok, _ in results) else 0
 
 

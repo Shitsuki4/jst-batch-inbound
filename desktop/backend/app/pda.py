@@ -373,7 +373,7 @@ def make_handler(host, base):
             self.receipt_scope=None
             try:
                 if not self.guard(): return
-                if u.path=="/api/pda/receipts" or u.path.startswith("/api/inbound/") or u.path=="/api/session/detail":
+                if u.path=="/api/pda/receipts" or u.path.startswith(("/api/inbound/","/api/learned/")) or u.path=="/api/session/detail":
                     self.receipt_scope=host.receipt_scope()
             except Exception as e:
                 return self._fail(str(e))
@@ -410,8 +410,8 @@ def make_handler(host, base):
                 if pairing:
                     token=host.pair(b.get("code",""),b.get("name",""),self.client_address[0])
                     return self._send(200,json.dumps({"ok":True}),extra={"Set-Cookie":"jst_pda="+token+"; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=28800"})
-                if path in RECEIPT or path=="/api/line/edit" or path.startswith("/api/inbound/"):
-                    self.receipt_scope=host.receipt_scope()   # 锁外取范围
+                if path in RECEIPT or path=="/api/line/edit" or path.startswith(("/api/inbound/","/api/learned/")):
+                    self.receipt_scope=host.receipt_scope()   # 锁外取范围（含条码学习，避免锁内取范围与 scope_fetch 反向加锁）
             except Exception as e:
                 return self._fail(str(e))
             with app.state_lock:
