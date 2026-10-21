@@ -283,6 +283,7 @@ def _short_error(e):
 class UpdateHost:
     def __init__(self, data_dir, current_version=None, install_mode=None, fetch=None,
                  busy=None, clock=time.time, sleep=time.sleep):
+        """fetch(url, timeout, headers, follow_redirects=True) -> (status, headers, response)，默认 http_open。"""
         self.data_dir = data_dir
         self.dir = os.path.join(data_dir, "updates")
         self.settings_path = os.path.join(data_dir, "update-settings.json")
@@ -418,8 +419,7 @@ class UpdateHost:
     def _fetch_redirect_tag(self):
         """API 被限流 / 屏蔽时的兜底：读 github.com/<repo>/releases/latest 的跳转地址拿到标签（无说明、无 digest）。"""
         status, headers, resp = self.fetch("https://github.com/%s/releases/latest" % REPO, CHECK_TIMEOUT,
-                                           {}, ) if self.fetch is not http_open else \
-            http_open("https://github.com/%s/releases/latest" % REPO, CHECK_TIMEOUT, follow_redirects=False)
+                                           {}, follow_redirects=False)
         try:
             loc = (headers or {}).get("Location", "") if status in (301, 302, 303, 307, 308) else ""
         finally:
