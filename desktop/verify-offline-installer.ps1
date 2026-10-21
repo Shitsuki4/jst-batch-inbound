@@ -359,10 +359,29 @@ try {
     if ($dataDirBefore -and -not (Test-Path -LiteralPath (Join-Path $userDataRoot "data"))) {
         throw "Default silent uninstall deleted $userDataRoot\data"
     }
+    # The uninstaller deletes its own unins000.exe/.dat last; a reinstall that starts before that
+    # finishes picks unins001.exe instead. Wait so the reinstall below starts from a clean state.
+    # Not fatal: the reinstall reads the registered uninstaller from the uninstall entry anyway.
+    try {
+        Wait-Removed -Path $uninstaller -TimeoutSeconds 30
+        Wait-Removed -Path ([System.IO.Path]::ChangeExtension($uninstaller, ".dat")) -TimeoutSeconds 30
+    } catch {
+        Write-Host "Note: $($_.Exception.Message)"
+    }
     if (-not (Test-Path -LiteralPath $remoteSentinel)) { throw "Default silent uninstall deleted the remote admin settings ($remoteDir)" }
     Remove-Item -LiteralPath $remoteSentinel -Force -ErrorAction SilentlyContinue
-    $forceText = Get-Content -LiteralPath $forceLog -Raw
-    if ($forceText -notmatch "Remote firewall rules present") { throw "Uninstall log has no remote firewall rule check: $forceLog" }
+    # unins000.exe hands over to a temp copy and returns early; the post-uninstall step (firewall
+    # rules, data deletion) and its log lines can land after Invoke-Process returned. Poll the log.
+    $forceText = ""
+    for ($i = 0; $i -lt 60; $i++) {
+        if (Test-Path -LiteralPath $forceLog) { $forceText = Get-Content -LiteralPath $forceLog -Raw }
+        if ($forceText -match "Remote firewall rules present: 0|Remote firewall rules (removed|left)|Could not remove the remote firewall|firewall rule removal") { break }
+        Start-Sleep -Seconds 1
+    }
+    if ($forceText -notmatch "Remote firewall rules present") {
+        $tail = (($forceText -split "`r?`n") | Select-Object -Last 15) -join " | "
+        throw "Uninstall log has no remote firewall rule check: $forceLog ; tail: $tail"
+    }
     if ($firewallSeeded) {
         $leftRules = @(Get-NetFirewallRule -DisplayName ($firewallPrefix + "*") -ErrorAction SilentlyContinue)
         if ($leftRules.Count -gt 0) {
@@ -372,15 +391,6 @@ try {
         $checks.Add("Uninstall removed the remote admin page firewall rule (seeded test rule, elevated runner) and kept data\remote-access")
     } else {
         $checks.Add("Uninstall ran the remote firewall rule check and kept data\remote-access (rule removal not exercised: runner not elevated)")
-    }
-    # The uninstaller deletes its own unins000.exe/.dat last; a reinstall that starts before that
-    # finishes picks unins001.exe instead. Wait so the reinstall below starts from a clean state.
-    # Not fatal: the reinstall reads the registered uninstaller from the uninstall entry anyway.
-    try {
-        Wait-Removed -Path $uninstaller -TimeoutSeconds 30
-        Wait-Removed -Path ([System.IO.Path]::ChangeExtension($uninstaller, ".dat")) -TimeoutSeconds 30
-    } catch {
-        Write-Host "Note: $($_.Exception.Message)"
     }
     $checks.Add("Silent uninstall /FORCECLOSE ended the app's processes, removed the program, entry and shortcuts, and kept all user data (default)")
 
