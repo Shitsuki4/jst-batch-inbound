@@ -41,6 +41,25 @@ print("prepared sid=%%s bid=%%s" %% (sid, b["id"]))
 '''
 
 
+SCRIPT_TIMEOUT = int(os.environ.get("JST_REGRESSION_TIMEOUT", "600"))
+
+
+def run_script(cmd, name, **kw):
+    """Run one test script with a hard timeout; print progress live so a hang in CI names its script."""
+    start = time.time()
+    print(">> %s ..." % name, flush=True)
+    try:
+        r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=SCRIPT_TIMEOUT, **kw)
+        rc, out = r.returncode, r.stdout.decode("utf-8", "replace")
+    except subprocess.TimeoutExpired as e:
+        out = (e.stdout or b"").decode("utf-8", "replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
+        rc = -9
+        out += "\n!! %s 超时（>%ds），已终止" % (name, SCRIPT_TIMEOUT)
+        print(out[-3000:], flush=True)
+    print("<< %s rc=%s %.1fs" % (name, rc, time.time() - start), flush=True)
+    return rc, out
+
+
 def wait_port(port, timeout=15):
     end = time.time() + timeout
     while time.time() < end:
@@ -86,17 +105,15 @@ def run_block(name, base_port, prepare, tests):
                 pass
             return False, "\n".join(lines)
         if prepare:
-            p = subprocess.run([sys.executable, "-c", prepare], cwd=ROOT, env=env,
-                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-            lines.append(p.stdout.decode("utf-8", "replace"))
+            _, out = run_script([sys.executable, "-c", prepare], name + ":prepare", cwd=ROOT, env=env)
+            lines.append(out)
         for t in tests:
             lines.append("-" * 10 + " " + t + " " + "-" * 10)
-            r = subprocess.run([sys.executable, os.path.join(ROOT, t)], cwd=ROOT, env=env,
-                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-            lines.append(r.stdout.decode("utf-8", "replace"))
-            if r.returncode != 0:
+            rc, out = run_script([sys.executable, os.path.join(ROOT, t)], t, cwd=ROOT, env=env)
+            lines.append(out)
+            if rc != 0:
                 ok = False
-                lines.append("!! %s 退出码 %d" % (t, r.returncode))
+                lines.append("!! %s 退出码 %d" % (t, rc))
     finally:
         srv.terminate()
         try:
@@ -138,9 +155,8 @@ def main():
                          ("learned-codes", "learned_codes_test.py"),
                          ("updater", "updater_test.py")]:
         env = dict(os.environ, PYTHONIOENCODING="utf-8", JST_DB_DIR=tempfile.gettempdir())
-        r = subprocess.run([sys.executable, os.path.join(HERE, script)], cwd=ROOT, env=env,
-                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        results.append((name, r.returncode == 0, r.stdout.decode("utf-8", "replace")))
+        rc, out = run_script([sys.executable, os.path.join(HERE, script)], name, cwd=ROOT, env=env)
+        results.append((name, rc == 0, out))
     for _, _, text in results:
         all_log.append(text)
     logpath = os.path.join(HERE, "regression_last.log")
