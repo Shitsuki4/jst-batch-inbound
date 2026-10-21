@@ -128,7 +128,8 @@ def main():
                          ("batch-flow-unit", "batch_flow_test.py"),
                          ("concurrency-fixes", "concurrency_fixes_test.py"),
                          ("remote-access", "remote_access_test.py"),
-                         ("restore", "restore_test.py")]:
+                         ("restore", "restore_test.py"),
+                         ("restore-http", "restore_http_test.py")]:
         env = dict(os.environ, PYTHONIOENCODING="utf-8", JST_DB_DIR=tempfile.gettempdir())
         r = subprocess.run([sys.executable, os.path.join(HERE, script)], cwd=ROOT, env=env,
                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
