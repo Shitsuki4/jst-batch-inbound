@@ -37,6 +37,8 @@ public sealed partial class MainWindow {
   if(closing)throw new Exception("程序正在退出");
   if(UiTest.SettingsOnly && action is "cameras" or "cameraModes" or "cameraControls" or "setCameraControl" or "testStart" or "continue")throw new InvalidOperationException("Settings-only acceptance forbids camera access");
   switch(action){
+   case "openUrl":AppUpdate.OpenUrl(Arg(args,"url"));return new{message="已在浏览器打开发布页"};
+   case "applyUpdate":return await ApplyUpdate();
    case "settings":return VideoSettings();
    case "validateTracking":settings.ValidateTracking(Arg(args,"tracking"));return new{valid=true};
    case "preview":preview.Show();return new{message="浮窗已显示；隐藏不停止录像"};
@@ -98,6 +100,27 @@ public sealed partial class MainWindow {
    default:throw new Exception("不支持的桌面操作");
   }
  }
+ // Installs a package the backend downloaded and verified. Replies to the web page first, then exits through the normal safe-exit path.
+ async Task<object> ApplyUpdate(){
+  if(UiTest.Active)throw new Exception("验收模式不允许安装更新");
+  if(rec.Active)throw new Exception("正在录像，请先结束本单录像再安装更新");
+  if(await HasPending(true))throw new Exception("请先保存或取消待录入商品 / 设置草稿，再安装更新");
+  UpdatePlan plan;
+  using(var response=await backend.Post("/api/update/prepare",new{recording=rec.Active})){
+   var info=response.RootElement.GetProperty("install");
+   string Str(string name)=>info.TryGetProperty(name,out var v)&&v.ValueKind==JsonValueKind.String?v.GetString()??"":"";
+   plan=await Task.Run(()=>AppUpdate.Prepare(Str("kind"),Str("version"),Str("path"),Str("sha256")));
+  }
+  var text=plan.Kind=="installer"
+   ?$"已下载并校验新版本 {plan.Version}。\n\n程序将安全退出（保存录像与设置），随后打开安装程序。是否继续？"
+   :$"已下载并校验新版本 {plan.Version}，已解压到：\n{plan.Target}\n\n程序将安全退出，随后打开新版本文件夹。是否继续？";
+  if(MessageBox.Show(this,text,"安装更新",MessageBoxButton.YesNo,MessageBoxImage.Question)!=MessageBoxResult.Yes)return new{started=false,message="已取消安装更新"};
+  if(rec.Active||await HasPending(true))throw new Exception("确认期间出现录像或待保存内容，已取消安装更新");
+  var pid=Environment.ProcessId;
+  _=Dispatcher.BeginInvoke(new Action(async()=>{await Task.Delay(400);if(closing)return;await ShutdownSafely(()=>AppUpdate.Launch(plan,pid));}),System.Windows.Threading.DispatcherPriority.Background);
+  return new{started=true,kind=plan.Kind,version=plan.Version,message=plan.Kind=="installer"?"即将退出并启动安装程序":"即将退出并打开新版本文件夹"};
+ }
+
  async Task CheckCleanupReminder(){
   if(settings.CleanupDays==0){cleanupHint="";return;}if(rec.Active||DateTimeOffset.Now<nextCleanupCheck)return;
   nextCleanupCheck=DateTimeOffset.Now.AddHours(24);var store=Library;var days=settings.CleanupDays;

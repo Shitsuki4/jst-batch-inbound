@@ -23,7 +23,7 @@ public sealed class Backend : IAsyncDisposable {
   for(int attempt=1;;attempt++){
    var port=PickFreePort();Url=$"http://127.0.0.1:{port}";
    var p=new ProcessStartInfo(exe){UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true,WorkingDirectory=Path.GetDirectoryName(exe)!};
-   p.Environment["JST_DB_DIR"]=data;p.Environment["JST_NO_BROWSER"]="1";p.Environment["JST_NATIVE_PORT"]=port.ToString();p.Environment["JST_NATIVE_TOKEN"]=Token;
+   p.Environment["JST_DB_DIR"]=data;p.Environment["JST_NO_BROWSER"]="1";p.Environment["JST_NATIVE_PORT"]=port.ToString();p.Environment["JST_NATIVE_TOKEN"]=Token;p.Environment["JST_APP_VERSION"]=AppUpdate.AppVersion;p.Environment["JST_INSTALL_MODE"]=AppUpdate.InstallMode;
    proc=Process.Start(p)??throw new Exception("业务服务未启动");proc.OutputDataReceived+=(_,_)=>{};proc.ErrorDataReceived+=(_,_)=>{};proc.BeginOutputReadLine();proc.BeginErrorReadLine();
    var portBusy=false;
    for(int i=0;i<100;i++){
@@ -38,6 +38,7 @@ public sealed class Backend : IAsyncDisposable {
   }
  }
  static int PickFreePort(){var listener=new TcpListener(IPAddress.Loopback,0);listener.Start();try{return ((IPEndPoint)listener.LocalEndpoint).Port;}finally{listener.Stop();}}
+ public async Task<JsonDocument> Post(string route,object body){using var content=new StringContent(JsonSerializer.Serialize(body),System.Text.Encoding.UTF8,"application/json");using var response=await client.PostAsync(Url+route,content);var text=await response.Content.ReadAsStringAsync();var d=JsonDocument.Parse(text);if(!d.RootElement.TryGetProperty("ok",out var ok)||ok.ValueKind!=JsonValueKind.True){var msg=d.RootElement.TryGetProperty("msg",out var m)&&m.ValueKind==JsonValueKind.String?m.GetString():"业务服务返回失败";d.Dispose();throw new Exception(msg);}return d;}
  public async Task<JsonDocument> Get(string route){var text=await client.GetStringAsync(Url+route);var d=JsonDocument.Parse(text);if(!d.RootElement.GetProperty("ok").GetBoolean())throw new Exception(d.RootElement.GetProperty("msg").GetString());return d;}
  public async ValueTask DisposeAsync(){if(Alive){try{await client.PostAsync(Url+"/api/native/shutdown",new StringContent("{}"));await proc!.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(20));}catch{ // Do not kill uncertain in-flight ERP write.
  try{System.IO.File.WriteAllText(Path.Combine(AppPaths.DataRoot,"service-exit-warning.txt"),"服务退出未确认。请核实原入库单，不要重复提交。");}catch{}
