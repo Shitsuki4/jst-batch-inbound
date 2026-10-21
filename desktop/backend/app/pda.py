@@ -304,6 +304,10 @@ def make_handler(host, base):
                 if path.endswith("choose"):
                     b["item"]=app.receipt_selection(app.STORE.get_session(sid), b)
 
+        def _op_device(self):
+            d=getattr(self,"device",None) or {}
+            return {"kind":"pda","id":d.get("id",""),"name":d.get("name","") or "PDA"}
+
         def do_GET(self):
             u=urllib.parse.urlparse(self.path)
             q=dict(urllib.parse.parse_qsl(u.query))
@@ -353,7 +357,7 @@ def make_handler(host, base):
                             return self._fail("此请求结果待核实，禁止重复计数；请查看本地实收记录")
                         self.receipt_request=rid
                     fn=getattr(self,"_post_"+path.strip("/").replace("/","_"))
-                    return fn()
+                    return self._run_logged(path,fn)
                 except Exception as e:
                     # A handler may have committed before failing. Leave reservation unknown, never replay it.
                     if app.STORE.db.in_transaction:
