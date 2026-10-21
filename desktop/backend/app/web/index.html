@@ -131,6 +131,7 @@
     <button class="tab" data-tab="export">明细导出</button>
     <button class="tab" data-tab="inventory">库存盘点</button>
     <button class="tab" data-tab="operations">异常与记录</button>
+    <button class="tab" data-tab="oplog">操作记录</button>
     <button class="tab" data-tab="settings">设置</button>
   </nav>
 
@@ -439,6 +440,34 @@
       </div>
     </section>
 <section class="view" data-view="operations" id="operations-view"><div class="card"><div class="card-hd">异常与操作记录</div><p class="hint">按当前ERP登录范围显示最近记录。备注仅供核实，不会解锁明细或自动重发；入库异常从原单继续处理。</p><div class="row"><button class="btn btn-primary" id="op-refresh">刷新记录</button><label><input id="op-only" type="checkbox" checked> 仅看待处理</label><a class="btn btn-ghost" id="op-export" href="/api/operations/export">导出全部记录 CSV</a></div><p id="op-message" role="status"></p><div id="op-rows"></div></div></section>
+<section class="view" data-view="oplog" id="oplog-view">
+  <div class="card">
+    <div class="card-hd">操作记录</div>
+    <p class="hint">记录电脑端与 PDA 的收货、改数、入库、设置等操作，保存在本机 operation_log.db。</p>
+    <div class="row" style="flex-wrap:wrap;gap:8px">
+      <label>开始 <input id="ol-start" class="input ol-filter" type="datetime-local"></label>
+      <label>结束 <input id="ol-end" class="input ol-filter" type="datetime-local"></label>
+      <input id="ol-po" class="input ol-filter" placeholder="采购单 / 物流单号" autocomplete="off">
+      <input id="ol-sku" class="input ol-filter" placeholder="商品编码" autocomplete="off">
+      <select id="ol-device" class="select" aria-label="设备"><option value="">全部设备</option></select>
+      <select id="ol-op" class="select" aria-label="操作类型"><option value="">全部操作类型</option></select>
+      <button class="btn btn-primary" id="ol-search" type="button">查询</button>
+      <button class="btn btn-ghost" id="ol-reset" type="button">重置</button>
+      <a class="btn btn-ghost" id="ol-export" href="/api/oplog/export">CSV 导出</a>
+    </div>
+    <p id="ol-scope" class="hint" hidden><span id="ol-scope-text"></span> <button class="btn btn-ghost btn-sm" id="ol-clear-scope" type="button">显示全部</button></p>
+    <p id="ol-msg" role="status"></p>
+    <div class="table-wrap scroll">
+      <table class="tbl"><thead><tr><th>时间</th><th>设备</th><th>操作类型</th><th>单号</th><th>商品编码</th><th>前→后数量</th><th>说明</th></tr></thead><tbody id="ol-rows"></tbody></table>
+    </div>
+    <div class="row"><button class="btn btn-ghost btn-sm" id="ol-prev" type="button">上一页</button><span id="ol-pageinfo"></span><button class="btn btn-ghost btn-sm" id="ol-next" type="button">下一页</button></div>
+  </div>
+  <div class="card">
+    <div class="card-hd">保留天数</div>
+    <div class="row"><input id="ol-retention" class="input" type="number" min="7" max="3650" step="1" style="max-width:120px" aria-label="操作记录保留天数"> 天 <button class="btn btn-primary btn-sm" id="ol-retention-save" type="button">保存</button><span id="ol-retention-msg" role="status"></span></div>
+    <p class="hint" id="ol-retention-hint"></p>
+  </div>
+</section>
   </main>
 </div>
 
@@ -459,6 +488,7 @@
 <script src="/ux.js"></script>
 <script src="/inventory.js"></script>
 <script src="/operations.js"></script>
+<script src="/oplog.js"></script>
 <script src="/enhancements.js"></script>
 <script src="/download.js"></script>
 <script src="/purchase-links.js"></script><script src="/settings-workspace.js"></script><script src="/remote-settings.js"></script></body>
