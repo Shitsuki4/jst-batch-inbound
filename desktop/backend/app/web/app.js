@@ -1695,7 +1695,7 @@
         + '<div class="q-sub">② 各物流单号明细（' + r.groups.length + ' 个，数量可直接修改）</div>'
         + '<div data-record-groups>' + (r.groups.length ? r.groups.map(groupTable).join('') : '<div class="empty">尚未录入任何物流单号</div>') + '</div>'
         + '<div data-initial-snapshot>' + initialPurchaseTable(r) + '</div>'
-        + '<div class="q-actions">' + inboundButton(s.id) + '</div>';
+        + '<div class="q-actions">' + inboundButton(s.id) + ' <button class="btn btn-ghost js-open-oplog" data-sid="' + esc(s.id) + '">查看此单操作记录</button></div>';
       openModal('采购单 ' + s.po_id + ' · 收货明细与差异', '<section class="record-detail" data-sid="' + sid + '">'
         + '<button class="btn btn-ghost btn-sm js-record-refresh" data-id="' + sid + '">刷新实时采购明细</button>'
         + '<p class="hint record-refresh-status" role="status"></p>' + h + '</section>',
@@ -1729,6 +1729,12 @@
   }
   document.addEventListener('click', function (e) {
     if (e.target.closest('.js-record-refresh')) refreshOpenSessionDetail(true);
+  });
+  document.addEventListener('click', function (e) {
+    var b = e.target.closest && e.target.closest('.js-open-oplog');
+    if (!b || typeof window.openOpLog !== 'function') return;
+    if (closeModal() === false) return;
+    window.openOpLog({ source: 'receipt', sid: +b.dataset.sid });
   });
   document.addEventListener('click', function (e) {
     var el = e.target && e.target.closest ? e.target.closest('.js-open-session') : null;
