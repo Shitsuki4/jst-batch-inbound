@@ -316,11 +316,16 @@ class OpLog(object):
             where.append("at>=?"); args.append(start)
         if end is not None:
             where.append("at<?"); args.append(end)
+        has_sid = bool(str(f.get("sid") or "").strip())
         for key in ("module", "op", "result", "device_kind", "source"):
             v = str(f.get(key) or "").strip()
             if v:
-                where.append(key + "=?"); args.append(v)
-        if str(f.get("sid") or "").strip():
+                if key == "source" and has_sid:
+                    # 按单查看：来源为空但 sid 相同的旧记录也算本单
+                    where.append("(source=? OR source='')"); args.append(v)
+                else:
+                    where.append(key + "=?"); args.append(v)
+        if has_sid:
             where.append("sid=?"); args.append(_int_or_none(f.get("sid")))
         device = str(f.get("device") or "").strip()
         if device:
@@ -341,23 +346,27 @@ class OpLog(object):
             args += ["%" + text + "%"] * len(cols)
         return (" WHERE " + " AND ".join(where)) if where else "", args
 
-    def query(self, f=None, limit=500):
+    def query(self, f=None, limit=500, offset=0):
         try:
             limit = max(1, min(QUERY_LIMIT_MAX, int(limit or 500)))
         except (TypeError, ValueError):
             limit = 500
+        try:
+            offset = max(0, int(offset or 0))
+        except (TypeError, ValueError):
+            offset = 0
         where, args = self._where(f)
         with self.lock:
             db = self._connect(False)
             if db is None:
-                return {"rows": [], "total": 0, "limit": limit}
+                return {"rows": [], "total": 0, "limit": limit, "offset": offset}
             try:
                 total = db.execute("SELECT COUNT(*) FROM op_log" + where, args).fetchone()[0]
                 rows = [self._present(dict(r)) for r in db.execute(
-                    "SELECT * FROM op_log" + where + " ORDER BY id DESC LIMIT ?", args + [limit])]
+                    "SELECT * FROM op_log" + where + " ORDER BY id DESC LIMIT ? OFFSET ?", args + [limit, offset])]
             finally:
                 db.close()
-        return {"rows": rows, "total": total, "limit": limit}
+        return {"rows": rows, "total": total, "limit": limit, "offset": offset}
 
     def devices(self):
         with self.lock:

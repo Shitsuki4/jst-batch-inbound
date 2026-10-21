@@ -3,7 +3,7 @@
   'use strict';
   var root = document.getElementById('oplog-view');
   if (!root) return;
-  var PAGE = 50, FETCH_LIMIT = 5000;
+  var PAGE = 50;
   var rows = [], total = 0, page = 0, meta = null, busy = false, scope = { source: '', sid: '' };
   function $(id) { return document.getElementById('ol-' + id); }
   function esc(v) { return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
@@ -57,16 +57,15 @@
     return parts.join('<br>');
   }
   function render() {
-    var pages = Math.max(1, Math.ceil(rows.length / PAGE));
-    if (page >= pages) page = pages - 1;
-    var slice = rows.slice(page * PAGE, page * PAGE + PAGE);
+    var pages = Math.max(1, Math.ceil(total / PAGE));
+    var slice = rows;
     $('rows').innerHTML = slice.length ? slice.map(function (r) {
       var bad = r.result && r.result !== 'ok' && r.result !== 'success';
       return '<tr><td class="mono">' + esc(r.at_text) + '</td><td>' + esc(r.device_label) + '</td><td>' + esc(r.op_label)
         + (bad ? ' <span class="chip bad">' + esc({ fail: '失败', pending: '待确认' }[r.result] || r.result) + '</span>' : '') + '<br><small>' + esc(r.module_label) + '</small></td><td class="mono">' + noText(r)
         + '</td><td class="mono">' + esc(r.sku || r.code || '') + '</td><td>' + qtyText(r) + '</td><td>' + esc(r.summary) + '</td></tr>';
     }).join('') : '<tr><td colspan="7" class="empty">当前筛选无记录</td></tr>';
-    var more = total > rows.length ? '（共 ' + total + ' 条，仅载入最近 ' + rows.length + ' 条，请缩小筛选范围；导出同样上限）' : '（共 ' + total + ' 条）';
+    var more = '（共 ' + total + ' 条' + (total > 5000 ? '，导出仅含最近 5000 条，请缩小筛选范围' : '') + '）';
     $('pageinfo').textContent = '第 ' + (page + 1) + ' / ' + pages + ' 页 ' + more;
     $('prev').disabled = page <= 0; $('next').disabled = page >= pages - 1;
     $('scope').hidden = !scope.sid;
@@ -82,9 +81,15 @@
   async function loadMeta() { meta = await getJSON('/api/oplog/meta'); fillMeta(); }
   async function load(resetPage) {
     if (!meta) await loadMeta();
-    var j = await getJSON('/api/oplog/list?' + qs(filters(), { limit: FETCH_LIMIT }));
-    rows = j.rows || []; total = j.total || 0;
     if (resetPage) page = 0;
+    var j = await getJSON('/api/oplog/list?' + qs(filters(), { limit: PAGE, offset: page * PAGE }));
+    rows = j.rows || []; total = j.total || 0;
+    var pages = Math.max(1, Math.ceil(total / PAGE));
+    if (page >= pages && page > 0) {
+      page = pages - 1;
+      j = await getJSON('/api/oplog/list?' + qs(filters(), { limit: PAGE, offset: page * PAGE }));
+      rows = j.rows || []; total = j.total || 0;
+    }
     render();
   }
   async function saveRetention() {
@@ -108,8 +113,8 @@
     run(function () { return load(true); });
   };
   $('clear-scope').onclick = function () { scope = { source: '', sid: '' }; run(function () { return load(true); }); };
-  $('prev').onclick = function () { if (page > 0) { page--; render(); } };
-  $('next').onclick = function () { page++; render(); };
+  $('prev').onclick = function () { if (page > 0) { page--; run(function () { return load(false); }); } };
+  $('next').onclick = function () { if ((page + 1) * PAGE < total) { page++; run(function () { return load(false); }); } };
   $('retention-save').onclick = saveRetention;
   root.addEventListener('keydown', function (e) { if (e.key === 'Enter' && e.target.matches('input.ol-filter')) $('search').click(); });
   ['start', 'end', 'device', 'op'].forEach(function (k) { $(k).addEventListener('change', function () { $('export').href = '/api/oplog/export?' + qs(filters()); }); });

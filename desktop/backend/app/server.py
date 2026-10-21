@@ -1079,7 +1079,7 @@ class Handler(BaseHTTPRequestHandler):
                     fn = "operation-log-%s.csv" % datetime.now().strftime("%Y%m%d-%H%M%S")
                     return self._send(200, OPLOG.export_csv(q), "text/csv; charset=utf-8",
                                       {"Content-Disposition": "attachment; filename=%s" % fn})
-                return self._ok(**OPLOG.query(q, q.get("limit") or 500))
+                return self._ok(**OPLOG.query(q, q.get("limit") or 500, q.get("offset") or 0))
             except Exception as e:
                 return self._fail(str(e))
 

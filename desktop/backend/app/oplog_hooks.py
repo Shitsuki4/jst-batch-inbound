@@ -225,6 +225,19 @@ def after(app, h, path, body, resp, ctx):
             pass
 
 
+def watch_source(body, rec):
+    """待改单跟踪记录所属的收货单：优先请求体，其次跟踪记录的来源（有采购单收货优先）。"""
+    src, sid = str(body.get("source") or rec.get("source") or ""), _int(body.get("sid") or rec.get("sid"))
+    if not sid:
+        sources = [g for g in (rec.get("sources") or []) if isinstance(g, dict) and _int(g.get("sid"))]
+        pick = next((g for g in sources if g.get("source") == "receipt"), sources[0] if sources else None)
+        if pick:
+            src, sid = str(pick.get("source") or ""), _int(pick.get("sid"))
+    if sid and not src:
+        src = "receipt"
+    return src, (sid or None)
+
+
 def _base(ctx, module, op, **kw):
     info = ctx.get("session") or {}
     rec = {"module": module, "op": op, "source": ctx.get("source") or "",
@@ -399,8 +412,9 @@ def build(app, path, body, resp, ctx):
                  "transition": "修改跟踪状态", "auto": "恢复自动状态"}.get(action)
         if not label:
             return []
-        return [{"module": "purchase_watch", "op": "watch", "source": str(body.get("source") or rec.get("source") or ""),
-                 "sid": _int(body.get("sid") or rec.get("sid")) or None, "po_id": rec.get("po_id", ""),
+        src, wsid = watch_source(body, rec)
+        return [{"module": "purchase_watch", "op": "watch", "source": src,
+                 "sid": wsid, "po_id": rec.get("po_id", ""),
                  "summary": label + (" → %s" % body.get("state") if action == "transition" else "")
                             + (" 备注：%s" % str(body.get("note"))[:100] if body.get("note") else ""),
                  "detail": {"watch_id": body.get("id") or rec.get("id")}}]
