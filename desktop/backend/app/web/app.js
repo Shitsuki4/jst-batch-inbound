@@ -1421,7 +1421,7 @@
       + fmtNum(g.total) + ' 件</span>'
       + '<button class="icon-btn js-edit-batch" data-id="' + g.id + '" data-no="' + esc(g.tracking_no)
       + '" title="修改物流单号">✎</button>'
-      + '<button class="icon-btn js-del-batch" data-id="' + g.id + '" title="删除该物流单号">✕</button>'
+      + '<button class="icon-btn js-del-batch" data-id="' + g.id + '" data-sid="' + esc(g.session_id || '') + '" title="删除该物流单号">✕</button>'
       + '</div>'
       + '<table class="tbl"><thead><tr><th>商品编码</th><th>商品名称</th><th>数量</th><th></th></tr></thead>'
       + '<tbody>' + rows + '</tbody></table></div>';
@@ -1579,7 +1579,7 @@
           + '<div class="q-sub">该批次商品明细（数量可直接修改）</div>'
           + linesTable(b.lines)
           + '<div class="q-actions">'
-          + '<button class="btn btn-ghost btn-sm danger js-del-batch" data-id="' + b.id + '">删除该子批次</button>'
+          + '<button class="btn btn-ghost btn-sm danger js-del-batch" data-id="' + b.id + '" data-sid="' + esc(b.session_id || '') + '">删除该子批次</button>'
           + '</div></div>';
       }).join('')+extra;
     }).catch(function () { if(queryOpen.tk&&request===querySeq.tk)permAlert(); });
@@ -1610,8 +1610,9 @@
     }
     if ((el = e.target.closest('.js-del-batch'))) {
       id = +el.dataset.id;
+      var batchSid = +el.dataset.sid || (S.session && S.session.id) || 0;   // 后端校验子批次归属
       confirmBox('删除物流单', '将删除该物流单号及其全部收货明细，<br>对应数量会从采购单实收中扣减。', '删除物流单', function () {
-        api('/api/batch/del', { method: 'POST', body: { batch_id: id } }).then(function (r) {
+        api('/api/batch/del', { method: 'POST', body: { batch_id: id, sid: batchSid } }).then(function (r) {
           if (!r.ok) return handleFail(r);
           toast(r.msg || '已删除该物流单', 'ok');
           refreshAfterMutation(id === S.current_batch ? 0 : S.current_batch);

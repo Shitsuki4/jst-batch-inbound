@@ -455,7 +455,7 @@ class Store(object):
     # ---------------- 子批次 ----------------
     def batches(self, sid):
         rows = self.db.execute(
-            "SELECT b.id, b.tracking_no, b.first_scan_at, "
+            "SELECT b.id, b.session_id, b.tracking_no, b.first_scan_at, "
             "ib.job_id AS inbound_job_id, ij.io_id AS inbound_io_id, ij.status AS inbound_status, "
             "(SELECT COALESCE(SUM(l.qty),0) FROM line l LEFT JOIN inbound_line il ON il.line_id=l.id WHERE l.batch_id=b.id AND il.job_id IS NULL AND (ib.batch_id IS NULL OR ib.line_scoped=1)) AS inbound_pending_qty, "
             "  (SELECT COUNT(*) FROM line l WHERE l.batch_id=b.id) AS kinds, "
@@ -772,6 +772,18 @@ class Store(object):
         if base is None:
             base = self._base_items(sid) or []
         planned = plan_by_key(base)
+        # 应收口径统一为「本轮应收」（本轮起始 采购数量 − ERP已入库，同 receiving_round）。
+        # po_total 保留采购总数供对照；本轮应收算不出的 SKU（旧记录 / 数量不可靠）
+        # 按采购总数对照，并标 plan_basis='total'。
+        from receiving_round import round_targets
+        targets = round_targets(self.get_session(sid))
+        for row in planned.values():
+            row["po_total"] = row["plan"]
+            target = targets.get(str(row.get("sku_id") or ""))
+            if target is not None:
+                row["plan"], row["plan_basis"] = float(target), "round"
+            else:
+                row["plan_basis"] = "total"
         recv = {r["key"]: r for r in self.received_summary(sid)}
         for key, row in planned.items():
             got = recv.pop(key, None)
@@ -798,6 +810,7 @@ class Store(object):
                 "name": p["name"], "spec": p["spec"],
                 "plan": p["plan"], "recv": p["recv"], "diff": p["diff"],
                 "done": p["done"], "over": p["over"],
+                "po_total": p["po_total"], "plan_basis": p["plan_basis"],
             })
         # 采购单里没有、但实收出现了的（计划外）也一并列出，避免漏看
         for v in extras:
@@ -838,7 +851,7 @@ class Store(object):
                 "name": p["name"], "spec": p["spec"],
                 "plan": plan, "recv": r, "diff": r - plan,
                 "reason": ("多收 %g" % (r - plan)) if r > plan else ("少收 %g" % (plan - r)),
-                "kind": "diff",
+                "kind": "diff", "po_total": p["po_total"], "plan_basis": p["plan_basis"],
             })
         for v in extras:
             rows.append({
