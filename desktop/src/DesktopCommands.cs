@@ -37,6 +37,8 @@ public sealed partial class MainWindow {
   if(closing)throw new Exception("程序正在退出");
   if(UiTest.SettingsOnly && action is "cameras" or "cameraModes" or "cameraControls" or "setCameraControl" or "testStart" or "continue")throw new InvalidOperationException("Settings-only acceptance forbids camera access");
   switch(action){
+   case "openUrl":AppUpdate.OpenUrl(Arg(args,"url"));return new{message="已在浏览器打开发布页"};
+   case "applyUpdate":return await ApplyUpdate();
    case "settings":return VideoSettings();
    case "validateTracking":settings.ValidateTracking(Arg(args,"tracking"));return new{valid=true};
    case "preview":preview.Show();return new{message="浮窗已显示；隐藏不停止录像"};
@@ -95,9 +97,60 @@ public sealed partial class MainWindow {
      WriteSettings(saved);settingsLoadFailed=false;settingsLoadWarning="";nextCleanupCheck=default;cleanupHint="";settings=saved;enabled.IsChecked=saved.AutoRecordEnabled;rec.Configure(saved);rec.Probe=probe;preview.Configure(saved);registration?.Commit();
      return new{message="视频设置已保存；业务设置保持不变。全局快捷键："+(hotkeys?.Status??"未注册")};
     }finally{eventsGate.Release();}
+   case "chooseBackup":{
+    var kind=args.ValueKind==JsonValueKind.Object&&args.TryGetProperty("kind",out var k)&&k.ValueKind==JsonValueKind.String?k.GetString():"folder";
+    if(kind=="zip"){var open=new Microsoft.Win32.OpenFileDialog{Title="选择备份压缩包",Filter="备份压缩包 (*.zip)|*.zip",CheckFileExists=true};return new{path=open.ShowDialog(this)==true?open.FileName:""};}
+    var folder=new Microsoft.Win32.OpenFolderDialog{Title="选择备份文件夹（包含 manifest.json）"};return new{path=folder.ShowDialog(this)==true?folder.FolderName:""};
+   }
+   case "restoreBackup":return await RestoreBackup(args);
    default:throw new Exception("不支持的桌面操作");
   }
  }
+ async Task<object> RestoreBackup(JsonElement args){
+  if(rec.Active)throw new Exception("正在录像，请先结束录像再恢复备份");
+  if(await HasPending())throw new Exception("请先保存或取消待录入商品 / 设置草稿，再恢复备份");
+  if(Arg(args,"confirm")!="恢复")throw new Exception("请输入“恢复”确认后再恢复备份");
+  string id=args.TryGetProperty("id",out var i)&&i.ValueKind==JsonValueKind.String?Arg(args,"id"):"",path=args.TryGetProperty("path",out var p)&&p.ValueKind==JsonValueKind.String?Arg(args,"path"):"";
+  if(id==""&&path=="")throw new Exception("请选择要恢复的备份");
+  using var staged=await backend.PostLong("/api/restore/stage",id!=""?(object)new{id,confirm="恢复",recording=rec.Active}:new{path,confirm="恢复",recording=rec.Active});
+  var label=staged.RootElement.TryGetProperty("pre_restore_label",out var l)?l.GetString():"恢复前自动备份";
+  _=Dispatcher.InvokeAsync(async()=>{await Task.Delay(800);await RestartAfterRestore();});
+  return new{message="已完成"+label+"并准备恢复，程序将安全退出并自动重新打开以完成恢复。"};
+ }
+ async Task RestartAfterRestore(){
+  if(closing)return;closing=true;IsEnabled=false;timer.Stop();var pid=backend.ProcessId;bool backendExited;
+  try{
+   await eventsGate.WaitAsync();try{await rec.DisposeAsync();await backend.DisposeAsync();SaveSettings();}finally{eventsGate.Release();}
+   backendExited=pid==null||BackendExited(pid.Value);
+  }catch(Exception ex){backendExited=false;status.Text="退出未完成："+ex.Message;}
+  if(backendExited){
+   try{Process.Start(new ProcessStartInfo(Environment.ProcessPath??Path.Combine(AppContext.BaseDirectory,"Receiving.Native.exe")){UseShellExecute=false,ArgumentList={"--restart-after",Environment.ProcessId.ToString()}});}
+   catch(Exception ex){MessageBox.Show(this,"已准备恢复，但自动重新打开失败："+ex.Message+"\n请手动重新打开收货小助手完成恢复。","备份恢复");}
+  }else MessageBox.Show(this,"业务服务退出未确认，未自动重新打开。请核实原入库单，不要重复提交；稍后手动重新打开收货小助手完成恢复。","备份恢复",MessageBoxButton.OK,MessageBoxImage.Warning);
+  hotkeys?.Dispose();sounds?.Dispose();preview.ExitAllowed=true;preview.Close();web.Dispose();Close();
+ }
+ static bool BackendExited(int pid){try{using var p=Process.GetProcessById(pid);return p.WaitForExit(10000);}catch(ArgumentException){return true;}catch(InvalidOperationException){return true;}}
+ // Installs a package the backend downloaded and verified. Replies to the web page first, then exits through the normal safe-exit path.
+ async Task<object> ApplyUpdate(){
+  if(UiTest.Active)throw new Exception("验收模式不允许安装更新");
+  if(rec.Active)throw new Exception("正在录像，请先结束本单录像再安装更新");
+  if(await HasPending(true))throw new Exception("请先保存或取消待录入商品 / 设置草稿，再安装更新");
+  UpdatePlan plan;
+  using(var response=await backend.Post("/api/update/prepare",new{recording=rec.Active})){
+   var info=response.RootElement.GetProperty("install");
+   string Str(string name)=>info.TryGetProperty(name,out var v)&&v.ValueKind==JsonValueKind.String?v.GetString()??"":"";
+   plan=await Task.Run(()=>AppUpdate.Prepare(Str("kind"),Str("version"),Str("path"),Str("sha256")));
+  }
+  var text=plan.Kind=="installer"
+   ?$"已下载并校验新版本 {plan.Version}。\n\n程序将安全退出（保存录像与设置），随后打开安装程序。是否继续？"
+   :$"已下载并校验新版本 {plan.Version}，已解压到：\n{plan.Target}\n\n程序将安全退出，随后打开新版本文件夹。是否继续？";
+  if(MessageBox.Show(this,text,"安装更新",MessageBoxButton.YesNo,MessageBoxImage.Question)!=MessageBoxResult.Yes)return new{started=false,message="已取消安装更新"};
+  if(rec.Active||await HasPending(true))throw new Exception("确认期间出现录像或待保存内容，已取消安装更新");
+  var pid=Environment.ProcessId;
+  _=Dispatcher.BeginInvoke(new Action(async()=>{await Task.Delay(400);if(closing)return;await ShutdownSafely(()=>AppUpdate.Launch(plan,pid));}),System.Windows.Threading.DispatcherPriority.Background);
+  return new{started=true,kind=plan.Kind,version=plan.Version,message=plan.Kind=="installer"?"即将退出并启动安装程序":"即将退出并打开新版本文件夹"};
+ }
+
  async Task CheckCleanupReminder(){
   if(settings.CleanupDays==0){cleanupHint="";return;}if(rec.Active||DateTimeOffset.Now<nextCleanupCheck)return;
   nextCleanupCheck=DateTimeOffset.Now.AddHours(24);var store=Library;var days=settings.CleanupDays;

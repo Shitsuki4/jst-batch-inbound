@@ -83,21 +83,26 @@ from catalog import CatalogDB, CatalogSync, scope_key
 from login_memory import LoginMemory
 from inbound import InboundService, InboundError  # noqa: E402
 from unplanned import UnplannedService
+import unplanned_hint
 from joint_receipt import JointService
 from codes import enabled_scan_candidates
 from learned_codes import LearnedCodes, take_notices, clean_code as clean_learned_code
 from purchase_watch import PurchaseWatch
 from inventory import InventoryService
 from backup import BackupManager, VERSION
+import restore
 from operations import Operations
 from pda import PdaHost
 from download import InstallerHost
 from remote_access import RemoteHost
+from updater import UpdateHost, inbound_busy_reason
 import xlsx  # noqa: E402
 import edgecookie  # noqa: E402
 import cdp  # noqa: E402
 import qrview
 from report_clipboard import ReportClipboard, MAX_REQUEST_BYTES
+from oplog import OpLog, DEVICE_LABELS as OPLOG_DEVICE_LABELS, MODULES as OPLOG_MODULES, OPS as OPLOG_OPS, MIN_RETENTION_DAYS, MAX_RETENTION_DAYS
+import oplog_hooks
 
 # Local packaging diagnostic: temporary certificate only, no DB or ERP requests.
 if __name__ == "__main__" and "--self-test" in sys.argv:
@@ -124,6 +129,13 @@ if __name__ == "__main__":
         _SERVICE_LEASE.close()
         sys.exit(0)
 
+# Swap in a staged restore only while we own the data dir and before any DB is opened.
+# native_entry.py does the same right after acquiring its own lease.
+if __name__ == "__main__":
+    _r = restore.apply_pending(DATA)
+    if _r:
+        _LOG.info("启动时处理待恢复备份：%s", json.dumps(_r, ensure_ascii=False))
+
 REPORT_CLIPBOARD = ReportClipboard(os.path.join(DATA, "report-clipboard"))
 
 PORT = int(os.environ.get("JST_PORT", "8765"))
@@ -136,6 +148,10 @@ state_lock = threading.RLock()
 BACKUPS = BackupManager(DATA, state_lock)
 BACKUPS.before_upgrade()
 STORE = Store(os.path.join(DATA, "jst.db"))
+OPLOG = OpLog(lambda: os.path.join(DATA, "operation_log.db"), lambda: STORE.get_kv("oplog_retention_days", "180"))
+# 自动更新：检查 / 下载全部在后台线程；"入库任务生成中"只读检查三个收货库，不取 state_lock。
+UPDATER = UpdateHost(DATA, busy=lambda: inbound_busy_reason(
+    [os.path.join(DATA, n) for n in ("jst.db", "unplanned.db", "joint_receipts.db")]))
 JST = JstClient()
 LOGIN_MEMORY = LoginMemory(DATA, STORE)
 QR_LOGIN_OPTIONS = {}
@@ -405,6 +421,55 @@ def load_partners(refresh=False):
             except Exception:
                 pass
         return {"owners": [], "wms": [], "err": True, "err_msg": str(e)[:120]}
+
+
+def partners_for_scope():
+    """PDA 收货范围校验用的货主 / 分仓清单。**调用方不得持有 state_lock。**
+
+    只在读写本地缓存时短暂拿 state_lock；缓存缺失需要访问聚水潭时，用登录快照客户端
+    （clone_for_catalog，与扫码 / 登录请求不共享 cookie 字典）在锁外拉取，结果回锁内按
+    PARTNERS_GEN / 账号校验后再写缓存，避免一次 ERP 超时把电脑端扫码全部卡住。
+    失败时与 load_partners 一样回落到同账号的旧缓存；仍没有则返回 err。
+    """
+    import copy
+    with state_lock:
+        cached = STORE.get_kv("partners_json", "")
+        if not JST.uid:
+            return {"owners": [], "wms": [], "err": True, "err_msg": "电脑端未登录"}
+        ts = float(STORE.get_kv("partners_ts", "0") or 0)
+        if cached and time.time() - ts < PARTNERS_TTL:
+            try:
+                d = json.loads(cached)
+                if _partners_cache_ok(d):
+                    return d
+            except Exception:
+                pass
+        gen, ident = PARTNERS_GEN, (JST.uid, JST.coid)
+        client = JST.clone_for_catalog() if hasattr(JST, "clone_for_catalog") else copy.copy(JST)
+    try:
+        data = {"owners": client.partners(), "wms": client.wms_list(), "ts": now_str(),
+                "ver": PARTNERS_CACHE_VER}
+        if not data["owners"] and not data["wms"]:
+            raise BizError("empty partner list")
+    except Exception as e:
+        log("partners (PDA) fail: %s" % e)
+        with state_lock:
+            if gen == PARTNERS_GEN and ident == (JST.uid, JST.coid):
+                cached = STORE.get_kv("partners_json", "")
+                try:
+                    d = json.loads(cached) if cached else None
+                    if d and _partners_cache_ok(d):
+                        return d
+                except Exception:
+                    pass
+        return {"owners": [], "wms": [], "err": True, "err_msg": str(e)[:120]}
+    with state_lock:
+        if gen != PARTNERS_GEN or ident != (JST.uid, JST.coid):
+            log("partners (PDA) 拉取期间账号已切换，丢弃旧结果")
+            return {"owners": [], "wms": [], "err": True, "err_msg": "登录账号已切换，请重新读取清单"}
+        STORE.set_many({"partners_json": json.dumps(data, ensure_ascii=False),
+                        "partners_ts": str(time.time())})
+    return data
 
 
 def catalog_context(owner="", auth=""):
@@ -720,6 +785,7 @@ def full_state(sid=0):
             "sound": STORE.get_kv("sound", "1"),
             "sku_lookup": STORE.get_kv("sku_lookup", "1"),
             "scan_ignore_disabled": STORE.get_kv("scan_ignore_disabled", "1"),
+            "oplog_retention_days": STORE.get_kv("oplog_retention_days", "180"),
             "inbound_validate_purchase": STORE.get_kv("inbound_validate_purchase", "1"),
             "catalog_auto": STORE.get_kv("catalog_auto", "1"),
             "catalog_online": STORE.get_kv("catalog_online", "0"),
@@ -754,13 +820,21 @@ def po_items(sid, bid=0):
     # 这样每行 recv 之和 = SKU 实收合计，不会每行都显示总数。
     planned, _ = STORE.sku_comparison(sid, base)
     left = {k: p["recv"] for k, p in planned.items()}
+    budget = {k: p["plan"] for k, p in planned.items()}
     last_idx = {}
     for i, it in enumerate(base):
         last_idx["sku:" + str(it.get("sku_id"))] = i
     out = []
     for i, it in enumerate(base):
         key = "sku:" + str(it.get("sku_id"))
-        plan = float(it.get("qty") or 0)
+        po_qty = float(it.get("qty") or 0)
+        if planned[key].get("plan_basis") == "round":
+            # 本轮应收按 SKU 计算（同 receiving_round），再按采购单顺序分摊到各行：
+            # 每行不超过该行采购数量，余数记在该 SKU 最后一行，各行之和 = SKU 本轮应收。
+            plan = budget[key] if last_idx[key] == i else min(max(po_qty, 0.0), budget[key])
+            budget[key] -= plan
+        else:
+            plan = po_qty
         if last_idx[key] == i:
             got = left[key]
         else:
@@ -771,10 +845,11 @@ def po_items(sid, bid=0):
             "idx": i, "poi_id": it.get("poi_id"), "sku_id": it.get("sku_id"),
             "i_id": it.get("i_id"), "sku_code": it.get("sku_code"),
             "aux_codes": it.get("aux_codes"), "name": it.get("name"), "spec": it.get("spec"),
-            "plan": plan, "recv": got,
+            "plan": plan, "recv": got, "po_qty": po_qty,
             "done": abs(got - plan) < 1e-6,
             "over": got > plan + 1e-6,
             "sku_plan": sku["plan"], "sku_recv": sku["recv"],
+            "sku_po_total": sku["po_total"], "plan_basis": sku["plan_basis"],
         })
     return out
 
@@ -874,6 +949,25 @@ class _UnplannedLazy:
 
 UNPLANNED = _UnplannedLazy()
 
+def unplanned_tracking_hint(session, tracking_no):
+    """普通收货扫物流单号时，只读查询「无采购单收货」是否已登记同一单号。
+
+    独立只读连接，不初始化 UNPLANNED、不写库；库不存在直接跳过。
+    任何异常只记日志，绝不阻断收货。
+    """
+    path = os.path.join(DATA, "unplanned.db")
+    if not os.path.exists(path):
+        return None
+    try:
+        return unplanned_hint.lookup(path, tracking_no, (session or {}).get("po_id") or "")
+    except Exception as e:
+        try:
+            log("unplanned tracking hint skipped: %s: %s" % (type(e).__name__, str(e)[:200]))
+        except Exception:
+            pass
+        return None
+
+
 def purchase_sources():
     stores = {'receipt': STORE}
     if getattr(UNPLANNED, 'instance', UNPLANNED) is not None or os.path.exists(os.path.join(DATA,'unplanned.db')):
@@ -958,6 +1052,58 @@ def _rollback_open_transaction(path=""):
 
 # ---------------------------------------------------------------- HTTP
 
+def restore_pending():
+    return os.path.isdir(os.path.join(DATA, restore.PENDING))
+
+
+def restore_source(q):
+    """id = folder name under data/backups (no traversal); path = explicit folder/manifest/zip."""
+    bid, path = str(q.get("id") or "").strip(), str(q.get("path") or "").strip()
+    if bid:
+        for row in restore.list_backups(BACKUPS.root):
+            if os.path.basename(row["directory"]) == bid:
+                return row["directory"]
+        raise ValueError("找不到该备份")
+    if path:
+        if not os.path.exists(path):
+            raise ValueError("找不到备份文件：%s" % path)
+        return path
+    raise ValueError("请选择要恢复的备份")
+
+
+def _restore_busy_rows(db, sql):
+    try:
+        return db.execute(sql).fetchone()[0]
+    except sqlite3.Error:
+        return 0
+
+
+def restore_blockers():
+    out = []
+    dbs = [("收货", STORE.db, False)]
+    for label, lazy, fname in (("无采购单", UNPLANNED, "unplanned.db"), ("联合收货", JOINT, "joint_receipts.db")):
+        if lazy.instance is not None:
+            dbs.append((label, lazy.instance.store.db, False))
+        elif os.path.isfile(os.path.join(DATA, fname)):
+            from pathlib import Path
+            uri = Path(DATA, fname).resolve().as_uri() + "?mode=ro"
+            dbs.append((label, sqlite3.connect(uri, uri=True, timeout=5), True))
+    for label, db, own in dbs:
+        try:
+            if _restore_busy_rows(db, "SELECT COUNT(*) FROM inbound_job WHERE status NOT IN ('complete','rejected')"):
+                out.append("%s有未完成的入库" % label)
+        finally:
+            if own:
+                db.close()
+    if _restore_busy_rows(STORE.db, "SELECT COUNT(*) FROM inventory_op WHERE status IN ('sending','unknown')"):
+        out.append("有正在提交或结果未知的盘点")
+    if _restore_busy_rows(STORE.db, "SELECT COUNT(*) FROM pda_request WHERE status IN ('sending','unknown')"):
+        out.append("有正在提交或结果未知的PDA请求")
+    if getattr(LAN, "server", None):
+        out.append("PDA服务正在运行，请先停止PDA服务")
+    return out
+
+
 class DesktopHTTPServer(ThreadingHTTPServer):
     # Windows may reject bursts above the stdlib's five pending connections.
     # WebView loads many assets while the native recorder polls this same port;
@@ -992,7 +1138,29 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
     def _json(self, obj, code=200):
+        self._oplog_resp = obj
         self._send(code, json.dumps(obj, ensure_ascii=False))
+
+    def _op_device(self):
+        return {"kind": "desktop", "name": "电脑"}
+
+    def _run_logged(self, path, fn):
+        """Run a POST handler with operation-log hooks; oplog failures never affect the request."""
+        self._oplog_resp = None
+        ctx = None
+        try:
+            ctx = oplog_hooks.before(sys.modules[__name__], self, path, self._body())
+        except Exception as e:  # noqa: BLE001
+            try: OPLOG._note_failure(e)
+            except Exception: pass
+        try:
+            return fn()
+        finally:
+            try:
+                oplog_hooks.after(sys.modules[__name__], self, path, self._body(), self._oplog_resp, ctx)
+            except Exception as e:  # noqa: BLE001
+                try: OPLOG._note_failure(e)
+                except Exception: pass
 
     def _ok(self, **kw):
         d = {"ok": True}
@@ -1101,13 +1269,41 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             return self._fail('图文未完整复制，请确认剪贴板未被占用后重试', code=503)
 
+    def _update_post(self, path):
+        """自动更新接口：不取 state_lock；联网工作只在 UpdateHost 的后台线程里进行。"""
+        try:
+            if hasattr(self, "_desktop_body"):
+                del self._desktop_body
+            body = self._desktop_body = self._body()
+            body = body if isinstance(body, dict) else {}
+            if path == "/api/update/settings":
+                return self._ok(**UPDATER.update_settings(body))
+            if path == "/api/update/check":
+                UPDATER.check_async(force=True)
+                return self._ok(**UPDATER.status())
+            if path == "/api/update/download":
+                ch = body.get("channel")
+                return self._ok(**UPDATER.start_download(ch if isinstance(ch, str) and ch else None))
+            if path == "/api/update/cancel":
+                return self._ok(**UPDATER.cancel_download())
+            if path == "/api/update/prepare":
+                info = UPDATER.prepare_install(recording=body.get("recording") is True)
+                return self._ok(install=info, **UPDATER.status())
+            return self._fail("接口不存在", code=404)
+        except ValueError as e:
+            return self._fail(str(e))
+        except Exception as e:
+            log("%s crash: %s" % (path, e))
+            return self._fail("更新操作失败：%s" % (str(e)[:160] or e.__class__.__name__))
+
     # ---------- GET ----------
     # These GETs never touch STORE / JST and must stay responsive while a long POST
     # holds state_lock (heartbeat feeds the watchdog). Every other /api/* GET runs
     # under state_lock so it cannot interleave with a locked POST on the shared
     # SQLite connection or the shared JstClient session.
     LOCK_FREE_GETS = frozenset(("/api/heartbeat", "/api/pda/download/status",
-                                "/api/report/clipboard/status", "/api/remote/status"))
+                                "/api/report/clipboard/status", "/api/remote/status",
+                                "/api/update/status"))
 
     def do_GET(self):
         if not self._desktop_guard(): return
@@ -1122,6 +1318,9 @@ class Handler(BaseHTTPRequestHandler):
         u = urllib.parse.urlparse(self.path)
         path, qs = u.path, urllib.parse.parse_qs(u.query)
         q = {k: v[0] for k, v in qs.items()}
+
+        if path.startswith('/api/restore/'):
+            return self._restore_get(path, q)
 
         if path.startswith('/api/purchase-watch/'):
             try:
@@ -1184,8 +1383,25 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 return self._fail(str(e))
 
+        if path in ("/api/oplog/list", "/api/oplog/meta", "/api/oplog/export"):
+            # operation_log.db is a separate database guarded by OpLog.lock.
+            try:
+                if path == "/api/oplog/meta":
+                    return self._ok(devices=OPLOG.devices(), modules=OPLOG_MODULES, ops=OPLOG_OPS,
+                                    device_kinds=OPLOG_DEVICE_LABELS, retention_days=OPLOG.retention_days(),
+                                    min_retention_days=MIN_RETENTION_DAYS, max_retention_days=MAX_RETENTION_DAYS)
+                if path == "/api/oplog/export":
+                    fn = "operation-log-%s.csv" % datetime.now().strftime("%Y%m%d-%H%M%S")
+                    return self._send(200, OPLOG.export_csv(q), "text/csv; charset=utf-8",
+                                      {"Content-Disposition": "attachment; filename=%s" % fn})
+                return self._ok(**OPLOG.query(q, q.get("limit") or 500, q.get("offset") or 0))
+            except Exception as e:
+                return self._fail(str(e))
+
         if path == "/api/remote/status":
             return self._ok(**REMOTE.status())
+        if path == "/api/update/status":
+            return self._ok(**UPDATER.status())
         if path == "/api/heartbeat":
             note_beat()
             return self._ok(ts=time.time())
@@ -1495,18 +1711,22 @@ class Handler(BaseHTTPRequestHandler):
         if not self._desktop_guard(): return
         if path == "/api/report/clipboard":
             return self._copy_report_clipboard()
+        if path.startswith("/api/update/"):
+            return self._update_post(path)
         try:
             # Consume once even for no-argument routes; keep-alive must not treat
             # an unread JSON body as the next HTTP request.
             if hasattr(self, "_desktop_body"):
                 del self._desktop_body
             self._desktop_body = self._body()
+            if path != "/api/restore/cancel" and restore_pending():
+                return self._fail("已选择恢复备份，正在等待重启应用。重启前不能修改任何数据；如需继续使用，请先取消恢复。", code=409)
             fn = getattr(self, "_post_" + path.strip("/").replace("/", "_").replace("-", "_"), self._nf)
             with state_lock:
                 try:
                     if path in ("/api/login", "/api/login/restore", "/api/sms/login", "/api/qr/finish", "/api/logout"):
                         LAN.invalidate()
-                    return fn()
+                    return self._run_logged(path, fn)
                 finally:
                     # A handler that failed (or caught its own error) must never leave a
                     # half-written transaction on the shared connection for the next
@@ -1674,6 +1894,68 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             return self._fail(str(e))
 
+    # ---------- restore ----------
+    def _restore_get(self, path, q):
+        try:
+            if path == "/api/restore/list":
+                return self._ok(backups=restore.list_backups(BACKUPS.root), pending=restore_pending(),
+                                blockers=restore_blockers())
+            if path == "/api/restore/preview":
+                src = restore_source(q)
+                v = restore.verify(src) if os.path.isdir(src) else {"ok": True, "errors": []}
+                pv = restore.preview(src, DATA) if os.path.isdir(src) else None
+                return self._ok(verify={"ok": v["ok"], "errors": v["errors"]}, preview=pv,
+                                blockers=restore_blockers())
+            if path == "/api/restore/result":
+                rp = os.path.join(DATA, restore.RESULT)
+                if not os.path.isfile(rp):
+                    return self._ok(result=None)
+                with open(rp, encoding="utf-8") as f:
+                    res = json.load(f)
+                os.remove(rp)  # one-time banner
+                return self._ok(result=res)
+            return self._fail("接口不存在", code=404)
+        except Exception as e:
+            return self._fail(str(e))
+
+    def _post_api_restore_stage(self):
+        b = self._body()
+        if os.environ.get("JST_NATIVE_PORT"):
+            token = os.environ.get("JST_NATIVE_TOKEN", "")
+            if not token or self.headers.get("X-Native-Token") != token:
+                return self._fail("恢复备份只能在本机应用内操作", code=403)
+        if b.get("confirm") != "恢复":
+            return self._fail("请输入“恢复”确认后再恢复备份", code=400)
+        if b.get("recording") is True:
+            return self._fail("正在录像，请先停止录像再恢复备份", code=409)
+        blockers = restore_blockers()
+        if blockers:
+            return self._fail("当前不能恢复：" + "；".join(blockers), code=409)
+        try:
+            src = restore_source(b)
+        except Exception as e:
+            return self._fail(str(e), code=400)
+        try:
+            pre = BACKUPS.create("pre-restore")
+        except Exception as e:
+            return self._fail("恢复前自动备份失败，已取消恢复：" + str(e))
+        try:
+            manifest = restore.stage(src, DATA)
+        except Exception as e:
+            return self._fail("备份校验失败，未恢复：" + str(e))
+        log("已选择恢复备份 %s；已完成恢复前自动备份" % src)
+        return self._ok(pending=True, pre_restore=pre, pre_restore_label=restore.REASON_LABELS["pre-restore"],
+                        manifest=manifest, msg="已准备恢复，请重启应用完成恢复")
+
+    def _post_api_restore_cancel(self):
+        self._body()
+        import shutil
+        for name in (restore.PENDING, restore.PENDING_TMP):
+            p = os.path.join(DATA, name)
+            if os.path.isdir(p):
+                shutil.rmtree(p)
+        return self._ok(pending=False, msg="已取消恢复")
+
     def _post_api_backup_create(self):
         self._body()
         try:
@@ -1752,7 +2034,7 @@ class Handler(BaseHTTPRequestHandler):
         b = self._body()
         allow = ("default_id_type", "owner_ids", "scan_step", "sound",
                  "sku_lookup", "pick_owner", "pick_auth", "catalog_auto", "catalog_online",
-                 "inbound_validate_purchase", "scan_ignore_disabled")
+                 "inbound_validate_purchase", "scan_ignore_disabled", "oplog_retention_days")
         d = {}
         for k, v in b.items():
             if k not in allow:
@@ -1762,6 +2044,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._fail("校验采购单明细开关只能为0或1")
             if k == "scan_ignore_disabled" and v not in ("0", "1"):
                 return self._fail("扫码忽略禁用商品开关只能为0或1")
+            if k == "oplog_retention_days":
+                try:
+                    n = int(v)
+                except ValueError:
+                    return self._fail("操作记录保留天数必须是整数")
+                if not MIN_RETENTION_DAYS <= n <= MAX_RETENTION_DAYS:
+                    return self._fail("操作记录保留天数需在%d–%d天之间" % (MIN_RETENTION_DAYS, MAX_RETENTION_DAYS))
+                v = str(n)
             if k == "scan_step":
                 try:
                     v = str(validate_qty(b[k]))
@@ -2092,16 +2382,25 @@ class Handler(BaseHTTPRequestHandler):
             return self._fail("请先创建收货批次")
         if s["state"] == "closed":
             return self._fail("该采购单已结单", hint="如需继续收货，请重新「创建收货批次」")
-        if s["state"] == "paused":
-            STORE.activate_session(s["id"])    # 挂着扫单号 = 顺手恢复
         no = (b.get("tracking_no") or "").strip()
         if not no:
             return self._fail("请输入或扫描物流单号")
+        # 新物流单号才查「无采购单收货」登记；已在本单建过的子批次（补扫）不再提示。
+        hint = None
+        if not STORE.db.execute("SELECT 1 FROM batch WHERE session_id=? AND tracking_no=?", (s["id"], no)).fetchone():
+            hint = unplanned_tracking_hint(s, no)
+        # 只有桌面收货界面会传 check_unplanned=true：命中时先不建子批次，等用户确认。
+        # PDA / 原生桥 / 旧调用方不传该参数：照常建子批次，只在返回里附带 unplanned_hint。
+        if hint and b.get("check_unplanned") is True and b.get("confirm_unplanned") is not True:
+            return self._ok(confirm_required=True, unplanned_hint=hint, tracking_no=no, sid=s["id"])
+        if s["state"] == "paused" and not getattr(self, "_pda_request", False):
+            STORE.activate_session(s["id"])    # 电脑端挂着扫单号 = 顺手恢复；PDA 只建子批次，不抢电脑端当前单
         batch, created = STORE.ensure_batch(s["id"], no)
+        extra = {"unplanned_hint": hint} if hint else {}
         return self._ok(batch=batch, created=created,
                         lines=STORE.batch_lines(batch["id"]),
                         batches=STORE.batches(s["id"]),
-                        batch_id=batch["id"])
+                        batch_id=batch["id"], **extra)
 
     def _post_api_item_scan(self):
         b = self._body()
@@ -2323,12 +2622,26 @@ class Handler(BaseHTTPRequestHandler):
             bid = int(b.get("batch_id"))
         except Exception:
             return self._fail("参数不完整")
+        # 子批次必须属于指定的收货单（未指定时为当前收货中的单）。
+        # 已结单的旧轮次同样允许删除 / 修改，这里只校验归属，不加只读限制。
+        try:
+            want = int(b.get("sid") or 0)
+        except Exception:
+            return self._fail("收货单参数不合法")
+        if want <= 0:
+            cur = STORE.active_session()
+            want = cur["id"] if cur else 0
+        row = STORE.db.execute("SELECT session_id FROM batch WHERE id=?", (bid,)).fetchone()
+        if not row:
+            return self._fail("找不到该物流子批次")
+        if not want or row["session_id"] != want:
+            return self._fail("物流子批次不属于指定的收货单", hint="请刷新后在该子批次所属的收货单中删除")
         try:
             n = STORE.del_batch(bid)
         except Exception as e:
             log("batch del fail: %s" % e)
             return self._fail(str(e) if "入库" in str(e) else "删除失败")
-        s = self._cur_session(b.get("sid") or 0)
+        s = STORE.get_session(want)
         bs = STORE.batches(s["id"]) if s else []
         return self._ok(deleted=n, batches=bs,
                         lines=STORE.batch_lines(bs[-1]["id"]) if bs else [],
@@ -2391,16 +2704,18 @@ class Handler(BaseHTTPRequestHandler):
             sid = int(b.get("sid") or 0)
         except Exception:
             sid = 0
-        if not sid:
-            s = STORE.active_session()
-            sid = s["id"] if s else 0
-        if not sid:
-            return self._fail("没有可删除的记录")
+        # 必须明确指定要删的收货单：不再缺省删除「当前收货中」的单（误调用会整单丢数据）。
+        if sid <= 0:
+            return self._fail("请指定要删除的收货单", hint="缺少 sid，未删除任何记录")
+        s = STORE.get_session(sid)
+        if not s:
+            return self._fail("找不到该收货单记录")
         try:
             stat = STORE.del_session(sid)
         except Exception as e:
             log("session del fail: %s" % e)
             return self._fail(str(e) if "入库" in str(e) else "删除失败")
+        self._deleted_session = (sid, s["state"])   # native_bridge 据此判断是否需要停录
         return self._ok(stat=stat, msg="已删除该采购单收货记录（%d 个子批次 / %d 条明细）"
                                        % (stat["batches"], stat["lines"]))
 
@@ -2689,6 +3004,7 @@ def main():
     WATCH.start()
     CATALOG_SYNC.start()
     BACKUPS.start()
+    UPDATER.start()
     REMOTE.service_port = PORT
     REMOTE.start_if_enabled()   # 默认关闭；仅在设置里启用后才监听 [::]
     log("版本 %s；服务已启动 http://127.0.0.1:%d" % (VERSION, PORT))
@@ -2701,6 +3017,10 @@ def main():
         log("收到手动退出指令，等待正在处理的本机请求结束")
     finally:
         WATCH.stop.set()
+        try:
+            UPDATER.stop()
+        except Exception:
+            pass
         try:
             REMOTE.stop()
         except Exception:

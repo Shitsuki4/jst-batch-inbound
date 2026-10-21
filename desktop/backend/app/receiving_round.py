@@ -43,6 +43,25 @@ def aggregate(items):
     return rows
 
 
+def round_targets(session):
+    """本轮应收（按 SKU）：本轮起始基线的 采购数量 − ERP已入库，与 view() 的 plan 同一口径。
+
+    只返回能可靠算出的 SKU：{sku_id: Decimal}。旧记录（没有起始基线）或缺少可靠数量的
+    SKU 不在结果里，由调用方标为「本轮应收待核实」并按采购总数对照（plan_basis='total'）。
+    差异表、左栏 po_items、远程页都用它，避免同一屏出现两套「应收」。
+    """
+    baseline = (session or {}).get("round_baseline_json")
+    if baseline is None:
+        return {}
+    out = {}
+    for key, start in aggregate(load(baseline)).items():
+        if key.startswith("__missing_sku:"):
+            continue
+        if start["ordered"] is not None and start["erp_received"] is not None:
+            out[key] = max(start["ordered"] - start["erp_received"], Decimal(0))
+    return out
+
+
 def view(store, sid):
     session = store.get_session(sid) or {}
     baseline = session.get("round_baseline_json")

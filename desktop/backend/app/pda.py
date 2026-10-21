@@ -25,6 +25,7 @@ BODY_MAX = 65536
 BODY_DEADLINE = 5.0           # whole body must arrive within this many seconds
 PAIR_PER_IP_PER_MIN = 10      # pairing attempts per source IP per minute
 PAIR_MAX_FAILURES = 5         # wrong codes before the current pairing code is burned
+SCOPE_TTL = 60                # 货主/分仓范围在 PDA 侧的短缓存（成功与失败都缓存），登录/切换账号即失效
 
 class SecureServer(ThreadingHTTPServer):
     daemon_threads = True
@@ -49,12 +50,16 @@ class PdaHost:
         self.port=0
         self.pin=""
         self.identity=""
+        # 收货范围（货主 / 分仓公司集合）短缓存：PDA 每 2 秒轮询一次，不能每次、每张单都去拉清单。
+        self.scope_cache=None
+        self.scope_fetch=threading.Lock()   # 冷缓存时只让一个线程去拉，其他线程等它的结果
 
     def who(self):
         return str(self.app.JST.coid)+":"+str(self.app.JST.uid) if self.app.JST.uid else ""
 
     def invalidate(self):
         with self.lock:
+            self.scope_cache=None
             self.sessions={}
             self.pair_code=""
             self.pair_until=0
@@ -202,19 +207,67 @@ class PdaHost:
         with self.lock:
             self.sessions={k:v for k,v in self.sessions.items() if v["id"]!=device_id}
 
-    def receipt_allowed(self, s):
-        if not s: return False
-        p=self.app.load_partners()
-        if p.get("err"): return False
-        owners={str(x["id"]) for x in p.get("owners",[])}|{str(self.app.JST.coid)}
-        auths={str(x["id"]) for x in p.get("wms",[])}|{str(self.app.JST.coid)}
+    def _scope_key(self):
+        return (self.who(), getattr(self.app,"PARTNERS_GEN",0))
+
+    def receipt_scope(self):
+        """当前账号可收货的货主 / 分仓公司集合，每次请求只算一次。
+
+        返回 {"ok":True,"owners":set,"auths":set} 或 {"ok":False,"err":原因}。
+        成功和失败都缓存 SCOPE_TTL 秒；登录 / 切换账号（PARTNERS_GEN 或账号变化）、
+        停用 PDA 时立即失效。**调用方不要持有 app.state_lock**：清单需要访问聚水潭时
+        在全局锁外进行（见 server.partners_for_scope）。
+        """
+        key=self._scope_key()
+        if not key[0]: return {"ok":False,"err":"电脑端未登录"}
+        with self.lock:
+            c=self.scope_cache
+            if c and c["key"]==key and c["until"]>time.monotonic(): return c["scope"]
+        with self.scope_fetch:
+            with self.lock:
+                c=self.scope_cache
+                if c and c["key"]==key and c["until"]>time.monotonic(): return c["scope"]
+            fetch=getattr(self.app,"partners_for_scope",None)
+            if fetch is None:            # 旧调用方 / 测试替身：退回 load_partners
+                with self.app.state_lock: p=self.app.load_partners()
+            else:
+                p=fetch()
+            coid=str(self.app.JST.coid)
+            if p.get("err"):
+                scope={"ok":False,"err":p.get("err_msg") or "货主/分仓清单读取失败"}
+            else:
+                scope={"ok":True,"owners":{str(x["id"]) for x in p.get("owners",[])}|{coid},
+                       "auths":{str(x["id"]) for x in p.get("wms",[])}|{coid}}
+            with self.lock:
+                if self._scope_key()==key:
+                    self.scope_cache={"key":key,"scope":scope,"until":time.monotonic()+SCOPE_TTL}
+            return scope
+
+    @staticmethod
+    def _valid_ids(s):
         owner,auth=str(s.get("owner_co_id") or ""),str(s.get("auth_co_id") or "")
-        return owner not in ("","0","2147483647") and auth not in ("","0","2147483647") and owner in owners and auth in auths
+        return owner not in ("","0","2147483647") and auth not in ("","0","2147483647")
+
+    def receipt_allowed(self, s, scope=None):
+        if not s or not self._valid_ids(s): return False
+        scope=scope if scope is not None else self.receipt_scope()
+        if not scope.get("ok"): return False
+        return str(s.get("owner_co_id")) in scope["owners"] and str(s.get("auth_co_id")) in scope["auths"]
+
+    def receipt_rows(self, sessions, scope):
+        """PDA 收货单列表。清单读取失败时降级：仍列出货主/仓库公司字段有效的单子，
+        标记 scope_unverified，只读可见；扫码、改数、入库等写操作仍要求范围校验通过。"""
+        if scope.get("ok"):
+            return [s for s in sessions if self.receipt_allowed(s, scope)], ""
+        rows=[dict(s,scope_unverified=True) for s in sessions if self._valid_ids(s)]
+        return rows, "货主/仓库清单暂时读取失败（%s），列表未按账号范围核实，暂不能在PDA收货；请稍后重试或在电脑端刷新清单" % scope.get("err","")
 
 
 def make_handler(host, base):
     app=host.app
     class Handler(base):
+        _pda_request=True   # native_bridge / server 据此区分：PDA 请求不驱动电脑端录像、不抢电脑端当前单
+
         def _send(self, code, body=b"", ctype="application/json; charset=utf-8", extra=None):
             headers={"X-Content-Type-Options":"nosniff","Referrer-Policy":"no-referrer", "X-Frame-Options":"DENY",
                 "Content-Security-Policy":"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"}
@@ -292,7 +345,10 @@ def make_handler(host, base):
             if not sid and b.get("job_id"):
                 job=app.STORE.get_inbound(int(b["job_id"]))
                 sid=job["session_id"] if job else 0
-            if not sid or not host.receipt_allowed(app.STORE.get_session(sid)):
+            scope=getattr(self,"receipt_scope",None) or host.receipt_scope()
+            if sid and not scope.get("ok"):
+                raise ValueError("货主/仓库清单暂时读取失败，暂不能在PDA操作收货单，请稍后重试或在电脑端刷新清单（%s）" % scope.get("err",""))
+            if not sid or not host.receipt_allowed(app.STORE.get_session(sid), scope):
                 raise ValueError("收货单不在当前账号的具体货主/仓库公司范围，请在电脑端检查")
             if path in ("/api/item/scan","/api/item/choose"):
                 bid=int(b.get("batch_id") or 0)
@@ -306,18 +362,30 @@ def make_handler(host, base):
                 if path.endswith("choose"):
                     b["item"]=app.receipt_selection(app.STORE.get_session(sid), b)
 
+        def _op_device(self):
+            d=getattr(self,"device",None) or {}
+            return {"kind":"pda","id":d.get("id",""),"name":d.get("name","") or "PDA"}
+
         def do_GET(self):
             u=urllib.parse.urlparse(self.path)
             q=dict(urllib.parse.parse_qsl(u.query))
+            # 授权校验和收货范围（可能要访问聚水潭）都在全局锁外完成，每个请求只算一次。
+            self.receipt_scope=None
+            try:
+                if not self.guard(): return
+                if u.path=="/api/pda/receipts" or u.path.startswith(("/api/inbound/","/api/learned/")) or u.path=="/api/session/detail":
+                    self.receipt_scope=host.receipt_scope()
+            except Exception as e:
+                return self._fail(str(e))
             with app.state_lock:
                 try:
-                    if not self.guard(): return
                     if u.path in ASSETS:
                         return self._static("/pda.html" if u.path in ("/","/pda.html") else u.path)
                     if u.path=="/api/pda/info": return self._ok(user=app.JST.uname,company=app.JST.coname,device=self.device["name"],expires=self.device["expires"])
                     if u.path=="/api/pda/receipts":
-                        rows=[app.session_payload(s["id"]) for s in app.STORE.recent_sessions(100) if host.receipt_allowed(s)]
-                        return self._ok(rows=rows)
+                        allowed,warning=host.receipt_rows(app.STORE.recent_sessions(100),self.receipt_scope)
+                        rows=[dict(app.session_payload(s["id"]),scope_unverified=True) if s.get("scope_unverified") else app.session_payload(s["id"]) for s in allowed]
+                        return self._ok(rows=rows,scope_warning=warning) if warning else self._ok(rows=rows)
                     if u.path=="/api/pda/request":
                         r=app.OPERATIONS.request(q.get("id",""))
                         return self._ok(status=r["status"],response=json.loads(r["response"]) if r.get("response") else None)
@@ -335,18 +403,25 @@ def make_handler(host, base):
             pairing=path=="/api/pda/pair"
             # Authenticate and read the whole body BEFORE taking the global business lock:
             # an unauthenticated or slow sender must never hold state_lock.
+            self.receipt_scope=None
             try:
                 if not self.guard(pairing): return
                 b=self._body(PAIR_BODY_MAX if pairing else BODY_MAX)
                 if pairing:
                     token=host.pair(b.get("code",""),b.get("name",""),self.client_address[0])
                     return self._send(200,json.dumps({"ok":True}),extra={"Set-Cookie":"jst_pda="+token+"; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=28800"})
+                if path in RECEIPT or path=="/api/line/edit" or path.startswith(("/api/inbound/","/api/learned/")):
+                    self.receipt_scope=host.receipt_scope()   # 锁外取范围（含条码学习，避免锁内取范围与 scope_fetch 反向加锁）
             except Exception as e:
                 return self._fail(str(e))
             with app.state_lock:
                 try:
                     if path not in POSTS: return self._fail("PDA不能使用此接口",code=403)
                     if path in RECEIPT or path == "/api/line/edit" or path.startswith(("/api/inbound/","/api/learned/")): self.check_receipt(b)
+                    if path == "/api/tracking/scan":
+                        # PDA 请求按编号记账，必须一次落库：不走「无采购单登记」确认流程，
+                        # 只在响应里带 unplanned_hint 提示（见 server._post_api_tracking_scan）。
+                        b.pop("check_unplanned", None); b.pop("confirm_unplanned", None)
                     if path in RECEIPT and not (path=="/api/item/scan" and b.get("qty")==0):
                         rid=self.headers.get("X-Request-ID","")
                         old=app.OPERATIONS.reserve(rid,path,b,self._actor())
@@ -355,7 +430,7 @@ def make_handler(host, base):
                             return self._fail("此请求结果待核实，禁止重复计数；请查看本地实收记录")
                         self.receipt_request=rid
                     fn=getattr(self,"_post_"+path.strip("/").replace("/","_"))
-                    return fn()
+                    return self._run_logged(path,fn)
                 except Exception as e:
                     # A handler may have committed before failing. Leave reservation unknown, never replay it.
                     if app.STORE.db.in_transaction:

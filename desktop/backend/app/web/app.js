@@ -851,7 +851,41 @@
     return scanItem(code);
   }
 
-  function scanTracking(code) {
+  // 「无采购单收货」已登记同一物流单号时的确认：选「仍在此处收货」后，
+  // 本页面会话内同一采购单 + 同一单号不再重复提示。
+  var unplannedAccepted = {};
+  function unplannedKey(sid, code) { return String(sid || '') + '|' + String(code || '').replace(/\s+/g, '').toUpperCase(); }
+  function showUnplannedHint(code, sid, hint) {
+    var rec = hint.record || {}, same = hint.kind === 'same_po';
+    try { if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); } catch (e) { }
+    var others = (hint.matches || []).length > 1 ? '<p class="muted">另有 ' + ((hint.matches || []).length - 1) + ' 条相关登记，可在无采购单收货中按物流单号查询。</p>' : '';
+    var html = '<div class="unplanned-hint" data-unplanned-hint="' + esc(hint.kind) + '">'
+      + '<p style="font-weight:700;color:' + (same ? '#d93a3a' : '#b26a00') + '">' + esc(hint.message) + '</p>'
+      + '<table class="kv"><tbody>'
+      + '<tr><th>物流单号</th><td class="mono">' + esc(code) + '</td></tr>'
+      + '<tr><th>无采购单批次</th><td class="mono">' + esc(rec.input_no || '') + '</td></tr>'
+      + '<tr><th>登记时间</th><td>' + esc(rec.registered_at || '未知') + '</td></tr>'
+      + '<tr><th>件数 / SKU数</th><td>' + esc(rec.qty) + ' 件 / ' + esc(rec.sku_count) + ' 个SKU</td></tr>'
+      + '<tr><th>当前状态</th><td>' + esc(rec.status || '') + '</td></tr>'
+      + (rec.note ? '<tr><th>备注</th><td>' + esc(rec.note) + '</td></tr>' : '')
+      + '</tbody></table>' + others
+      + '<p class="muted">尚未在本采购单建立该物流子批次。</p></div>';
+    function dismiss() { closeModal(); flash('已取消：' + code, 'warn'); refocus(); }
+    openModal(same ? '该物流单号已在无采购单中绑定本采购单' : '该物流单号已在无采购单收货登记', html, [
+      { text: same ? '去无采购单查看' : '去无采购单绑定', cls: 'btn-primary', fn: function () {
+        closeModal();
+        location.href = hint.open_url || ('/unplanned.html?sid=' + Number(rec.sid));
+      } },
+      { text: '仍在此处收货', cls: 'btn-ghost', fn: function () {
+        unplannedAccepted[unplannedKey(sid, code)] = true;
+        closeModal();
+        runSerial(function () { return scanTracking(code, true); });
+      } }
+    ], dismiss);
+    beep(320, 0.12);
+  }
+
+  function scanTracking(code, unplannedConfirmed) {
     // 扫到别的采购单号不再死拦：提示一下，由用户决定是切单还是继续。
     // （以前这里直接拒绝，导致一张单没收完、别的单完全进不来。）
     var a = S.session;
@@ -862,13 +896,20 @@
       refocus();
       return Promise.resolve();
     }
-    return api('/api/tracking/scan', { method: 'POST', body: { tracking_no: code, sid: a && a.id } }).then(function (r) {
+    var body = { tracking_no: code, sid: a && a.id, check_unplanned: true };
+    if (unplannedConfirmed || unplannedAccepted[unplannedKey(a && a.id, code)]) body.confirm_unplanned = true;
+    return api('/api/tracking/scan', { method: 'POST', body: body }).then(function (r) {
       if (!r.ok) {
         if (r.msg === '当前账号无此操作权限') return handleFail(r);
         // 常见错误（如结单后误扫）用轻提示，别弹「无权限」吓人
         toast(r.msg || '操作失败', 'err');
         beep(180, 0.16);
         refocus();
+        return;
+      }
+      if (r.confirm_required && r.unplanned_hint) {
+        // 后端尚未建子批次：由用户选择去无采购单绑定，或仍在此处收货。
+        showUnplannedHint(code, a && a.id, r.unplanned_hint);
         return;
       }
       S.current_batch = r.batch.id;
@@ -1435,7 +1476,7 @@
       + fmtNum(g.total) + ' 件</span>'
       + '<button class="icon-btn js-edit-batch" data-id="' + g.id + '" data-no="' + esc(g.tracking_no)
       + '" title="修改物流单号">✎</button>'
-      + '<button class="icon-btn js-del-batch" data-id="' + g.id + '" title="删除该物流单号">✕</button>'
+      + '<button class="icon-btn js-del-batch" data-id="' + g.id + '" data-sid="' + esc(g.session_id || '') + '" title="删除该物流单号">✕</button>'
       + '</div>'
       + '<table class="tbl"><thead><tr><th>商品编码</th><th>商品名称</th><th>数量</th><th></th></tr></thead>'
       + '<tbody>' + rows + '</tbody></table></div>';
@@ -1593,7 +1634,7 @@
           + '<div class="q-sub">该批次商品明细（数量可直接修改）</div>'
           + linesTable(b.lines)
           + '<div class="q-actions">'
-          + '<button class="btn btn-ghost btn-sm danger js-del-batch" data-id="' + b.id + '">删除该子批次</button>'
+          + '<button class="btn btn-ghost btn-sm danger js-del-batch" data-id="' + b.id + '" data-sid="' + esc(b.session_id || '') + '">删除该子批次</button>'
           + '</div></div>';
       }).join('')+extra;
     }).catch(function () { if(queryOpen.tk&&request===querySeq.tk)permAlert(); });
@@ -1624,8 +1665,9 @@
     }
     if ((el = e.target.closest('.js-del-batch'))) {
       id = +el.dataset.id;
+      var batchSid = +el.dataset.sid || (S.session && S.session.id) || 0;   // 后端校验子批次归属
       confirmBox('删除物流单', '将删除该物流单号及其全部收货明细，<br>对应数量会从采购单实收中扣减。', '删除物流单', function () {
-        api('/api/batch/del', { method: 'POST', body: { batch_id: id } }).then(function (r) {
+        api('/api/batch/del', { method: 'POST', body: { batch_id: id, sid: batchSid } }).then(function (r) {
           if (!r.ok) return handleFail(r);
           toast(r.msg || '已删除该物流单', 'ok');
           refreshAfterMutation(id === S.current_batch ? 0 : S.current_batch);
@@ -1709,7 +1751,7 @@
         + '<div class="q-sub">② 各物流单号明细（' + r.groups.length + ' 个，数量可直接修改）</div>'
         + '<div data-record-groups>' + (r.groups.length ? r.groups.map(groupTable).join('') : '<div class="empty">尚未录入任何物流单号</div>') + '</div>'
         + '<div data-initial-snapshot>' + initialPurchaseTable(r) + '</div>'
-        + '<div class="q-actions">' + inboundButton(s.id) + '</div>';
+        + '<div class="q-actions">' + inboundButton(s.id) + ' <button class="btn btn-ghost js-open-oplog" data-sid="' + esc(s.id) + '">查看此单操作记录</button></div>';
       openModal('采购单 ' + s.po_id + ' · 收货明细与差异', '<section class="record-detail" data-sid="' + sid + '">'
         + '<button class="btn btn-ghost btn-sm js-record-refresh" data-id="' + sid + '">刷新实时采购明细</button>'
         + '<p class="hint record-refresh-status" role="status"></p>' + h + '</section>',
@@ -1743,6 +1785,12 @@
   }
   document.addEventListener('click', function (e) {
     if (e.target.closest('.js-record-refresh')) refreshOpenSessionDetail(true);
+  });
+  document.addEventListener('click', function (e) {
+    var b = e.target.closest && e.target.closest('.js-open-oplog');
+    if (!b || typeof window.openOpLog !== 'function') return;
+    if (closeModal() === false) return;
+    window.openOpLog({ source: 'receipt', sid: +b.dataset.sid });
   });
   document.addEventListener('click', function (e) {
     var el = e.target && e.target.closest ? e.target.closest('.js-open-session') : null;

@@ -1,5 +1,6 @@
 """Trial-only additive audit and desktop bridge. No media capture in Python."""
 import threading,json,datetime,urllib.parse,os,csv,io
+from app_version import VERSION as APP_VERSION
 CTX=threading.local()
 def now(): return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='milliseconds')
 def migrate(store):
@@ -51,6 +52,18 @@ def video_context_key(s,key):
 def emit_tracking(s,source,sid,bid,duplicate=False):
  c=video_context(s,source,sid,bid)
  emit(s,'tracking',{'id':c['batchId'],'session_id':c['sessionId'],'tracking_no':c['tracking'],'source':source,'duplicate':bool(duplicate),'context':c})
+
+def recording_session(s,deleted):
+ """删除整张普通收货单时是否需要停录：被删的是当前收货单，或最近一次录像关联
+ （最后一条 tracking 事件，且之后没有 stop）指向它。删除无关的历史单不打断当前录像。"""
+ if not deleted:return False
+ sid,state=deleted
+ if state=='active':return True
+ row=s.STORE.db.execute("SELECT kind,payload FROM native_event WHERE kind IN ('tracking','stop') ORDER BY id DESC LIMIT 1").fetchone()
+ if not row or row['kind']!='tracking':return False
+ try:p=json.loads(row['payload'])
+ except ValueError:return True
+ return p.get('source')=='普通' and str(p.get('session_id'))==str(sid)
 
 def export_store(store,q):
  mode=q.get('mode','events');d=store.db
@@ -118,10 +131,12 @@ def install(s):
     except (ValueError,TypeError):pass
   return b
  def ok(h,**kw):
-  if h.command=='POST':
+  # PDA 请求（pda.py 的 Handler 设置 _pda_request）不驱动电脑端录像：不发 tracking / item / stop 事件。
+  if h.command=='POST' and not getattr(h,'_pda_request',False):
    p=urllib.parse.urlparse(h.path).path;b=getattr(h,'_desktop_body',{});a=b.get('action')
    try:
-    if p=='/api/tracking/scan':
+    # confirm_required (无采购单提示待确认) 未建子批次：不发录像事件。
+    if p=='/api/tracking/scan' and kw.get('batch'):
      batch=kw['batch'];emit_tracking(s,'普通',batch['session_id'],batch['id'],not kw.get('created',True))
     if p in ('/api/unplanned/action','/api/joint/action') and a in ('new','tracking') and kw.get('current_batch'):
      emit_tracking(s,'联合' if p=='/api/joint/action' else '无采购单',kw['session']['id'],kw['current_batch'])
@@ -137,6 +152,7 @@ def install(s):
      for row in rows:emit(s,'item',{'context':video_context(s,source,row['sid'],row['bid'])})
     if p in ('/api/batch/del','/api/batch/rename') or (p in ('/api/unplanned/action','/api/joint/action') and a in ('rename','delete_batch')):emit(s,'stop',{'reason':'物流记录修改，请重新确认物流'})
     if p in ('/api/session/pause','/api/session/pause-report','/api/session/close','/api/logout'):emit(s,'stop',{'reason':p})
+    if p=='/api/session/del' and recording_session(s,getattr(h,'_deleted_session',None)):emit(s,'stop',{'reason':'本地收货批次已删除'})
     if p in ('/api/unplanned/action','/api/joint/action') and a in ('close_session','delete_session'):emit(s,'stop',{'reason':'本地收货批次已结单 / 删除'})
    except Exception as e:
     # A committed business write must not be reported as failed (a retry could double-count).
@@ -163,7 +179,7 @@ def install(s):
        except (ValueError,KeyError):missing.append(key)
       return oldok(h,contexts=contexts,missing=missing)
      if u.path=='/api/native/export':return oldok(h,**export_data(s,q))
-     if u.path=='/api/native/health':return oldok(h,version='3.0.3',last=s.STORE.db.execute('SELECT COALESCE(MAX(id),0) FROM native_event').fetchone()[0])
+     if u.path=='/api/native/health':return oldok(h,version=APP_VERSION,last=s.STORE.db.execute('SELECT COALESCE(MAX(id),0) FROM native_event').fetchone()[0])
    except Exception as e:return h._fail(str(e))
    return h._nf()
   CTX.action='program';CTX.raw='';CTX.scan_at='';CTX.device='电脑/未知'

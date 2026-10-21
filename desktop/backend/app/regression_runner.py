@@ -41,6 +41,43 @@ print("prepared sid=%%s bid=%%s" %% (sid, b["id"]))
 '''
 
 
+SCRIPT_TIMEOUT = int(os.environ.get("JST_REGRESSION_TIMEOUT", "420"))
+# 子进程内先于硬超时 30 秒用 faulthandler 打印全部线程栈并退出，CI 卡住时能直接看到卡在哪。
+_WRAP = ("import faulthandler,os,runpy,sys;p=sys.argv[1];sys.argv=sys.argv[1:];"
+         "sys.path.insert(0,os.path.dirname(os.path.abspath(p)));"
+         "faulthandler.dump_traceback_later(%d,exit=True);runpy.run_path(p,run_name='__main__')")
+
+
+def _say(text):
+    """Print without crashing on a non-UTF-8 console (Windows CI defaults to cp1252)."""
+    try:
+        sys.stdout.write(text + "\n")
+    except UnicodeEncodeError:
+        enc = getattr(sys.stdout, "encoding", None) or "ascii"
+        sys.stdout.write(text.encode(enc, "replace").decode(enc, "replace") + "\n")
+    sys.stdout.flush()
+
+
+def run_script(cmd, name, **kw):
+    """Run one test script with a hard timeout; print progress live so a hang in CI names its script."""
+    if len(cmd) == 2 and cmd[1].endswith(".py"):
+        cmd = [cmd[0], "-c", _WRAP % max(30, SCRIPT_TIMEOUT - 30), cmd[1]]
+    start = time.time()
+    _say(">> %s ..." % name)
+    try:
+        r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=SCRIPT_TIMEOUT, **kw)
+        rc, out = r.returncode, r.stdout.decode("utf-8", "replace")
+    except subprocess.TimeoutExpired as e:
+        raw = e.stdout or b""
+        out = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else raw
+        rc = -9
+        out += "\n!! %s 超时（>%ds），已终止" % (name, SCRIPT_TIMEOUT)
+    if rc != 0:
+        _say(out[-6000:])
+    _say("<< %s rc=%s %.1fs" % (name, rc, time.time() - start))
+    return rc, out
+
+
 def wait_port(port, timeout=15):
     end = time.time() + timeout
     while time.time() < end:
@@ -86,17 +123,15 @@ def run_block(name, base_port, prepare, tests):
                 pass
             return False, "\n".join(lines)
         if prepare:
-            p = subprocess.run([sys.executable, "-c", prepare], cwd=ROOT, env=env,
-                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-            lines.append(p.stdout.decode("utf-8", "replace"))
+            _, out = run_script([sys.executable, "-c", prepare], name + ":prepare", cwd=ROOT, env=env)
+            lines.append(out)
         for t in tests:
             lines.append("-" * 10 + " " + t + " " + "-" * 10)
-            r = subprocess.run([sys.executable, os.path.join(ROOT, t)], cwd=ROOT, env=env,
-                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-            lines.append(r.stdout.decode("utf-8", "replace"))
-            if r.returncode != 0:
+            rc, out = run_script([sys.executable, os.path.join(ROOT, t)], t, cwd=ROOT, env=env)
+            lines.append(out)
+            if rc != 0:
                 ok = False
-                lines.append("!! %s 退出码 %d" % (t, r.returncode))
+                lines.append("!! %s 退出码 %d" % (t, rc))
     finally:
         srv.terminate()
         try:
@@ -117,7 +152,9 @@ def main():
     results.append(("po-items-http",) + run_block("po-items-http", 8870, prep,
                                                   ["app/po_items_http_test.py"]))
     # 新功能自身使用独立临时库和 FakeJst，不接触真实聚水潭会话。
-    for name, script in [("inventory-unit", "inventory_test.py"),
+    for name, script in [("review-fixes", "review_fixes_test.py"),
+                         ("unplanned-unit", "unplanned_test.py"),
+                         ("inventory-unit", "inventory_test.py"),
                          ("inventory-http", "inventory_http_test.py"),
                          ("catalog", "catalog_test.py"),
                          ("scan-ux", "scan_ux_test.py"),
@@ -128,11 +165,16 @@ def main():
                          ("batch-flow-unit", "batch_flow_test.py"),
                          ("concurrency-fixes", "concurrency_fixes_test.py"),
                          ("remote-access", "remote_access_test.py"),
-                         ("learned-codes", "learned_codes_test.py")]:
+                         ("unplanned-hint", "unplanned_hint_test.py"),
+                         ("unplanned-hint-http", "unplanned_hint_http_test.py"),
+                         ("restore", "restore_test.py"),
+                         ("restore-http", "restore_http_test.py"),
+                         ("operation-log", "oplog_test.py"),
+                         ("learned-codes", "learned_codes_test.py"),
+                         ("updater", "updater_test.py")]:
         env = dict(os.environ, PYTHONIOENCODING="utf-8", JST_DB_DIR=tempfile.gettempdir())
-        r = subprocess.run([sys.executable, os.path.join(HERE, script)], cwd=ROOT, env=env,
-                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        results.append((name, r.returncode == 0, r.stdout.decode("utf-8", "replace")))
+        rc, out = run_script([sys.executable, os.path.join(HERE, script)], name, cwd=ROOT, env=env)
+        results.append((name, rc == 0, out))
     for _, _, text in results:
         all_log.append(text)
     logpath = os.path.join(HERE, "regression_last.log")
@@ -141,13 +183,13 @@ def main():
             f.write("\n".join(all_log))
     except Exception:
         logpath = "(写日志失败)"
-    print("\n======== SUMMARY (full log: %s) ========" % logpath)
+    _say("\n======== SUMMARY (full log: %s) ========" % logpath)
     for n, ok, text in results:
-        print("  %-18s %s" % (n, "PASS" if ok else "FAIL"))
+        _say("  %-18s %s" % (n, "PASS" if ok else "FAIL"))
         if not ok:
             for ln in text.splitlines():
                 if "[FAIL]" in ln or ln.startswith("!!") or "Traceback" in ln or "Error" in ln:
-                    print("      " + ln)
+                    _say("      " + ln)
     return 1 if any(not ok for _, ok, _ in results) else 0
 
 

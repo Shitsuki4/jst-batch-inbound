@@ -217,7 +217,7 @@ def main():
     assert r["ok"], r
     show("line/del", r)
 
-    r = call("/api/batch/del", {"batch_id": b2["id"]})
+    r = call("/api/batch/del", {"batch_id": b2["id"], "sid": sid})
     assert r["ok"], r
     show("batch/del 删除子批次", r)
     r = call("/api/query/tracking?no=SF1000000002")

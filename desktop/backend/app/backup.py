@@ -9,7 +9,7 @@ import threading
 import time
 from datetime import datetime
 
-VERSION = "2.0.21-joint-receiving"
+from app_version import VERSION  # 与应用版本同源；升级后版本变化即触发一次升级前备份
 
 class BackupManager:
     def __init__(self, data, lock):
@@ -39,12 +39,12 @@ class BackupManager:
 
     def create(self, reason="manual"):
         with self.lock:
-            paths = [self.data / n for n in ("jst.db", "catalog.db", "unplanned.db", "purchase_watch.db", "joint_receipts.db") if (self.data / n).is_file()]
+            paths = [self.data / n for n in ("jst.db", "catalog.db", "unplanned.db", "purchase_watch.db", "joint_receipts.db", "operation_log.db") if (self.data / n).is_file()]
             if not paths:
                 return None
             dest = self.root / (datetime.now().strftime("%Y%m%d-%H%M%S-%f") + "-" + reason)
             dest.mkdir(parents=True)
-            m = {"version": VERSION, "reason": reason, "created": time.time(), "files": [], "complete": False}
+            m = {"format": 1, "version": VERSION, "reason": reason, "created": time.time(), "files": [], "complete": False}
             try:
                 for path in paths:
                     target = dest / path.name

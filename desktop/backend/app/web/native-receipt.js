@@ -49,7 +49,7 @@
       if(response.ok&&result?.ok){
         if(commitKey&&!result.selection_required&&!result.multi&&pending.get(commitKey)===scanAt)pending.delete(commitKey);
         if(result.native_warning)linkWarning(result.native_warning);
-        else if(trackingSubmit)linkFailed=false;
+        else if(trackingSubmit&&!result.confirm_required)linkFailed=false;
       }
     }
     return response;

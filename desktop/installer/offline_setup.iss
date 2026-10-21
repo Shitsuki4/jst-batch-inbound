@@ -101,6 +101,8 @@ end;
 const
   ServiceMutex = 'Local\ReceivingAssistantService';
   AppMutexes = 'Local\ReceivingAssistantInstalled,Local\ReceivingAssistantService';
+  { Must match remote_access.firewall_rule_name() without the port number. }
+  FirewallRulePrefix = '收货小助手远程管理页 TCP ';
   { Data categories offered by the uninstaller }
   CatDatabase = 0;
   CatRecordings = 1;
@@ -289,7 +291,9 @@ end;
   MainWindow (Program.cs: native-settings.json, 录像, data, webview-profile, video-cues,
   native-errors.log), Backend.cs (service-exit-warning.txt) and the Python backend, which gets
   JST_DB_DIR=v3\data (server.py: *.db, backups, logs, edge-login, report-clipboard; login_memory.py:
-  login-session.dpapi; pda.py: pda-private; native_entry.py / service_runtime.py: connection files).
+  login-session.dpapi; pda.py: pda-private; remote_access.py: remote-access (enabled flag, admin
+  password hash, remote TLS certificate/key); native_entry.py / service_runtime.py: connection files).
+  VideoLibraryWindow.cs writes the built-in player page to DataRoot\library-player (regenerated on use).
   The frozen backend writes exports and diag.log next to its exe: <app>\backend\导出 and
   <app>\backend\data\diag.log. Entries containing * are file wildcards. }
 function CategoryPaths(const Cat: Integer): TArrayOfString;
@@ -319,11 +323,15 @@ begin
         AddPath(Result, DataRoot + '\data\.login-*');
         AddPath(Result, DataRoot + '\data\edge-login');
         AddPath(Result, DataRoot + '\data\pda-private');
+        { Remote admin page: enabled switch, admin password hash, TLS key. Deleting settings must not
+          leave the page able to re-open itself with the old password after a reinstall. }
+        AddPath(Result, DataRoot + '\data\remote-access');
       end;
     CatCache:
       begin
         AddPath(Result, DataRoot + '\webview-profile');
         AddPath(Result, DataRoot + '\video-cues');
+        AddPath(Result, DataRoot + '\library-player');
         AddPath(Result, DataRoot + '\native-errors.log');
         AddPath(Result, DataRoot + '\data\logs');
         AddPath(Result, DataRoot + '\data\report-clipboard');
@@ -351,10 +359,10 @@ end;
 function CategoryHint(const Cat: Integer): String;
 begin
   case Cat of
-    CatDatabase: Result := '收货记录、对单/联合收货/采购监控数据、业务设置';
+    CatDatabase: Result := '收货记录、对单/联合收货/采购监控数据、操作记录、业务设置';
     CatRecordings: Result := '默认录像目录';
     CatExports: Result := 'Excel/CSV 导出';
-    CatSettings: Result := '录像设置、保持登录、PDA 配对';
+    CatSettings: Result := '录像设置、保持登录、PDA 配对、远程管理页';
     CatCache: Result := '浏览器缓存、日志，可自动重建';
   else
     Result := '';
@@ -367,8 +375,8 @@ begin
     CatDatabase: Result := DataRoot + '\data';
     CatRecordings: Result := DataRoot + '\录像';
     CatExports: Result := AppDir + '\backend\导出';
-    CatSettings: Result := DataRoot + '（native-settings.json、data\login-session.dpapi、data\edge-login、data\pda-private）';
-    CatCache: Result := DataRoot + '（webview-profile、video-cues、data\logs 等）';
+    CatSettings: Result := DataRoot + '（native-settings.json、data\login-session.dpapi、data\edge-login、data\pda-private、data\remote-access）';
+    CatCache: Result := DataRoot + '（webview-profile、video-cues、library-player、data\logs 等）';
   else
     Result := '';
   end;
@@ -968,12 +976,75 @@ begin
   RemoveDir(AppDir);
 end;
 
+function PowerShellExe(): String;
+begin
+  Result := ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe');
+end;
+
+{ The remote admin page (remote_access.py open_firewall) adds inbound rules named
+  "收货小助手远程管理页 TCP <端口>" through an elevated netsh. Without the program they only keep a
+  port open, so the uninstaller always removes them, whichever data is kept. Reading the rules
+  works unelevated; deleting needs elevation: run directly when already elevated, otherwise ask
+  for UAC in an interactive uninstall. A silent, unelevated uninstall only logs the manual command. }
+procedure RemoveRemoteFirewallRules();
+var
+  Code: Integer;
+  Pattern, Check, Remove: String;
+  Present: Boolean;
+begin
+  Pattern := FirewallRulePrefix + '*';
+  Check := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "if (Get-NetFirewallRule -DisplayName ''' +
+    Pattern + ''' -ErrorAction SilentlyContinue) { exit 10 } else { exit 11 }"';
+  Remove := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "Get-NetFirewallRule -DisplayName ''' +
+    Pattern + ''' -ErrorAction SilentlyContinue | Remove-NetFirewallRule"';
+  { Unknown result (PowerShell missing or failed): fall back to "the remote page was ever configured". }
+  Code := -1;
+  Present := DirExists(DataRoot + '\data\remote-access');
+  if Exec(PowerShellExe(), Check, '', SW_HIDE, ewWaitUntilTerminated, Code) then
+  begin
+    if Code = 10 then
+      Present := True
+    else if Code = 11 then
+      Present := False;
+  end;
+  Log(Format('Remote firewall rules present: %d (check exit %d)', [Ord(Present), Code]));
+  if not Present then
+    exit;
+  if IsAdmin then
+  begin
+    if Exec(PowerShellExe(), Remove, '', SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0) then
+      Log('Remote firewall rules removed (elevated).')
+    else
+      Log('Could not remove the remote firewall rules (exit ' + IntToStr(Code) + ').');
+  end
+  else if UninstallSilent then
+    Log('Remote firewall rules left in place: silent uninstall is not elevated. Remove manually: ' +
+      'netsh advfirewall firewall delete rule name="' + FirewallRulePrefix + '<端口>"')
+  else
+  begin
+    MsgBox('检测到远程管理页添加过的 Windows 防火墙放行规则（' + FirewallRulePrefix + '…）。' + #13#10 +
+      '卸载后这些规则已无用途，接下来会请求一次管理员权限将其删除。', mbInformation, MB_OK);
+    if ShellExec('runas', PowerShellExe(), Remove, '', SW_HIDE, ewWaitUntilTerminated, Code) then
+      Log('Remote firewall rules removal requested with UAC (exit ' + IntToStr(Code) + ').')
+    else
+    begin
+      Log('UAC declined or failed for the firewall rule removal: ' + SysErrorMessage(Code));
+      MsgBox('未能删除防火墙放行规则（未获得管理员授权）。' + #13#10 +
+        '可在“Windows Defender 防火墙 - 高级设置 - 入站规则”中删除名称以“' + FirewallRulePrefix + '”开头的规则。',
+        mbError, MB_OK);
+    end;
+  end;
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   case CurUninstallStep of
     usAppMutexCheck:
       ForceCloseIfNeeded();
     usPostUninstall:
-      DeleteChosenData();
+      begin
+        RemoveRemoteFirewallRules();
+        DeleteChosenData();
+      end;
   end;
 end;

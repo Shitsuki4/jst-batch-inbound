@@ -87,7 +87,7 @@ class HTTPTests(unittest.TestCase):
         self.assertEqual(record['groups'][0]['inbound_io_id'], '8001')
         for path, payload in [('/api/line/set', {'line_id': self.f.lid, 'qty': 90}),
                               ('/api/line/del', {'line_id': self.f.lid}),
-                              ('/api/batch/del', {'batch_id': self.f.batch['id']}),
+                              ('/api/batch/del', {'batch_id': self.f.batch['id'], 'sid': self.f.sid}),
                               ('/api/batch/rename', {'batch_id': self.f.batch['id'], 'tracking_no': 'changed'}),
                               ('/api/session/del', {'sid': self.f.sid})]:
             result = self.f.call(path, payload)

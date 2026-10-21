@@ -191,7 +191,7 @@ def test_http(d):
         check(r.get("ok") and r["batches"][0]["tracking_no"] == "SF0002", "HTTP 改物流单号成功")
         r = call(base, "/api/batch/rename", {"batch_id": bid, "tracking_no": ""})
         check(not r.get("ok"), "空单号被拒绝")
-        r = call(base, "/api/batch/del", {"batch_id": bid})
+        r = call(base, "/api/batch/del", {"batch_id": bid, "sid": sid})
         check(r.get("ok") and "物流单" in r.get("msg", ""), "删除物流单端点", str(r)[:120])
         check(server.STORE.batches(sid) == [], "删除后该采购单下无物流单")
 
