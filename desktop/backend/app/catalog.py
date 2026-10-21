@@ -115,6 +115,27 @@ class CatalogDB:
                               (scope,code)).fetchall()
         return [dict(json.loads(r['payload']), src='catalog') for r in rows]
 
+    def search(self, scope, query, limit=50):
+        """人工选择商品用：精确编码/条码优先，其次名称、编码、条码包含关键字。只读当前范围。"""
+        if not scope: return []
+        q = str(query or '').strip().lower()
+        if not q: return []
+        result, seen = [], set()
+        for row in self.lookup(scope, q):
+            if row.get('sku_id') not in seen:
+                seen.add(row.get('sku_id')); result.append(row)
+        like = '%' + q.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_') + '%'
+        with self.connect() as db:
+            rows = db.execute("SELECT payload FROM catalog_item WHERE scope=? AND lower(payload) LIKE ? ESCAPE '\\' "
+                              "ORDER BY sku LIMIT 2000", (scope, like)).fetchall()
+        for r in rows:
+            if len(result) >= limit: break
+            it = json.loads(r['payload'])
+            text = ' '.join(str(it.get(k) or '') for k in ('sku_id', 'i_id', 'sku_code', 'name', 'spec', 'aux_codes')).lower()
+            if q in text and it.get('sku_id') not in seen:
+                seen.add(it.get('sku_id')); result.append(dict(it, src='catalog'))
+        return result[:limit]
+
     def point_get(self, scope, code):
         with self.connect() as db:
             r = db.execute('SELECT * FROM catalog_point WHERE scope=? AND code=?',

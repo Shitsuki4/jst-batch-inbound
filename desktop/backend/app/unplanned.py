@@ -77,9 +77,12 @@ class StrictInbound(InboundService):
 
 
 class UnplannedService:
-    def __init__(self, path, client, find_purchase, lookup, scan_filter=None):
+    def __init__(self, path, client, find_purchase, lookup, scan_filter=None, learned=None):
         self.store = Store(path)
         self.client, self.find_purchase, self.lookup = client, find_purchase, lookup
+        # learned(code, owner, auth, found_rows)：商品资料命中时让学习匹配让位并返回 []；
+        # 商品资料完全查不到时返回本机学习匹配（仅兜底）。
+        self.learned = learned
         self.scan_filter = scan_filter or (lambda rows, owner, auth: rows)
         self.store.db.execute('CREATE TABLE IF NOT EXISTS unplanned_meta(sid INTEGER PRIMARY KEY, note TEXT NOT NULL DEFAULT "", revision INTEGER NOT NULL DEFAULT 0, checked_revision INTEGER NOT NULL DEFAULT -1, checked_at TEXT NOT NULL DEFAULT "", purchase_digest TEXT NOT NULL DEFAULT "")')
         columns = {r[1] for r in self.store.db.execute('PRAGMA table_info(unplanned_meta)')}
@@ -251,12 +254,17 @@ class UnplannedService:
         rows = hit.get('items',[]) or ([hit['item']] if hit.get('item') else [])
         found = self.lookup(code,catalog['owner'],catalog['auth'],all_matches=True)
         if found: rows += found if isinstance(found,list) else [found]
+        if self.learned:
+            # 商品资料 / 采购明细永远优先；只有全部查不到时才用学习匹配兜底。
+            rows = rows or self.learned(code,catalog['owner'],catalog['auth'],[])
+            if rows and rows[0].get('src') != 'learned': self.learned(code,catalog['owner'],catalog['auth'],rows)
         unique = {}
         for r in rows:
             if r.get('sku_id'):
                 key = str(r['sku_id']).strip().lower()
                 unique.setdefault(key,{k:r.get(k,'') for k in ('sku_id','sku_code','name','spec','i_id','pic','aux_codes','match_via')})
                 if 'enabled' in r: unique[key]['enabled'] = r['enabled']
+                if r.get('src') == 'learned': unique[key]['match_src'] = 'learned'
         return self.scan_filter(list(unique.values()),catalog['owner'],catalog['auth'])
 
     def mutate(self, action, body, *, after_copy=None):

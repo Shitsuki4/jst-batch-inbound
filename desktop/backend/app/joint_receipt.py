@@ -57,9 +57,9 @@ class JointInbound(InboundService):
 
 
 class JointService:
-    def __init__(self,path,client,find_purchase,lookup,scan_filter=None):
+    def __init__(self,path,client,find_purchase,lookup,scan_filter=None,learned=None):
         self.client=client;self.find_purchase=find_purchase
-        self.receipt=UnplannedService(path,client,find_purchase,lookup,scan_filter)
+        self.receipt=UnplannedService(path,client,find_purchase,lookup,scan_filter,learned=learned)
         self.store=self.receipt.store
         self.store.db.executescript('''
         CREATE TABLE IF NOT EXISTS joint_group(sid INTEGER PRIMARY KEY,account TEXT NOT NULL,mother TEXT NOT NULL,expected INTEGER,created TEXT NOT NULL);
