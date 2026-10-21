@@ -47,7 +47,11 @@ class ServerTests(unittest.TestCase):
         self.s.JST.coid = '1500'
         take_notices()
         self.catalog()
-    def tearDown(self): self.f.close()
+    def tearDown(self):
+        # Windows 下临时目录清理前必须关闭本测试打开的无采购单数据库句柄
+        if self.s.UNPLANNED.instance is not None:
+            self.s.UNPLANNED.instance.store.db.close(); self.s.UNPLANNED.instance = None
+        self.f.close()
 
     def catalog(self, a_codes='', b_enabled=True):
         rows = [dict(sku_id='A', sku_code='690000000001', aux_codes=a_codes, name='测试商品A', enabled=True),
