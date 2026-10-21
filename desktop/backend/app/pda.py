@@ -17,8 +17,8 @@ from pathlib import Path
 from store import validate_qty
 
 ASSETS = {"/", "/pda.html", "/pda.js", "/style.css", "/pda.css", "/inventory.js", "/inbound.js", "/operations.js", "/ux.js", "/receipt-editor.js", "/receiving-round.js"}
-GETS = {"/api/inventory/partners", "/api/inventory/config", "/api/inventory/lookup", "/api/inventory/history", "/api/inbound/options", "/api/inbound/preview", "/api/session/detail", "/api/operations"}
-POSTS = {"/api/line/edit", "/api/inventory/preview", "/api/inventory/submit", "/api/inventory/verify", "/api/inbound/create", "/api/inbound/resume", "/api/tracking/scan", "/api/item/scan", "/api/item/choose", "/api/operations/note"}
+GETS = {"/api/inventory/partners", "/api/inventory/config", "/api/inventory/lookup", "/api/inventory/history", "/api/inbound/options", "/api/inbound/preview", "/api/session/detail", "/api/operations", "/api/learned/search"}
+POSTS = {"/api/line/edit", "/api/inventory/preview", "/api/inventory/submit", "/api/inventory/verify", "/api/inbound/create", "/api/inbound/resume", "/api/tracking/scan", "/api/item/scan", "/api/item/choose", "/api/operations/note", "/api/learned/learn"}
 RECEIPT = {"/api/tracking/scan", "/api/item/scan", "/api/item/choose"}
 PAIR_BODY_MAX = 1024          # unauthenticated pairing body cap
 BODY_MAX = 65536
@@ -285,13 +285,15 @@ def make_handler(host, base):
             return "PDA:"+self.device["name"]+" ["+self.device["id"]+"] / ERP:"+host.who()
 
         def check_receipt(self, b):
+            path=self.path.split("?")[0]
+            if path.startswith("/api/learned/") and str(b.get("kind") or "purchase") not in ("purchase","pda"):
+                raise ValueError("PDA只能在有采购单的收货单中学习条码")
             sid=int(b.get("sid") or 0)
             if not sid and b.get("job_id"):
                 job=app.STORE.get_inbound(int(b["job_id"]))
                 sid=job["session_id"] if job else 0
             if not sid or not host.receipt_allowed(app.STORE.get_session(sid)):
                 raise ValueError("收货单不在当前账号的具体货主/仓库公司范围，请在电脑端检查")
-            path=self.path.split("?")[0]
             if path in ("/api/item/scan","/api/item/choose"):
                 bid=int(b.get("batch_id") or 0)
                 if not any(x["id"]==bid for x in app.STORE.batches(sid)):
@@ -320,7 +322,7 @@ def make_handler(host, base):
                         r=app.OPERATIONS.request(q.get("id",""))
                         return self._ok(status=r["status"],response=json.loads(r["response"]) if r.get("response") else None)
                     if u.path not in GETS: return self._fail("PDA不能使用此接口",code=403)
-                    if u.path.startswith("/api/inbound/") or u.path=="/api/session/detail": self.check_receipt(q)
+                    if u.path.startswith(("/api/inbound/","/api/learned/")) or u.path=="/api/session/detail": self.check_receipt(q)
                     return super().do_GET()
                 except Exception as e:
                     self._fail(str(e))
@@ -344,7 +346,7 @@ def make_handler(host, base):
             with app.state_lock:
                 try:
                     if path not in POSTS: return self._fail("PDA不能使用此接口",code=403)
-                    if path in RECEIPT or path == "/api/line/edit" or path.startswith("/api/inbound/"): self.check_receipt(b)
+                    if path in RECEIPT or path == "/api/line/edit" or path.startswith(("/api/inbound/","/api/learned/")): self.check_receipt(b)
                     if path in RECEIPT and not (path=="/api/item/scan" and b.get("qty")==0):
                         rid=self.headers.get("X-Request-ID","")
                         old=app.OPERATIONS.reserve(rid,path,b,self._actor())
