@@ -45,7 +45,19 @@
  function candidates(rows,code,onChoose,hint){
   $('candidates').textContent='';
   if(rows.length===1)return onChoose(rows[0]);
-  if(!rows.length){say(hint||'当前货主 / 分仓商品库未找到此码，请检查商品库同步状态或手动登记。未登记任何数量。');return;}
+  const miss=()=>say(hint||'当前货主 / 分仓商品库未找到此码，请检查商品库同步状态或手动登记。未登记任何数量。');
+  if(!rows.length){
+   // 商品资料查不到：可学习此码，学习后自动重新识别；跳过则保持原提示
+   if(window.BarcodeLearn&&state?.session?.id&&!window.BarcodeLearn.isOpen()){
+    say('商品资料未找到此码，可在弹框中学习匹配，或点「跳过」。');
+    window.BarcodeLearn.open({kind:type,sid:state.session.id,code}).then(row=>{
+     if(row){$('code').value=code;setTimeout(()=>$('scan').click(),0);}
+     else{miss();$('code').focus();$('code').select();}
+    });
+    return;
+   }
+   miss();return;
+  }
   window.ProductPicker.open({rows,code,owner:state?.catalog_scope?.owner??state?.session.owner_co_id,auth:state?.catalog_scope?.auth??state?.session.auth_co_id,onChoose,onCancel:()=>{$('code').focus();$('code').select();}});
  }
  window.ReceivingDesk={render,clear,setBusy:v=>{busy=v;},blocked,setMode,activate,candidates};
