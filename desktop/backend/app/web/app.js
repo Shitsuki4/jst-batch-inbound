@@ -1008,19 +1008,32 @@
   }
 
   /* 解析一个商品编码：命中唯一商品则进入「待确认数量」；多候选则弹选择 */
-  function resolveItem(code) {
+  function resolveItem(code, learnRetry) {
     return api('/api/item/scan', {
       method: 'POST',
       body: { code: code, batch_id: S.current_batch, sid: S.session && S.session.id, qty: 0 }
     }).then(function (r) {
       if (!r.ok) { handleFail(r); return; }
       if (r.multi) return showCandidates(r);
+      // 商品资料查不到：先问是否学习此码；学习成功后重新识别，跳过则走原未识别流程
+      if (r.unmatched && !r.resolved && r.learnable && window.BarcodeLearn && !learnRetry) {
+        suppressRefocus = Date.now() + 120000;
+        return window.BarcodeLearn.open({ kind: 'purchase', sid: S.session && S.session.id, code: code }).then(function (row) {
+          suppressRefocus = 0;
+          if (row) return resolveItem(code, true);
+          showUnresolved(r, code);
+        });
+      }
+      showUnresolved(r, code);
+    }).catch(function () { permAlert(); });
+  }
+
+  function showUnresolved(r, code) {
       var name = (r.item && r.item.name) ? r.item.name : code;
       showPending(r, code, name);
       flash((r.unmatched ? (r.resolved ? '⚠ 采购单无此商品：' : '⚠ 本地未识别，仍可收货并编辑资料：') : '')
         + name + (r.unmatched && !r.resolved ? '　确认后可编辑资料；资料不存在不能入库' : '　数量默认 1，回车确认'), r.unmatched ? 'warn' : 'ok');
       if (r.unmatched) beep(200, 0.14); else beep(880, 0.05);
-    }).catch(function () { permAlert(); });
   }
 
   /* 多候选选择：一个码命中多个商品（如 A 的条码 = B 的辅助码、或编码互挂）时，
@@ -1188,6 +1201,7 @@
       html += '<tr class="' + (bad ? 'tr-bad' : '') + '" data-id="' + l.id + '">'
         + '<td>' + esc(l.name)
         + (bad ? '<span class="tag-new">采购单无此商品</span>' : '')
+        + (window.BarcodeLearn ? window.BarcodeLearn.tag(l) : '')
         + (l.spec ? '<div class="pi-spec">' + esc(l.spec) + '</div>' : '') + '</td>'
         + '<td class="sku">' + esc(l.sku_id) + '</td>'
         + '<td class="sku">' + esc(l.sku_code) + '</td>'

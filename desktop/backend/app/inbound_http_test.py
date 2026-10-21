@@ -29,6 +29,8 @@ class Fixture:
         from catalog import CatalogDB, CatalogSync
         server.CATALOG = CatalogDB(os.path.join(self.temp.name, 'catalog.db'))
         server.CATALOG_SYNC = CatalogSync(server.CATALOG, server.catalog_provider)
+        from learned_codes import LearnedCodes
+        server.LEARNED = LearnedCodes(os.path.join(self.temp.name, 'learned_codes.db'))
         server.JST = FakeJst()
         server.JST.uname, server.JST.coname = '离线测试', '模拟仓库（不会写真实聚水潭）'
         server.JST.partners = lambda: [{'id': 'OWNER', 'name': '模拟货主'}]

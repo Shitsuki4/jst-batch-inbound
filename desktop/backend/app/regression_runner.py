@@ -134,7 +134,8 @@ def main():
                          ("unplanned-hint-http", "unplanned_hint_http_test.py"),
                          ("restore", "restore_test.py"),
                          ("restore-http", "restore_http_test.py"),
-                         ("operation-log", "oplog_test.py")]:
+                         ("operation-log", "oplog_test.py"),
+                         ("learned-codes", "learned_codes_test.py")]:
         env = dict(os.environ, PYTHONIOENCODING="utf-8", JST_DB_DIR=tempfile.gettempdir())
         r = subprocess.run([sys.executable, os.path.join(HERE, script)], cwd=ROOT, env=env,
                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)

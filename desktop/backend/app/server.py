@@ -86,6 +86,7 @@ from unplanned import UnplannedService
 import unplanned_hint
 from joint_receipt import JointService
 from codes import enabled_scan_candidates
+from learned_codes import LearnedCodes, take_notices, clean_code as clean_learned_code
 from purchase_watch import PurchaseWatch
 from inventory import InventoryService
 from backup import BackupManager, VERSION
@@ -154,6 +155,7 @@ INBOUND = InboundService(STORE, JST)
 INVENTORY = InventoryService(STORE, JST)
 OPERATIONS = Operations(STORE, JST, INVENTORY)
 CATALOG = CatalogDB(os.path.join(DATA, "catalog.db"))
+LEARNED = LearnedCodes(os.path.join(DATA, "learned_codes.db"))
 LAST_HEARTBEAT = 0.0      # 0 = 从未收到过心跳
 _started = time.time()
 
@@ -541,6 +543,134 @@ def lookup_item_by_code(code, owner="", auth="", all_matches=False):
     return info
 
 
+def learned_row(scope, code):
+    """Active learned mapping as a candidate row; current catalog data (name/enabled) wins over the snapshot."""
+    m = LEARNED.active(scope, code)
+    if not m:
+        return None
+    row = json.loads(m["payload"] or "{}")
+    sku = m["sku_id"]
+    current = [v for v in CATALOG.lookup(scope, sku) if str(v.get("sku_id") or "") == sku]
+    if len(current) == 1:
+        row.update(current[0])
+    row.update(sku_id=sku, src="learned", match_src="learned", match_via="学习匹配", learned_id=m["id"])
+    LEARNED.touch(m["id"])
+    return row
+
+
+def learned_resolve(code, owner="", auth="", found=None):
+    """未知条码学习兜底。商品资料（found 非空）永远优先：此时只让学习匹配让位，返回 []。
+
+    关闭「商品资料查询」时商品库根本没有被查过，无法保证优先级，因此也不使用学习匹配。"""
+    code = str(code or "").strip()
+    if not code or STORE.get_kv("sku_lookup", "1") == "0":
+        return []
+    scope = catalog_context(owner, auth)
+    if not scope:
+        return []
+    if found:
+        LEARNED.reconcile(scope, code, found)
+        return []
+    row = learned_row(scope, code)
+    return [row] if row else []
+
+
+LEARN_KINDS = {"purchase": "有采购单收货", "unplanned": "无采购单收货", "joint": "联合收货", "pda": "PDA"}
+
+
+def learn_context(kind, sid):
+    """(owner, auth, purchase_items) of the receiving session the user is scanning in.
+
+    The scope always comes from the server-side session, never from the client."""
+    sid = int(sid or 0)
+    if kind in ("purchase", "pda"):
+        s = STORE.get_session(sid)
+        if not s:
+            raise ValueError("找不到当前收货单，请刷新后重试")
+        return s.get("owner_co_id", ""), s.get("auth_co_id", ""), json.loads(s.get("items_json") or "[]")
+    if kind == "unplanned":
+        svc = UNPLANNED
+        s, scope = svc.session(sid), svc.catalog_scope(sid)
+        same = (scope["owner"], scope["auth"]) == (s.get("owner_co_id", ""), s.get("auth_co_id", ""))
+        return scope["owner"], scope["auth"], (json.loads(s.get("items_json") or "[]") if same else [])
+    if kind == "joint":
+        svc = JOINT.receipt
+        svc.session(sid)
+        JOINT.group(sid)
+        scope = svc.catalog_scope(sid)
+        items = []
+        for p in JOINT.store.db.execute("SELECT owner,auth,live_json FROM joint_purchase WHERE group_sid=? ORDER BY id", (sid,)):
+            if (str(p["owner"]), str(p["auth"])) == (str(scope["owner"]), str(scope["auth"])):
+                items += json.loads(p["live_json"] or "[]")
+        return scope["owner"], scope["auth"], items
+    raise ValueError("不支持的收货模式")
+
+
+def learn_search(kind, sid, query, limit=50):
+    owner, auth, base = learn_context(kind, sid)
+    scope = catalog_context(owner, auth)
+    q = str(query or "").strip().lower()
+    rows, seen = [], set()
+    for it in base:
+        text = " ".join(str(it.get(k) or "") for k in ("sku_id", "i_id", "sku_code", "name", "spec", "aux_codes")).lower()
+        if (not q or q in text) and it.get("sku_id") and it["sku_id"] not in seen:
+            seen.add(it["sku_id"])
+            rows.append(dict({k: it.get(k, "") for k in ("sku_id", "i_id", "sku_code", "name", "spec", "pic")}, in_po=True))
+    for it in CATALOG.search(scope, q, limit) if q else []:
+        if it.get("sku_id") and it["sku_id"] not in seen:
+            seen.add(it["sku_id"])
+            row = {k: it.get(k, "") for k in ("sku_id", "i_id", "sku_code", "name", "spec", "pic")}
+            row.update(in_po=False, enabled=codes_enabled(it.get("enabled")))
+            rows.append(row)
+    ready = bool(scope) and any(r["scope"] == scope for r in CATALOG.status(json.loads(scope)[0]))
+    return {"rows": rows[:limit * 2], "owner": owner, "auth": auth, "scoped": bool(scope), "catalog_ready": ready}
+
+
+def codes_enabled(value):
+    from codes import product_enabled
+    v = product_enabled(value)
+    return None if v is None else bool(v)
+
+
+def learn_code(kind, sid, code, sku_id, actor=""):
+    """Validate everything server-side, then remember code → SKU for this company/owner scope."""
+    code = clean_learned_code(code)
+    sku_id = str(sku_id or "").strip()
+    if not sku_id:
+        raise ValueError("请选择商品")
+    if STORE.get_kv("sku_lookup", "1") == "0":
+        raise ValueError("已关闭「商品资料查询」，无法确认商品资料优先，暂不能学习条码")
+    owner, auth, base = learn_context(kind, sid)
+    scope = catalog_context(owner, auth)
+    if not scope:
+        raise ValueError("请先登录聚水潭并选择具体货主 / 仓储公司，才能学习条码")
+    # 商品资料优先：此码已能被采购明细 / 商品库 / 实时查询识别时不允许学习。
+    direct = match_item(base, code)
+    if direct.get("mode") in ("unique", "multi") or CATALOG.lookup(scope, code):
+        raise ValueError("此条码已有商品资料，无需学习；请重新扫码")
+    found, info = CATALOG.point_get(scope, code)
+    if found and info:
+        raise ValueError("此条码已有商品资料，无需学习；请重新扫码")
+    item = next((dict(it) for it in base if str(it.get("sku_id") or "") == sku_id), None)
+    current = [v for v in CATALOG.lookup(scope, sku_id) if str(v.get("sku_id") or "") == sku_id]
+    if item is None and len(current) == 1:
+        item = dict(current[0])
+    elif item is not None and len(current) == 1:
+        item["enabled"] = current[0].get("enabled")
+        for k in ("name", "sku_code", "spec", "i_id", "pic"):
+            if not item.get(k) and current[0].get(k):
+                item[k] = current[0][k]
+    if item is None:
+        raise ValueError("所选商品不在当前采购单或当前货主的商品资料中，请重新搜索选择")
+    # 学习匹配不得绕过「扫码忽略禁用商品」。
+    scan_enabled_candidates([item], owner, auth)
+    return LEARNED.learn(scope, code, item, learned_by=actor, source=LEARN_KINDS.get(kind, kind))
+
+
+def learned_company():
+    return str(JST.coid or STORE.get_kv("catalog_company", "") or "")
+
+
 def scan_enabled_candidates(rows, owner="", auth=""):
     if STORE.get_kv("scan_ignore_disabled", "1") == "0": return rows
     # Status comes from the current scoped catalog, never from names or purchase presence.
@@ -567,9 +697,10 @@ def receipt_candidates(session, code):
         if not catalog and not hits:
             info = lookup_item_by_code(code, session.get("owner_co_id", ""), session.get("auth_co_id", ""), all_matches=True)
             if info: catalog = info if isinstance(info, list) else [info]
+    learned = learned_resolve(code, session.get("owner_co_id", ""), session.get("auth_co_id", ""), hits + catalog)
     by_sku = {str(it.get("sku_id") or "").strip().lower(): it for it in base}
     result = {}
-    for it in hits + catalog:
+    for it in hits + catalog + learned:
         key = str(it.get("sku_id") or "").strip().lower()
         if not key: continue
         purchase = by_sku.get(key)
@@ -578,6 +709,10 @@ def receipt_candidates(session, code):
         if not purchase: row["poi_id"] = ""
         row.setdefault("match_via", "商品资料" if it in catalog else "采购明细")
         row["_scan_via"] = direct.get("via", "catalog") if it in hits else "catalog"
+        if learned and it is learned[0]:
+            row.update(match_via="学习匹配", match_src="learned", _scan_via="learned")
+        else:
+            row.pop("match_src", None)
         result[key] = row
     return scan_enabled_candidates(list(result.values()), session.get("owner_co_id", ""), session.get("auth_co_id", ""))
 
@@ -804,7 +939,7 @@ class _UnplannedLazy:
     def __init__(self): self.instance = None
     def __getattr__(self, name):
         if self.instance is None:
-            self.instance = UnplannedService(os.path.join(DATA, "unplanned.db"), JST, find_purchase_order, lookup_item_by_code, scan_filter=scan_enabled_candidates)
+            self.instance = UnplannedService(os.path.join(DATA, "unplanned.db"), JST, find_purchase_order, lookup_item_by_code, scan_filter=scan_enabled_candidates, learned=learned_resolve)
             self.instance.inbound.cross_guard = lambda store, sid: cross_receipt_guard(store, sid)
         return getattr(self.instance, name)
 
@@ -850,7 +985,7 @@ class _JointLazy:
     def __init__(self): self.instance=None
     def __getattr__(self,name):
         if self.instance is None:
-            self.instance=JointService(os.path.join(DATA,'joint_receipts.db'),JST,find_purchase_order,lookup_item_by_code,scan_filter=scan_enabled_candidates)
+            self.instance=JointService(os.path.join(DATA,'joint_receipts.db'),JST,find_purchase_order,lookup_item_by_code,scan_filter=scan_enabled_candidates,learned=learned_resolve)
             self.instance.inbound.cross_guard=cross_receipt_guard
         return getattr(self.instance,name)
 JOINT=_JointLazy()
@@ -1026,10 +1161,17 @@ class Handler(BaseHTTPRequestHandler):
     def _ok(self, **kw):
         d = {"ok": True}
         d.update(kw)
+        notices = take_notices()
+        if notices:
+            d["learned_notice"] = "\n".join(notices)
         self._json(d)
 
     def _fail(self, msg, hint="", code=200):
-        self._json({"ok": False, "msg": msg, "hint": hint}, code)
+        d = {"ok": False, "msg": msg, "hint": hint}
+        notices = take_notices()
+        if notices:
+            d["learned_notice"] = "\n".join(notices)
+        self._json(d, code)
 
     def _body(self):
         if hasattr(self, "_desktop_body"):
@@ -1446,6 +1588,20 @@ class Handler(BaseHTTPRequestHandler):
             out["owners_parsed"] = JST.partners()
             return self._ok(**out)
 
+        if path in ("/api/learned/search", "/api/learned/list", "/api/learned/export"):
+            try:
+                with state_lock:
+                    if path == "/api/learned/search":
+                        return self._ok(**learn_search(q.get("kind", "purchase"), q.get("sid"), q.get("q", "")))
+                    company = learned_company()
+                    if path == "/api/learned/export":
+                        return self._send(200, LEARNED.export_csv(company), "text/csv; charset=utf-8",
+                                          {"Content-Disposition": "attachment; filename=learned-codes.csv"})
+                    return self._ok(rows=LEARNED.rows(company, q.get("q", "")), company=company,
+                                    logged=bool(JST.uid))
+            except Exception as e:
+                return self._fail(str(e))
+
         if path == "/api/catalog/status":
             with state_lock:
                 company = str(JST.coid or STORE.get_kv("catalog_company", ""))
@@ -1606,6 +1762,24 @@ class Handler(BaseHTTPRequestHandler):
                 return self._ok(job={k:v for k,v in job.items() if k!='snapshot_json'})
             return self._ok(**JOINT.mutate(action,b))
         except Exception as e:return self._fail(str(e))
+
+    def _post_api_learned_learn(self):
+        try:
+            b = self._body()
+            row = learn_code(str(b.get("kind") or "purchase"), b.get("sid"), b.get("code"), b.get("sku_id"),
+                             actor=self._actor())
+            return self._ok(learned=row, msg="已记住：条码 %s → %s %s（商品资料查不到此码时才使用，标记「学习匹配」）"
+                            % (row["code"], row["sku_id"], row["name"]))
+        except Exception as e:
+            return self._fail(str(e))
+
+    def _post_api_learned_delete(self):
+        try:
+            b = self._body()
+            n = LEARNED.delete(learned_company(), b.get("ids") or [])
+            return self._ok(deleted=n, msg="已删除 %d 条学习条码" % n)
+        except Exception as e:
+            return self._fail(str(e))
 
     def _post_api_unplanned_action(self):
         try:
@@ -2276,16 +2450,18 @@ class Handler(BaseHTTPRequestHandler):
                        "sku_code": (info or {}).get("sku_code") or code,
                        "name": (info or {}).get("name") or ("未知商品(%s)" % code),
                        "spec": (info or {}).get("spec") or "",
-                       "matched": False, "poi_id": ""}
+                       "matched": False, "poi_id": "", "match_src": (info or {}).get("match_src", "")}
+            learned = payload["match_src"] == "learned"
             if dry:
-                return self._ok(dry=True, code=code, unmatched=True, resolved=bool(info),
+                return self._ok(dry=True, code=code, unmatched=True, resolved=bool(info), learned=learned,
+                                learnable=not info and bool(catalog_context(s.get("owner_co_id", ""), s.get("auth_co_id", ""))),
                                 item={"sku_id": payload["sku_id"], "name": payload["name"],
                                       "spec": payload["spec"]},
                                 batch_id=bid, msg=("采购单无此商品，已识别，待确认数量" if info else
                                 "本地资料未识别，仍可确认收货并编辑资料；入库前会核验编码，资料不存在不能入库"))
             lid, qty = STORE.add_qty(bid, s["id"], payload, add, op=op)
             return self._ok_op(op, unmatched=True, line_id=lid, qty=qty, code=code,
-                            added=add, resolved=bool(info),
+                            added=add, resolved=bool(info), learned=learned,
                             lines=cur_lines(s["id"], bid),
                             items=po_items(s["id"]),
                             item={"sku_id": payload["sku_id"], "name": payload["name"],
@@ -2297,13 +2473,15 @@ class Handler(BaseHTTPRequestHandler):
         it = res["item"]
         payload = {"key": it.get("sku_id"), "poi_id": it.get("poi_id"), "sku_id": it.get("sku_id"),
                    "i_id": it.get("i_id"), "sku_code": it.get("sku_code"), "name": it.get("name"),
-                   "spec": it.get("spec"), "matched": True}
+                   "spec": it.get("spec"), "matched": True, "match_src": it.get("match_src", "")}
         if dry:
             return self._ok(dry=True, code=code, resolved=True, via=res.get("via", "barcode"),
+                            learned=payload["match_src"] == "learned",
                             item={k: payload[k] for k in ("sku_id", "name", "spec")},
                             batch_id=bid, msg="已识别商品，待确认数量")
         lid, qty = STORE.add_qty(bid, s["id"], payload, add, op=op)
         return self._ok_op(op, line_id=lid, qty=qty, added=add, via=res.get("via", "barcode"),
+                        learned=payload["match_src"] == "learned",
                         item={k: payload[k] for k in ("sku_id", "name", "spec")},
                         lines=cur_lines(s["id"], bid), items=po_items(s["id"]),
                         progress=STORE.progress(s["id"]))
@@ -2342,7 +2520,7 @@ class Handler(BaseHTTPRequestHandler):
         payload = {"key": it["sku_id"] if matched else "RAW:" + it["sku_id"],
                    "poi_id": it.get("poi_id", ""), "sku_id": it["sku_id"], "i_id": it.get("i_id", ""),
                    "sku_code": it.get("sku_code", ""), "name": it.get("name", ""),
-                   "spec": it.get("spec", ""), "matched": matched}
+                   "spec": it.get("spec", ""), "matched": matched, "match_src": it.get("match_src", "")}
         lid, qty = STORE.add_qty(bid, s["id"], payload, add, op=op)
         return self._ok_op(op, line_id=lid, qty=qty, added=add, unmatched=not matched, resolved=True,
                         item=it, lines=cur_lines(s["id"], bid), items=po_items(s["id"]),
