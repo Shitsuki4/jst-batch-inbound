@@ -377,7 +377,8 @@ def make_handler(host, base):
                     self.receipt_scope=host.receipt_scope()
             except Exception as e:
                 return self._fail(str(e))
-            with app.state_lock:
+            # 响应先缓冲，处理（含操作记录 after 钩子、回滚）结束并释放全局锁后才发出。
+            with self._reply_after_unlock(), app.state_lock:
                 try:
                     if u.path in ASSETS:
                         return self._static("/pda.html" if u.path in ("/","/pda.html") else u.path)
@@ -414,7 +415,7 @@ def make_handler(host, base):
                     self.receipt_scope=host.receipt_scope()   # 锁外取范围（含条码学习，避免锁内取范围与 scope_fetch 反向加锁）
             except Exception as e:
                 return self._fail(str(e))
-            with app.state_lock:
+            with self._reply_after_unlock(), app.state_lock:
                 try:
                     if path not in POSTS: return self._fail("PDA不能使用此接口",code=403)
                     if path in RECEIPT or path == "/api/line/edit" or path.startswith(("/api/inbound/","/api/learned/")): self.check_receipt(b)

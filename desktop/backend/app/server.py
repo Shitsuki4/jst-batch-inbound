@@ -5,8 +5,10 @@
 本地服务使用 http.server + sqlite3；PDA HTTPS 证书使用 cryptography。
 前端为原生 HTML/JS，浏览器用 Edge --app 无边框窗口打开，跨进程零冗余。
 """
+import contextlib
 import hashlib
 import html
+import io
 import logging
 from logging.handlers import RotatingFileHandler
 import traceback
@@ -1144,6 +1146,32 @@ class Handler(BaseHTTPRequestHandler):
     def _op_device(self):
         return {"kind": "desktop", "name": "电脑"}
 
+    @contextlib.contextmanager
+    def _reply_after_unlock(self):
+        """Buffer the response while the handler runs; send it only when the block exits.
+
+        Wrap it *around* ``with state_lock`` so the bytes leave only after the handler, the
+        operation-log after-hook, the rollback and the lock release are all done. A client
+        holding the reply can then rely on this request no longer touching the shared
+        STORE.db connection (sqlite3 connections used from two threads at once deadlock:
+        the Windows CI hang in concurrency_fixes_test).
+        """
+        if isinstance(self.wfile, io.BytesIO):      # nested: the outer block sends
+            yield
+            return
+        real, buf = self.wfile, io.BytesIO()
+        self.wfile = buf
+        try:
+            yield
+        finally:
+            self.wfile = real
+            data = buf.getvalue()
+            if data:
+                try:
+                    real.write(data)
+                except OSError:
+                    self.close_connection = True    # client went away; nothing to report to
+
     def _run_logged(self, path, fn):
         """Run a POST handler with operation-log hooks; oplog failures never affect the request."""
         self._oplog_resp = None
@@ -1309,7 +1337,7 @@ class Handler(BaseHTTPRequestHandler):
         if not self._desktop_guard(): return
         path = urllib.parse.urlparse(self.path).path
         if path.startswith("/api/") and path not in self.LOCK_FREE_GETS:
-            with state_lock:
+            with self._reply_after_unlock(), state_lock:
                 return self._do_get()
         return self._do_get()
 
@@ -1713,6 +1741,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._copy_report_clipboard()
         if path.startswith("/api/update/"):
             return self._update_post(path)
+        with self._reply_after_unlock():
+            return self._do_post_locked(path)
+
+    def _do_post_locked(self, path):
         try:
             # Consume once even for no-argument routes; keep-alive must not treat
             # an unread JSON body as the next HTTP request.
