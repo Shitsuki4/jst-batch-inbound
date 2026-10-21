@@ -99,6 +99,8 @@ import edgecookie  # noqa: E402
 import cdp  # noqa: E402
 import qrview
 from report_clipboard import ReportClipboard, MAX_REQUEST_BYTES
+from oplog import OpLog, DEVICE_LABELS as OPLOG_DEVICE_LABELS, MODULES as OPLOG_MODULES, OPS as OPLOG_OPS, MIN_RETENTION_DAYS, MAX_RETENTION_DAYS
+import oplog_hooks
 
 # Local packaging diagnostic: temporary certificate only, no DB or ERP requests.
 if __name__ == "__main__" and "--self-test" in sys.argv:
@@ -144,6 +146,7 @@ state_lock = threading.RLock()
 BACKUPS = BackupManager(DATA, state_lock)
 BACKUPS.before_upgrade()
 STORE = Store(os.path.join(DATA, "jst.db"))
+OPLOG = OpLog(lambda: os.path.join(DATA, "operation_log.db"), lambda: STORE.get_kv("oplog_retention_days", "180"))
 JST = JstClient()
 LOGIN_MEMORY = LoginMemory(DATA, STORE)
 QR_LOGIN_OPTIONS = {}
@@ -643,6 +646,7 @@ def full_state(sid=0):
             "sound": STORE.get_kv("sound", "1"),
             "sku_lookup": STORE.get_kv("sku_lookup", "1"),
             "scan_ignore_disabled": STORE.get_kv("scan_ignore_disabled", "1"),
+            "oplog_retention_days": STORE.get_kv("oplog_retention_days", "180"),
             "inbound_validate_purchase": STORE.get_kv("inbound_validate_purchase", "1"),
             "catalog_auto": STORE.get_kv("catalog_auto", "1"),
             "catalog_online": STORE.get_kv("catalog_online", "0"),
@@ -995,7 +999,29 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
     def _json(self, obj, code=200):
+        self._oplog_resp = obj
         self._send(code, json.dumps(obj, ensure_ascii=False))
+
+    def _op_device(self):
+        return {"kind": "desktop", "name": "电脑"}
+
+    def _run_logged(self, path, fn):
+        """Run a POST handler with operation-log hooks; oplog failures never affect the request."""
+        self._oplog_resp = None
+        ctx = None
+        try:
+            ctx = oplog_hooks.before(sys.modules[__name__], self, path, self._body())
+        except Exception as e:  # noqa: BLE001
+            try: OPLOG._note_failure(e)
+            except Exception: pass
+        try:
+            return fn()
+        finally:
+            try:
+                oplog_hooks.after(sys.modules[__name__], self, path, self._body(), self._oplog_resp, ctx)
+            except Exception as e:  # noqa: BLE001
+                try: OPLOG._note_failure(e)
+                except Exception: pass
 
     def _ok(self, **kw):
         d = {"ok": True}
@@ -1180,6 +1206,21 @@ class Handler(BaseHTTPRequestHandler):
                     if path == "/api/operations/export":
                         return self._send(200, OPERATIONS.export(), "text/csv; charset=utf-8", {"Content-Disposition": "attachment; filename=operations.csv"})
                     return self._ok(rows=OPERATIONS.rows())
+            except Exception as e:
+                return self._fail(str(e))
+
+        if path in ("/api/oplog/list", "/api/oplog/meta", "/api/oplog/export"):
+            # operation_log.db is a separate database guarded by OpLog.lock.
+            try:
+                if path == "/api/oplog/meta":
+                    return self._ok(devices=OPLOG.devices(), modules=OPLOG_MODULES, ops=OPLOG_OPS,
+                                    device_kinds=OPLOG_DEVICE_LABELS, retention_days=OPLOG.retention_days(),
+                                    min_retention_days=MIN_RETENTION_DAYS, max_retention_days=MAX_RETENTION_DAYS)
+                if path == "/api/oplog/export":
+                    fn = "operation-log-%s.csv" % datetime.now().strftime("%Y%m%d-%H%M%S")
+                    return self._send(200, OPLOG.export_csv(q), "text/csv; charset=utf-8",
+                                      {"Content-Disposition": "attachment; filename=%s" % fn})
+                return self._ok(**OPLOG.query(q, q.get("limit") or 500, q.get("offset") or 0))
             except Exception as e:
                 return self._fail(str(e))
 
@@ -1493,7 +1534,7 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     if path in ("/api/login", "/api/login/restore", "/api/sms/login", "/api/qr/finish", "/api/logout"):
                         LAN.invalidate()
-                    return fn()
+                    return self._run_logged(path, fn)
                 finally:
                     # A handler that failed (or caught its own error) must never leave a
                     # half-written transaction on the shared connection for the next
@@ -1783,7 +1824,7 @@ class Handler(BaseHTTPRequestHandler):
         b = self._body()
         allow = ("default_id_type", "owner_ids", "scan_step", "sound",
                  "sku_lookup", "pick_owner", "pick_auth", "catalog_auto", "catalog_online",
-                 "inbound_validate_purchase", "scan_ignore_disabled")
+                 "inbound_validate_purchase", "scan_ignore_disabled", "oplog_retention_days")
         d = {}
         for k, v in b.items():
             if k not in allow:
@@ -1793,6 +1834,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._fail("校验采购单明细开关只能为0或1")
             if k == "scan_ignore_disabled" and v not in ("0", "1"):
                 return self._fail("扫码忽略禁用商品开关只能为0或1")
+            if k == "oplog_retention_days":
+                try:
+                    n = int(v)
+                except ValueError:
+                    return self._fail("操作记录保留天数必须是整数")
+                if not MIN_RETENTION_DAYS <= n <= MAX_RETENTION_DAYS:
+                    return self._fail("操作记录保留天数需在%d–%d天之间" % (MIN_RETENTION_DAYS, MAX_RETENTION_DAYS))
+                v = str(n)
             if k == "scan_step":
                 try:
                     v = str(validate_qty(b[k]))

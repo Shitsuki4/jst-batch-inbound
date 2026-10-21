@@ -3,6 +3,7 @@ ROOT=Path(SPECPATH).resolve();APP=ROOT/'backend'/'app'
 hidden=[
  'app_version','backup','catalog','cdp','codes','download','edgecookie','inbound','inventory',
  'joint_receipt','joint_replace','jst','login_memory','native_bridge','operations',
+ 'oplog','oplog_hooks',
  'pda','purchase_snapshot','purchase_watch','qrview','receipt_copy','receipt_lifecycle',
  'remote_access','report_clipboard','restore','service_runtime','store','unplanned','unplanned_hint','unplanned_link','xlsx',
  'cryptography','qrcode','PIL'

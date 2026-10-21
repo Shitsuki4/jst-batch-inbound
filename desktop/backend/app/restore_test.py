@@ -179,6 +179,27 @@ def main():
     check("leftover journal recovered", res["status"] == "recovered" and marker(d3) == "new" and marker(d3, "catalog.db") == "new"
           and not (d3 / restore.JOURNAL).exists() and not list(d3.glob("restore-rollback-*")))
 
+    # --- operation_log.db 进备份但恢复时保留当前操作记录 ---
+    d4 = root / "d4"
+    make_data(d4, ["Z"], marker="old")
+    def oplog_mark(v):
+        with closing(sqlite3.connect(d4 / "operation_log.db")) as c:
+            c.execute("CREATE TABLE IF NOT EXISTS t (v TEXT)")
+            c.execute("DELETE FROM t")
+            c.execute("INSERT INTO t VALUES (?)", (v,))
+            c.commit()
+    oplog_mark("old")
+    b4 = take_backup(d4)
+    m4 = json.loads((b4 / "manifest.json").read_text(encoding="utf-8"))
+    check("backup includes operation_log.db", "operation_log.db" in [f["name"] for f in m4["files"]])
+    check("verify accepts operation_log.db", restore.verify(b4)["ok"])
+    make_data(d4, ["Z", "W"], marker="new")
+    oplog_mark("new")
+    restore.stage(b4, d4)
+    res = restore.apply_pending(d4)
+    check("restore keeps current operation log", res["status"] == "applied" and marker(d4) == "old"
+          and marker(d4, "operation_log.db") == "new" and "operation_log.db" not in res["restored"])
+
     import shutil
     shutil.rmtree(root, ignore_errors=True)
     print("restore_test: %d failure(s)" % len(FAILS))

@@ -17,8 +17,11 @@ import zipfile
 
 FORMAT = 1
 DB_NAMES = ("jst.db", "catalog.db", "unplanned.db", "purchase_watch.db", "joint_receipts.db")
+# 操作记录库会进备份（审计用），但恢复时始终保留当前操作记录，不用备份覆盖。
+KEEP_CURRENT_NAMES = ("operation_log.db",)
+ALLOWED_NAMES = DB_NAMES + KEEP_CURRENT_NAMES
 SIDECARS = ("-wal", "-shm", "-journal")
-ZIP_WHITELIST = set(DB_NAMES) | {"manifest.json"}
+ZIP_WHITELIST = set(ALLOWED_NAMES) | {"manifest.json"}
 REASON_LABELS = {"manual": "手动备份", "daily": "每日自动", "pre-upgrade": "升级前自动",
                  "pre-restore": "恢复前自动备份"}
 PENDING = "restore-pending"
@@ -120,7 +123,7 @@ def verify(backup_dir):
     seen = set()
     for f in files:
         name = f.get("name", "")
-        if name not in DB_NAMES or name in seen:
+        if name not in ALLOWED_NAMES or name in seen:
             errors.append("非法或重复的文件名：%r" % name)
             continue
         seen.add(name)
@@ -221,7 +224,7 @@ def stage(src, data_dir):
             m = _load_manifest(sdir)
             for f in m.get("files") or []:
                 name = f.get("name", "")
-                if name not in DB_NAMES:
+                if name not in ALLOWED_NAMES:
                     raise RestoreError("manifest 含非法文件名：%r" % name)
                 shutil.copyfile(sdir / name, tmp / name)
             shutil.copyfile(sdir / "manifest.json", tmp / "manifest.json")
@@ -294,7 +297,7 @@ def apply_pending(data_dir):
                "error": "；".join(v["errors"]), "parked": parked}
         _write_json_atomic(data / RESULT, res)
         return res
-    incoming = [f["name"] for f in v["manifest"]["files"]]
+    incoming = [f["name"] for f in v["manifest"]["files"] if f["name"] in DB_NAMES]
     outgoing = [n for n in DB_NAMES if not (n == "catalog.db" and n not in incoming)]
     rb = data / ("restore-rollback-" + datetime.now().strftime("%Y%m%d-%H%M%S-%f"))
     j = {"state": "applying", "rollback": str(rb), "incoming": incoming, "outgoing": outgoing,

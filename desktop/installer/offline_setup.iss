@@ -359,7 +359,7 @@ end;
 function CategoryHint(const Cat: Integer): String;
 begin
   case Cat of
-    CatDatabase: Result := '收货记录、对单/联合收货/采购监控数据、业务设置';
+    CatDatabase: Result := '收货记录、对单/联合收货/采购监控数据、操作记录、业务设置';
     CatRecordings: Result := '默认录像目录';
     CatExports: Result := 'Excel/CSV 导出';
     CatSettings: Result := '录像设置、保持登录、PDA 配对、远程管理页';
