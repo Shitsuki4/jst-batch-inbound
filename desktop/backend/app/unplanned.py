@@ -161,6 +161,7 @@ class UnplannedService:
                 if not stored_qty(line['qty']): continue
                 sku = line['sku_id']
                 if sku not in actual: actual[sku] = dict(line, recv=Decimal(0))
+                if line.get('match_src') == 'learned': actual[sku]['match_src'] = 'learned'
                 actual[sku]['recv'] += Decimal(str(line['qty']))
         purchase = {}
         for p in json.loads(s['items_json'] or '[]'):
@@ -181,7 +182,7 @@ class UnplannedService:
                 elif recv == plan: kind,reason = 'good','一致'
                 else: kind,reason = 'diff',('未收到 '+str(plan) if not recv else ('少收 ' if recv < plan else '多收 ')+str(abs(recv-plan)))
             source = a or p
-            rows.append({'sku_id':sku,'sku_code':source.get('sku_code',''),'name':source.get('name',''),'spec':source.get('spec',''),'recv':float(recv),'plan':float(plan) if linked else None,'kind':kind,'reason':reason})
+            rows.append({'sku_id':sku,'match_src':a.get('match_src',''),'sku_code':source.get('sku_code',''),'name':source.get('name',''),'spec':source.get('spec',''),'recv':float(recv),'plan':float(plan) if linked else None,'kind':kind,'reason':reason})
         for p in purchase.values():
             if not p.get('in_qty_known',False): problems.append('商品 '+p['sku_id']+' 的ERP已入库数量未知，不能确认可入库量')
             elif float(p.get('in_qty') or 0) > 0: problems.append('商品 '+p['sku_id']+' 已存在ERP入库数量，请核查补开的采购单')
@@ -346,6 +347,8 @@ class UnplannedService:
                 n=qty(body.get('qty'))
                 if self.store.db.execute('SELECT 1 FROM line WHERE batch_id=? AND sku_id=? AND id<>?',(bid,p['sku_id'],lid)).fetchone(): raise ValueError('该物流单已有此SKU，请先核对数量，不能覆盖合并')
                 with self.store.db:
+                    # 换了商品就不再是学习匹配识别的那一行，清掉「学习匹配」标记；只改名称/数量时保留。
+                    self.store.db.execute('UPDATE line SET match_src=CASE WHEN sku_id=? THEN match_src ELSE \'\' END WHERE id=?',(p['sku_id'],lid))
                     self.store.db.execute('UPDATE line SET key=?,sku_id=?,sku_code=?,name=?,spec=?,qty=?,matched=0,poi_id="",updated_at=? WHERE id=?',('sku:'+p['sku_id'],p['sku_id'],p['sku_code'],p['name'],p['spec'],n,now_str(),lid))
         elif action == 'match':
             no=clean(body.get('po_id'),200)

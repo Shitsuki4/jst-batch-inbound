@@ -184,6 +184,7 @@ class JointService:
                 r=quantity(line['qty']);line['reserved']=float(reserved.get(line['id'],0));line['available']=float(r-reserved.get(line['id'],0))
                 if r<=0:continue
                 t=totals.setdefault(line['sku_id'],dict(sku_id=line['sku_id'],name=line['name'],spec=line['spec'],plan=Decimal(0),recv=Decimal(0),sources=[]));t['recv']+=r
+                if line.get('match_src')=='learned':t['match_src']='learned'
         rows=[];short=Decimal(0);over=Decimal(0);extra=Decimal(0)
         for t in totals.values():
             p,r=t['plan'],t['recv'];kind='unknown' if p is None else 'extra' if not t['sources'] else 'good' if r==p else 'diff'
@@ -253,7 +254,7 @@ class JointService:
                     line=lines[lid];source=next(b for b in report['batches'] if b['id']==line['batch_id'])
                     if source['id'] not in bs:
                         c=self.store.db.execute('INSERT INTO batch(session_id,tracking_no,first_scan_at) VALUES(?,?,?)',(stage,source['tracking_no'],now_str()));bs[source['id']]=c.lastrowid
-                    self.store.db.execute('INSERT INTO line(session_id,batch_id,key,sku_id,sku_code,name,spec,qty,matched,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)',(stage,bs[source['id']],'sku:'+line['sku_id'],line['sku_id'],line.get('sku_code',''),line['name'],line['spec'],float(n),int(line['sku_id'] in live_sets[pid]),now_str()))
+                    self.store.db.execute('INSERT INTO line(session_id,batch_id,key,sku_id,sku_code,name,spec,qty,matched,updated_at,match_src) VALUES(?,?,?,?,?,?,?,?,?,?,?)',(stage,bs[source['id']],'sku:'+line['sku_id'],line['sku_id'],line.get('sku_code',''),line['name'],line['spec'],float(n),int(line['sku_id'] in live_sets[pid]),now_str(),'learned' if line.get('match_src')=='learned' else ''))
                     self.store.db.execute('INSERT INTO joint_allocation(group_sid,stage_sid,source_line,qty) VALUES(?,?,?,?)',(sid,stage,lid,str(n)))
         self.receipt.touch(sid);self.audit(sid,'确认采购归属 / 占用实收',json_text(allocations))
         return self.state(sid)
