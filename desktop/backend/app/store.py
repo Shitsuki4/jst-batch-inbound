@@ -326,6 +326,14 @@ class Store(object):
                 self.db.commit()
             except Exception:
                 pass
+        cols = {r["name"] for r in self.db.execute("PRAGMA table_info(line)").fetchall()}
+        if "match_src" not in cols:
+            # 「学习匹配」标记：此明细至少有一次是靠本机学习的条码对应关系识别的（非商品资料）。
+            try:
+                self.db.execute("ALTER TABLE line ADD COLUMN match_src TEXT NOT NULL DEFAULT ''")
+                self.db.commit()
+            except Exception:
+                pass
         cols = {r["name"] for r in self.db.execute("PRAGMA table_info(sku_cache)").fetchall()}
         if "pic" not in cols:
             try:
@@ -642,14 +650,17 @@ class Store(object):
                 if q <= 0:
                     q = 0
                 self.db.execute("UPDATE line SET qty=?, updated_at=? WHERE id=?", (q, now, r["id"]))
+                if payload.get("match_src") == "learned":
+                    self.db.execute("UPDATE line SET match_src='learned' WHERE id=?", (r["id"],))
                 lid = r["id"]
             else:
                 cur = self.db.execute(
-                    "INSERT INTO line(session_id,batch_id,poi_id,key,sku_id,i_id,sku_code,name,spec,qty,matched,updated_at)"
-                    " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "INSERT INTO line(session_id,batch_id,poi_id,key,sku_id,i_id,sku_code,name,spec,qty,matched,updated_at,match_src)"
+                    " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (sid, batch_id, payload.get("poi_id", ""), key, payload.get("sku_id", ""),
                      payload.get("i_id", ""), payload.get("sku_code", ""), payload.get("name", ""),
-                     payload.get("spec", ""), step, 1 if payload.get("matched", True) else 0, now))
+                     payload.get("spec", ""), step, 1 if payload.get("matched", True) else 0, now,
+                     "learned" if payload.get("match_src") == "learned" else ""))
                 lid, q = cur.lastrowid, step
             if op:
                 self._client_op_insert(op, lid, q, step)
