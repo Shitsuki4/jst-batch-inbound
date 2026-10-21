@@ -391,7 +391,7 @@
         <div class="hint mono" id="db-path"></div>
         <div class="hint">收货记录保存在本机 SQLite 数据库中，导出与备份位于当前用户的数据目录，可通过软件打开；升级安装不覆盖业务数据。</div>
       </div>
-<div class="card"><div class="card-hd">安全备份 · PDA优化版 2.0</div><p class="hint">升级前及每日在线备份SQLite，失败保留原库；不包含ERP登录资料和PDA密钥。不自动删除旧备份，请定期复制到另一块硬盘。</p><div class="row"><button class="btn btn-primary" id="backup-create">立即备份</button><button class="btn btn-ghost" id="backup-refresh">刷新状态</button></div><p id="backup-status" class="hint" role="status"></p></div>
+<div class="card"><div class="card-hd">安全备份 · PDA优化版 2.0</div><p class="hint">升级前及每日在线备份SQLite，失败保留原库；不包含ERP登录资料和PDA密钥。不自动删除旧备份，请定期复制到另一块硬盘。</p><div class="row"><button class="btn btn-primary" id="backup-create">立即备份</button><button class="btn btn-ghost" id="backup-refresh">刷新状态</button></div><p id="backup-status" class="hint" role="status"></p><div id="backup-restore"></div></div>
 <div class="card"><div class="card-hd">PDA 安装包下载 · Android 6.0+</div><p>先扫码下载安装包，再用下方另一个二维码配对。电脑与 PDA 连接同一可信局域网。</p><button class="btn btn-primary" type="button" data-download-open>生成安装包下载二维码</button></div>
 <div class="card"><div class="card-hd">PDA 局域网配对（默认关闭）</div><p class="inbound-warning">仅在可信的仓库局域网启用。配对设备将使用电脑当前ERP账号进行收货、生成待入库单和直接盘点；请只授权给可信操作员。电脑必须保持运行，不要做公网端口映射。</p><div class="inventory-grid"><label>监听本机网卡<select class="select" id="pda-host"></select></label><label>HTTPS端口<input class="input" id="pda-port" type="number" value="8766"></label><button class="btn btn-primary" id="pda-start">启用PDA服务</button><button class="btn btn-ghost" id="pda-stop">停用并撤销全部设备</button></div><p id="pda-status" class="hint" role="status"></p><button class="btn btn-primary" id="pda-pairing">生成5分钟一次性配对资料</button><button class="btn btn-ghost" id="pda-refresh">刷新设备</button><div id="pda-pair-info" hidden><p>在 PDA APK 配对资料框中，用二维码扫描枪扫描此码（键盘模式＋回车），或复制整段配对资料。二维码5分钟有效、只能配对一次，不要发给无关人员。</p><img id="pda-pair-qr" class="pair-qr" alt="PDA一次性配对二维码"><textarea class="input" id="pda-pair-text" rows="4" readonly aria-label="一次性配对资料"></textarea><p id="pda-manual" class="mono"></p></div><div id="pda-devices"></div></div>
     </section>
@@ -460,6 +460,7 @@
 <script src="/inventory.js"></script>
 <script src="/operations.js"></script>
 <script src="/enhancements.js"></script>
+<script src="/backup-restore.js"></script>
 <script src="/download.js"></script>
 <script src="/purchase-links.js"></script><script src="/settings-workspace.js"></script><script src="/remote-settings.js"></script></body>
 </html>

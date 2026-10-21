@@ -39,6 +39,9 @@ public sealed class Backend : IAsyncDisposable {
  }
  static int PickFreePort(){var listener=new TcpListener(IPAddress.Loopback,0);listener.Start();try{return ((IPEndPoint)listener.LocalEndpoint).Port;}finally{listener.Stop();}}
  public async Task<JsonDocument> Get(string route){var text=await client.GetStringAsync(Url+route);var d=JsonDocument.Parse(text);if(!d.RootElement.GetProperty("ok").GetBoolean())throw new Exception(d.RootElement.GetProperty("msg").GetString());return d;}
+ // Long-running local POST (restore staging copies/verifies databases); token sent per request.
+ static readonly HttpClient longClient=new(){Timeout=TimeSpan.FromMinutes(15)};
+ public async Task<JsonDocument> PostLong(string route,object body){using var req=new HttpRequestMessage(HttpMethod.Post,Url+route){Content=new StringContent(JsonSerializer.Serialize(body),System.Text.Encoding.UTF8,"application/json")};req.Headers.Add("X-Native-Token",Token);using var res=await longClient.SendAsync(req);var text=await res.Content.ReadAsStringAsync();JsonDocument d;try{d=JsonDocument.Parse(text);}catch{throw new Exception("业务服务返回异常（HTTP "+(int)res.StatusCode+"）");}if(!d.RootElement.TryGetProperty("ok",out var ok)||!ok.GetBoolean()){var msg=d.RootElement.TryGetProperty("msg",out var m)?m.GetString():"操作失败";d.Dispose();throw new Exception(msg);}return d;}
  public async ValueTask DisposeAsync(){if(Alive){try{await client.PostAsync(Url+"/api/native/shutdown",new StringContent("{}"));await proc!.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(20));}catch{ // Do not kill uncertain in-flight ERP write.
  try{System.IO.File.WriteAllText(Path.Combine(AppPaths.DataRoot,"service-exit-warning.txt"),"服务退出未确认。请核实原入库单，不要重复提交。");}catch{}
  }}client.Dispose();proc?.Dispose();}

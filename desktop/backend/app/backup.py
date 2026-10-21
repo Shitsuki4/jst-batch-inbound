@@ -44,7 +44,7 @@ class BackupManager:
                 return None
             dest = self.root / (datetime.now().strftime("%Y%m%d-%H%M%S-%f") + "-" + reason)
             dest.mkdir(parents=True)
-            m = {"version": VERSION, "reason": reason, "created": time.time(), "files": [], "complete": False}
+            m = {"format": 1, "version": VERSION, "reason": reason, "created": time.time(), "files": [], "complete": False}
             try:
                 for path in paths:
                     target = dest / path.name

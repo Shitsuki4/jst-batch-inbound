@@ -10,6 +10,8 @@ lease=ServiceLease(data)
 if not lease.owned:
  lease.close();sys.exit(2)
 try:
+ import restore
+ restore.apply_pending(data)  # before server import opens any DB
  import server
  server._SERVICE_LEASE=lease
  original_publish=lease.publish

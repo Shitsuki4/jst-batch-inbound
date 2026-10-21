@@ -89,6 +89,7 @@ from codes import enabled_scan_candidates
 from purchase_watch import PurchaseWatch
 from inventory import InventoryService
 from backup import BackupManager, VERSION
+import restore
 from operations import Operations
 from pda import PdaHost
 from download import InstallerHost
@@ -123,6 +124,13 @@ if __name__ == "__main__":
             webbrowser.open("http://127.0.0.1:%d/" % existing_port)
         _SERVICE_LEASE.close()
         sys.exit(0)
+
+# Swap in a staged restore only while we own the data dir and before any DB is opened.
+# native_entry.py does the same right after acquiring its own lease.
+if __name__ == "__main__":
+    _r = restore.apply_pending(DATA)
+    if _r:
+        _LOG.info("启动时处理待恢复备份：%s", json.dumps(_r, ensure_ascii=False))
 
 REPORT_CLIPBOARD = ReportClipboard(os.path.join(DATA, "report-clipboard"))
 
@@ -901,6 +909,58 @@ def _rollback_open_transaction(path=""):
 
 # ---------------------------------------------------------------- HTTP
 
+def restore_pending():
+    return os.path.isdir(os.path.join(DATA, restore.PENDING))
+
+
+def restore_source(q):
+    """id = folder name under data/backups (no traversal); path = explicit folder/manifest/zip."""
+    bid, path = str(q.get("id") or "").strip(), str(q.get("path") or "").strip()
+    if bid:
+        for row in restore.list_backups(BACKUPS.root):
+            if os.path.basename(row["directory"]) == bid:
+                return row["directory"]
+        raise ValueError("找不到该备份")
+    if path:
+        if not os.path.exists(path):
+            raise ValueError("找不到备份文件：%s" % path)
+        return path
+    raise ValueError("请选择要恢复的备份")
+
+
+def _restore_busy_rows(db, sql):
+    try:
+        return db.execute(sql).fetchone()[0]
+    except sqlite3.Error:
+        return 0
+
+
+def restore_blockers():
+    out = []
+    dbs = [("收货", STORE.db, False)]
+    for label, lazy, fname in (("无采购单", UNPLANNED, "unplanned.db"), ("联合收货", JOINT, "joint_receipts.db")):
+        if lazy.instance is not None:
+            dbs.append((label, lazy.instance.store.db, False))
+        elif os.path.isfile(os.path.join(DATA, fname)):
+            from pathlib import Path
+            uri = Path(DATA, fname).resolve().as_uri() + "?mode=ro"
+            dbs.append((label, sqlite3.connect(uri, uri=True, timeout=5), True))
+    for label, db, own in dbs:
+        try:
+            if _restore_busy_rows(db, "SELECT COUNT(*) FROM inbound_job WHERE status NOT IN ('complete','rejected')"):
+                out.append("%s有未完成的入库" % label)
+        finally:
+            if own:
+                db.close()
+    if _restore_busy_rows(STORE.db, "SELECT COUNT(*) FROM inventory_op WHERE status IN ('sending','unknown')"):
+        out.append("有正在提交或结果未知的盘点")
+    if _restore_busy_rows(STORE.db, "SELECT COUNT(*) FROM pda_request WHERE status IN ('sending','unknown')"):
+        out.append("有正在提交或结果未知的PDA请求")
+    if getattr(LAN, "server", None):
+        out.append("PDA服务正在运行，请先停止PDA服务")
+    return out
+
+
 class DesktopHTTPServer(ThreadingHTTPServer):
     # Windows may reject bursts above the stdlib's five pending connections.
     # WebView loads many assets while the native recorder polls this same port;
@@ -1058,6 +1118,9 @@ class Handler(BaseHTTPRequestHandler):
         u = urllib.parse.urlparse(self.path)
         path, qs = u.path, urllib.parse.parse_qs(u.query)
         q = {k: v[0] for k, v in qs.items()}
+
+        if path.startswith('/api/restore/'):
+            return self._restore_get(path, q)
 
         if path.startswith('/api/purchase-watch/'):
             try:
@@ -1423,6 +1486,8 @@ class Handler(BaseHTTPRequestHandler):
             if hasattr(self, "_desktop_body"):
                 del self._desktop_body
             self._desktop_body = self._body()
+            if path != "/api/restore/cancel" and restore_pending():
+                return self._fail("已选择恢复备份，正在等待重启应用。重启前不能修改任何数据；如需继续使用，请先取消恢复。", code=409)
             fn = getattr(self, "_post_" + path.strip("/").replace("/", "_").replace("-", "_"), self._nf)
             with state_lock:
                 try:
@@ -1577,6 +1642,68 @@ class Handler(BaseHTTPRequestHandler):
             return self._ok(job=INVENTORY.verify(str(self._body().get("token") or "")))
         except Exception as e:
             return self._fail(str(e))
+
+    # ---------- restore ----------
+    def _restore_get(self, path, q):
+        try:
+            if path == "/api/restore/list":
+                return self._ok(backups=restore.list_backups(BACKUPS.root), pending=restore_pending(),
+                                blockers=restore_blockers())
+            if path == "/api/restore/preview":
+                src = restore_source(q)
+                v = restore.verify(src) if os.path.isdir(src) else {"ok": True, "errors": []}
+                pv = restore.preview(src, DATA) if os.path.isdir(src) else None
+                return self._ok(verify={"ok": v["ok"], "errors": v["errors"]}, preview=pv,
+                                blockers=restore_blockers())
+            if path == "/api/restore/result":
+                rp = os.path.join(DATA, restore.RESULT)
+                if not os.path.isfile(rp):
+                    return self._ok(result=None)
+                with open(rp, encoding="utf-8") as f:
+                    res = json.load(f)
+                os.remove(rp)  # one-time banner
+                return self._ok(result=res)
+            return self._fail("接口不存在", code=404)
+        except Exception as e:
+            return self._fail(str(e))
+
+    def _post_api_restore_stage(self):
+        b = self._body()
+        if os.environ.get("JST_NATIVE_PORT"):
+            token = os.environ.get("JST_NATIVE_TOKEN", "")
+            if not token or self.headers.get("X-Native-Token") != token:
+                return self._fail("恢复备份只能在本机应用内操作", code=403)
+        if b.get("confirm") != "恢复":
+            return self._fail("请输入“恢复”确认后再恢复备份", code=400)
+        if b.get("recording") is True:
+            return self._fail("正在录像，请先停止录像再恢复备份", code=409)
+        blockers = restore_blockers()
+        if blockers:
+            return self._fail("当前不能恢复：" + "；".join(blockers), code=409)
+        try:
+            src = restore_source(b)
+        except Exception as e:
+            return self._fail(str(e), code=400)
+        try:
+            pre = BACKUPS.create("pre-restore")
+        except Exception as e:
+            return self._fail("恢复前自动备份失败，已取消恢复：" + str(e))
+        try:
+            manifest = restore.stage(src, DATA)
+        except Exception as e:
+            return self._fail("备份校验失败，未恢复：" + str(e))
+        log("已选择恢复备份 %s；已完成恢复前自动备份" % src)
+        return self._ok(pending=True, pre_restore=pre, pre_restore_label=restore.REASON_LABELS["pre-restore"],
+                        manifest=manifest, msg="已准备恢复，请重启应用完成恢复")
+
+    def _post_api_restore_cancel(self):
+        self._body()
+        import shutil
+        for name in (restore.PENDING, restore.PENDING_TMP):
+            p = os.path.join(DATA, name)
+            if os.path.isdir(p):
+                shutil.rmtree(p)
+        return self._ok(pending=False, msg="已取消恢复")
 
     def _post_api_backup_create(self):
         self._body()
