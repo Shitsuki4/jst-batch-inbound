@@ -285,12 +285,14 @@ class ReadOnlyData:
             if "joint_group" not in tables:
                 return []
             join = " JOIN joint_group g ON g.sid=s.id"
-        if start:
-            where.append("(s.started_at>=? OR EXISTS(SELECT 1 FROM batch b WHERE b.session_id=s.id AND b.first_scan_at>=?))")
-            args += [start + " 00:00:00"] * 2
-        if end:
-            where.append("(s.started_at<=? OR EXISTS(SELECT 1 FROM batch b WHERE b.session_id=s.id AND b.first_scan_at<=?))")
-            args += [end + " 23:59:59"] * 2
+        if start or end:
+            # 「范围内有活动」：开始时间，或任一物流子批次的首次扫描时间，落在 [start, end] 内。
+            # 起止两个条件必须作用在同一个时间点上（AND），不能分别由不同的时间满足，
+            # 否则 10-01 开单、只在 10-20 有扫码的单子会出现在 10-10～10-12 的结果里。
+            lo, hi = (start + " 00:00:00") if start else "", (end + " 23:59:59") if end else "\uffff"
+            where.append("((s.started_at>=? AND s.started_at<=?) OR EXISTS(SELECT 1 FROM batch b WHERE b.session_id=s.id"
+                         " AND b.first_scan_at>=? AND b.first_scan_at<=?))")
+            args += [lo, hi, lo, hi]
         if q:
             kw = "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
             fields = ["s.input_no", "s.po_id", "IFNULL(s.outer_po_id,'')", "IFNULL(s.supplier,'')"]
@@ -396,6 +398,10 @@ class ReadOnlyData:
             except ValueError:
                 items = []
             if kind == "po" or (kind == "unplanned" and s.get("po_id")):
+                # 与电脑端「本轮」同一口径：应收 = 本轮起始 采购数量 − ERP已入库（receiving_round）。
+                # po_total 为采购总数，仅供对照；本轮应收算不出时按采购总数对照并标 plan_basis='total'。
+                from receiving_round import round_targets
+                targets = round_targets(s)
                 plan = collections.OrderedDict()
                 for it in items if isinstance(items, list) else []:
                     sku = str(it.get("sku_id") or "")
@@ -408,7 +414,12 @@ class ReadOnlyData:
                 for sku in list(plan) + [k for k in recv if k not in plan]:
                     p, r = plan.get(sku), recv.get(sku)
                     got = r["recv"] if r else 0.0
-                    want = p["plan"] if p else None
+                    po_total = p["plan"] if p else None
+                    basis = None
+                    want = None
+                    if p is not None:
+                        target = targets.get(sku)
+                        want, basis = (float(target), "round") if target is not None else (po_total, "total")
                     if p is None:
                         status = "采购单外"
                     elif abs(got - want) < 1e-9:
@@ -421,7 +432,8 @@ class ReadOnlyData:
                         status = "多收 %g" % (got - want)
                     src = p or r
                     compare.append({"sku_id": sku, "sku_code": src.get("sku_code"), "name": src.get("name"),
-                                    "spec": src.get("spec"), "plan": want, "recv": got, "status": status})
+                                    "spec": src.get("spec"), "plan": want, "recv": got, "status": status,
+                                    "po_total": po_total, "plan_basis": basis})
             else:
                 compare = [dict(r, plan=None, status="仅实收") for r in recv.values()]
             out = {"type": kind, "head": head, "batches": batches, "compare": compare}

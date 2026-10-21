@@ -117,7 +117,9 @@ def main():
     results.append(("po-items-http",) + run_block("po-items-http", 8870, prep,
                                                   ["app/po_items_http_test.py"]))
     # 新功能自身使用独立临时库和 FakeJst，不接触真实聚水潭会话。
-    for name, script in [("inventory-unit", "inventory_test.py"),
+    for name, script in [("review-fixes", "review_fixes_test.py"),
+                         ("unplanned-unit", "unplanned_test.py"),
+                         ("inventory-unit", "inventory_test.py"),
                          ("inventory-http", "inventory_http_test.py"),
                          ("catalog", "catalog_test.py"),
                          ("scan-ux", "scan_ux_test.py"),

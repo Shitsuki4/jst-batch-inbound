@@ -324,6 +324,24 @@ try {
 
     Write-Host "== Uninstall with /FORCECLOSE (default: keep all data) =="
     $dataDirBefore = Test-Path -LiteralPath (Join-Path $userDataRoot "data")
+    # Remote admin page data (settings category) must be kept by the default uninstall, while its
+    # Windows firewall rules ("<prefix><port>", remote_access.firewall_rule_name) are always removed.
+    $remoteDir = Join-Path $userDataRoot "data\remote-access"
+    New-Item -ItemType Directory -Force -Path $remoteDir | Out-Null
+    $remoteSentinel = Join-Path $remoteDir "verify-config.json"
+    Set-Content -LiteralPath $remoteSentinel -Value '{"enabled": false}' -Encoding ASCII
+    $firewallPrefix = (Get-Text @(0x6536, 0x8D27, 0x5C0F, 0x52A9, 0x624B, 0x8FDC, 0x7A0B, 0x7BA1, 0x7406, 0x9875)) + " TCP "
+    $firewallRule = $firewallPrefix + "65031"
+    $isElevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    $firewallSeeded = $false
+    if ($isElevated) {
+        try {
+            New-NetFirewallRule -DisplayName $firewallRule -Direction Inbound -Action Allow -Protocol TCP -LocalPort 65031 -Profile Any -Enabled False | Out-Null
+            $firewallSeeded = $true
+        } catch {
+            Write-Host "Note: could not create the test firewall rule: $($_.Exception.Message)"
+        }
+    }
     $forceLog = Join-Path $verifyRoot "uninstall-force.log"
     $code = Invoke-Process -FilePath $uninstaller -Arguments @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/FORCECLOSE", "/LOG=$forceLog")
     if ($code -ne 0) { throw "Uninstaller with /FORCECLOSE exited with code $code (log: $forceLog)" }
@@ -340,6 +358,20 @@ try {
     }
     if ($dataDirBefore -and -not (Test-Path -LiteralPath (Join-Path $userDataRoot "data"))) {
         throw "Default silent uninstall deleted $userDataRoot\data"
+    }
+    if (-not (Test-Path -LiteralPath $remoteSentinel)) { throw "Default silent uninstall deleted the remote admin settings ($remoteDir)" }
+    Remove-Item -LiteralPath $remoteSentinel -Force -ErrorAction SilentlyContinue
+    $forceText = Get-Content -LiteralPath $forceLog -Raw
+    if ($forceText -notmatch "Remote firewall rules present") { throw "Uninstall log has no remote firewall rule check: $forceLog" }
+    if ($firewallSeeded) {
+        $leftRules = @(Get-NetFirewallRule -DisplayName ($firewallPrefix + "*") -ErrorAction SilentlyContinue)
+        if ($leftRules.Count -gt 0) {
+            $leftRules | Remove-NetFirewallRule -ErrorAction SilentlyContinue
+            throw "Uninstall left the remote admin firewall rule(s) in place (log: $forceLog)"
+        }
+        $checks.Add("Uninstall removed the remote admin page firewall rule (seeded test rule, elevated runner) and kept data\remote-access")
+    } else {
+        $checks.Add("Uninstall ran the remote firewall rule check and kept data\remote-access (rule removal not exercised: runner not elevated)")
     }
     # The uninstaller deletes its own unins000.exe/.dat last; a reinstall that starts before that
     # finishes picks unins001.exe instead. Wait so the reinstall below starts from a clean state.

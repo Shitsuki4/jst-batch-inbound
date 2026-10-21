@@ -405,6 +405,55 @@ def load_partners(refresh=False):
         return {"owners": [], "wms": [], "err": True, "err_msg": str(e)[:120]}
 
 
+def partners_for_scope():
+    """PDA 收货范围校验用的货主 / 分仓清单。**调用方不得持有 state_lock。**
+
+    只在读写本地缓存时短暂拿 state_lock；缓存缺失需要访问聚水潭时，用登录快照客户端
+    （clone_for_catalog，与扫码 / 登录请求不共享 cookie 字典）在锁外拉取，结果回锁内按
+    PARTNERS_GEN / 账号校验后再写缓存，避免一次 ERP 超时把电脑端扫码全部卡住。
+    失败时与 load_partners 一样回落到同账号的旧缓存；仍没有则返回 err。
+    """
+    import copy
+    with state_lock:
+        cached = STORE.get_kv("partners_json", "")
+        if not JST.uid:
+            return {"owners": [], "wms": [], "err": True, "err_msg": "电脑端未登录"}
+        ts = float(STORE.get_kv("partners_ts", "0") or 0)
+        if cached and time.time() - ts < PARTNERS_TTL:
+            try:
+                d = json.loads(cached)
+                if _partners_cache_ok(d):
+                    return d
+            except Exception:
+                pass
+        gen, ident = PARTNERS_GEN, (JST.uid, JST.coid)
+        client = JST.clone_for_catalog() if hasattr(JST, "clone_for_catalog") else copy.copy(JST)
+    try:
+        data = {"owners": client.partners(), "wms": client.wms_list(), "ts": now_str(),
+                "ver": PARTNERS_CACHE_VER}
+        if not data["owners"] and not data["wms"]:
+            raise BizError("empty partner list")
+    except Exception as e:
+        log("partners (PDA) fail: %s" % e)
+        with state_lock:
+            if gen == PARTNERS_GEN and ident == (JST.uid, JST.coid):
+                cached = STORE.get_kv("partners_json", "")
+                try:
+                    d = json.loads(cached) if cached else None
+                    if d and _partners_cache_ok(d):
+                        return d
+                except Exception:
+                    pass
+        return {"owners": [], "wms": [], "err": True, "err_msg": str(e)[:120]}
+    with state_lock:
+        if gen != PARTNERS_GEN or ident != (JST.uid, JST.coid):
+            log("partners (PDA) 拉取期间账号已切换，丢弃旧结果")
+            return {"owners": [], "wms": [], "err": True, "err_msg": "登录账号已切换，请重新读取清单"}
+        STORE.set_many({"partners_json": json.dumps(data, ensure_ascii=False),
+                        "partners_ts": str(time.time())})
+    return data
+
+
 def catalog_context(owner="", auth=""):
     company = str(JST.coid or STORE.get_kv("catalog_company", ""))
     return scope_key(company, owner, auth)
@@ -619,13 +668,21 @@ def po_items(sid, bid=0):
     # 这样每行 recv 之和 = SKU 实收合计，不会每行都显示总数。
     planned, _ = STORE.sku_comparison(sid, base)
     left = {k: p["recv"] for k, p in planned.items()}
+    budget = {k: p["plan"] for k, p in planned.items()}
     last_idx = {}
     for i, it in enumerate(base):
         last_idx["sku:" + str(it.get("sku_id"))] = i
     out = []
     for i, it in enumerate(base):
         key = "sku:" + str(it.get("sku_id"))
-        plan = float(it.get("qty") or 0)
+        po_qty = float(it.get("qty") or 0)
+        if planned[key].get("plan_basis") == "round":
+            # 本轮应收按 SKU 计算（同 receiving_round），再按采购单顺序分摊到各行：
+            # 每行不超过该行采购数量，余数记在该 SKU 最后一行，各行之和 = SKU 本轮应收。
+            plan = budget[key] if last_idx[key] == i else min(max(po_qty, 0.0), budget[key])
+            budget[key] -= plan
+        else:
+            plan = po_qty
         if last_idx[key] == i:
             got = left[key]
         else:
@@ -636,10 +693,11 @@ def po_items(sid, bid=0):
             "idx": i, "poi_id": it.get("poi_id"), "sku_id": it.get("sku_id"),
             "i_id": it.get("i_id"), "sku_code": it.get("sku_code"),
             "aux_codes": it.get("aux_codes"), "name": it.get("name"), "spec": it.get("spec"),
-            "plan": plan, "recv": got,
+            "plan": plan, "recv": got, "po_qty": po_qty,
             "done": abs(got - plan) < 1e-6,
             "over": got > plan + 1e-6,
             "sku_plan": sku["plan"], "sku_recv": sku["recv"],
+            "sku_po_total": sku["po_total"], "plan_basis": sku["plan_basis"],
         })
     return out
 
@@ -1918,8 +1976,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._fail("请先创建收货批次")
         if s["state"] == "closed":
             return self._fail("该采购单已结单", hint="如需继续收货，请重新「创建收货批次」")
-        if s["state"] == "paused":
-            STORE.activate_session(s["id"])    # 挂着扫单号 = 顺手恢复
+        if s["state"] == "paused" and not getattr(self, "_pda_request", False):
+            STORE.activate_session(s["id"])    # 电脑端挂着扫单号 = 顺手恢复；PDA 只建子批次，不抢电脑端当前单
         no = (b.get("tracking_no") or "").strip()
         if not no:
             return self._fail("请输入或扫描物流单号")
@@ -2145,12 +2203,26 @@ class Handler(BaseHTTPRequestHandler):
             bid = int(b.get("batch_id"))
         except Exception:
             return self._fail("参数不完整")
+        # 子批次必须属于指定的收货单（未指定时为当前收货中的单）。
+        # 已结单的旧轮次同样允许删除 / 修改，这里只校验归属，不加只读限制。
+        try:
+            want = int(b.get("sid") or 0)
+        except Exception:
+            return self._fail("收货单参数不合法")
+        if want <= 0:
+            cur = STORE.active_session()
+            want = cur["id"] if cur else 0
+        row = STORE.db.execute("SELECT session_id FROM batch WHERE id=?", (bid,)).fetchone()
+        if not row:
+            return self._fail("找不到该物流子批次")
+        if not want or row["session_id"] != want:
+            return self._fail("物流子批次不属于指定的收货单", hint="请刷新后在该子批次所属的收货单中删除")
         try:
             n = STORE.del_batch(bid)
         except Exception as e:
             log("batch del fail: %s" % e)
             return self._fail(str(e) if "入库" in str(e) else "删除失败")
-        s = self._cur_session(b.get("sid") or 0)
+        s = STORE.get_session(want)
         bs = STORE.batches(s["id"]) if s else []
         return self._ok(deleted=n, batches=bs,
                         lines=STORE.batch_lines(bs[-1]["id"]) if bs else [],
@@ -2213,16 +2285,18 @@ class Handler(BaseHTTPRequestHandler):
             sid = int(b.get("sid") or 0)
         except Exception:
             sid = 0
-        if not sid:
-            s = STORE.active_session()
-            sid = s["id"] if s else 0
-        if not sid:
-            return self._fail("没有可删除的记录")
+        # 必须明确指定要删的收货单：不再缺省删除「当前收货中」的单（误调用会整单丢数据）。
+        if sid <= 0:
+            return self._fail("请指定要删除的收货单", hint="缺少 sid，未删除任何记录")
+        s = STORE.get_session(sid)
+        if not s:
+            return self._fail("找不到该收货单记录")
         try:
             stat = STORE.del_session(sid)
         except Exception as e:
             log("session del fail: %s" % e)
             return self._fail(str(e) if "入库" in str(e) else "删除失败")
+        self._deleted_session = (sid, s["state"])   # native_bridge 据此判断是否需要停录
         return self._ok(stat=stat, msg="已删除该采购单收货记录（%d 个子批次 / %d 条明细）"
                                        % (stat["batches"], stat["lines"]))
 

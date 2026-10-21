@@ -168,11 +168,15 @@ powershell -ExecutionPolicy Bypass -File desktop/build-offline-windows.ps1 `
 | 收货数据库与自动备份 | `v3\data\*.db*`（jst / catalog / unplanned / purchase_watch / joint_receipts，含 -wal/-shm）、`v3\data\backups`、`v3\service-exit-warning.txt` |
 | 录像文件 | `v3\录像`（含 `video-associations.json`）；设置里改到 v3 内其他目录时一并处理 |
 | 导出文件 | `{app}\backend\导出`（打包后端把导出写在 exe 旁） |
-| 本机设置与登录记忆 | `v3\native-settings.json`、`v3\data\login-session.dpapi`（DPAPI 保持登录）、`v3\data\edge-login`、`v3\data\pda-private`（PDA 配对证书） |
-| 缓存与日志 | `v3\webview-profile`、`v3\video-cues`、`v3\native-errors.log`、`v3\data\logs`、`v3\data\report-clipboard`、连接/实例文件、`{app}\backend\data`（diag.log） |
+| 本机设置与登录记忆 | `v3\native-settings.json`、`v3\data\login-session.dpapi`（DPAPI 保持登录）、`v3\data\edge-login`、`v3\data\pda-private`（PDA 配对证书）、`v3\data\remote-access`（远程管理页开关、管理员密码哈希、TLS 证书与私钥） |
+| 缓存与日志 | `v3\webview-profile`、`v3\video-cues`、`v3\library-player`（录像库内置播放器页面，打开时重建）、`v3\native-errors.log`、`v3\data\logs`、`v3\data\report-clipboard`、连接/实例文件、`{app}\backend\data`（diag.log） |
 
 删除只在 `v3` 与 `{app}` 内进行；`%LOCALAPPDATA%\ReceivingAssistant\runtime`（运行依赖安装程序）
 永远不动，录像目录改到 v3 之外时也不会删除。
+
+远程管理页通过 netsh 添加的入站放行规则（名称 `收货小助手远程管理页 TCP <端口>`）无论保留哪些数据，卸载时都会删除：
+卸载程序已提权时直接删除；交互卸载未提权时先提示，再请求一次管理员权限（拒绝则提示到“高级安全 Windows Defender 防火墙”手动删除）；
+未提权的静默卸载只在日志里记录手动删除命令。
 
 小助手仍在运行时（WMI 查到可执行文件位于 `{app}` 内的进程，或 `Local\ReceivingAssistantInstalled` /
 `Local\ReceivingAssistantService` 互斥体被占用），卸载程序列出进程并提供“强制结束并继续卸载 / 取消”，
@@ -193,7 +197,7 @@ unins000.exe /VERYSILENT /SUPPRESSMSGBOXES /PURGEDATA  # 删除全部数据（�
 
 安装级验收（静默安装、只留 System32 的 PATH 下做依赖检查、与 payload 逐文件哈希比对、
 WebView2 AppContainer ACL、重装保留用户数据并重新授权、开始菜单快捷方式含卸载入口、
-小助手运行中静默卸载被拒绝且 `/FORCECLOSE` 能结束进程并卸载、默认静默卸载保留用户数据、卸载后重装、
+小助手运行中静默卸载被拒绝且 `/FORCECLOSE` 能结束进程并卸载、默认静默卸载保留用户数据（含 `data\remote-access`）并删除远程管理页防火墙规则（提权的 CI 上用测试规则验证）、卸载后重装、
 `/PURGEDATA` 删除 v3 数据但不碰 `runtime` 目录）：
 
 ```powershell

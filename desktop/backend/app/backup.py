@@ -9,7 +9,7 @@ import threading
 import time
 from datetime import datetime
 
-VERSION = "2.0.21-joint-receiving"
+from app_version import VERSION  # 与应用版本同源；升级后版本变化即触发一次升级前备份
 
 class BackupManager:
     def __init__(self, data, lock):
