@@ -16,7 +16,7 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from store import validate_qty
 
-ASSETS = {"/", "/pda.html", "/pda.js", "/style.css", "/pda.css", "/inventory.js", "/inbound.js", "/operations.js", "/ux.js", "/receipt-editor.js", "/receiving-round.js"}
+ASSETS = {"/", "/pda.html", "/pda.js", "/style.css", "/pda.css", "/inventory.js", "/inbound.js", "/operations.js", "/ux.js", "/receipt-editor.js", "/receiving-round.js", "/barcode-learn.js", "/barcode-learn.css"}
 GETS = {"/api/inventory/partners", "/api/inventory/config", "/api/inventory/lookup", "/api/inventory/history", "/api/inbound/options", "/api/inbound/preview", "/api/session/detail", "/api/operations", "/api/learned/search"}
 POSTS = {"/api/line/edit", "/api/inventory/preview", "/api/inventory/submit", "/api/inventory/verify", "/api/inbound/create", "/api/inbound/resume", "/api/tracking/scan", "/api/item/scan", "/api/item/choose", "/api/operations/note", "/api/learned/learn"}
 RECEIPT = {"/api/tracking/scan", "/api/item/scan", "/api/item/choose"}
