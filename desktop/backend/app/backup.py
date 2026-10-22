@@ -1,4 +1,5 @@
 """SQLite online backups. Never include browser profiles or TLS/session secrets."""
+import contextlib
 from contextlib import closing
 import hashlib
 import json
@@ -16,6 +17,7 @@ class BackupManager:
         self.data = Path(data)
         self.root = self.data / "backups"
         self.lock = lock
+        self._create_lock = threading.Lock()
         self.last_error = ""
 
     def manifests(self):
@@ -38,36 +40,69 @@ class BackupManager:
                 "recent": rows[:10], "automatic": "升级前及每天；不自动删除旧备份"}
 
     def create(self, reason="manual"):
-        with self.lock:
-            paths = [self.data / n for n in ("jst.db", "catalog.db", "unplanned.db", "purchase_watch.db", "joint_receipts.db", "learned_codes.db", "operation_log.db") if (self.data / n).is_file()]
-            if not paths:
-                return None
-            dest = self.root / (datetime.now().strftime("%Y%m%d-%H%M%S-%f") + "-" + reason)
-            dest.mkdir(parents=True)
-            m = {"format": 1, "version": VERSION, "reason": reason, "created": time.time(), "files": [], "complete": False}
-            try:
+        """在线备份全部业务库。
+
+        只在固定各库读快照时短暂持有业务锁（WAL 库开读事务，跨库一致）；复制、完整性检查、
+        计算摘要都在锁外进行，备份大库不会卡住扫码。恢复前备份（pre-restore）例外：它本身就是
+        写入屏障，保持持锁，保证备份即恢复前的最后状态。多个备份由 _create_lock 串行。"""
+        # 锁顺序：_create_lock → 业务锁。调用方（手动备份请求）可能持有业务锁，等待时先释放它。
+        if not self._create_lock.acquire(blocking=False):
+            released = getattr(self.lock, "released", None)
+            with (released("backup-wait") if released else contextlib.nullcontext()):
+                self._create_lock.acquire()
+        try:
+            return self._create(reason)
+        finally:
+            self._create_lock.release()
+
+    def _create(self, reason):
+        paths = [self.data / n for n in ("jst.db", "catalog.db", "unplanned.db", "purchase_watch.db", "joint_receipts.db", "learned_codes.db", "operation_log.db") if (self.data / n).is_file()]
+        if not paths:
+            return None
+        dest = self.root / (datetime.now().strftime("%Y%m%d-%H%M%S-%f") + "-" + reason)
+        dest.mkdir(parents=True)
+        m = {"format": 1, "version": VERSION, "reason": reason, "created": time.time(), "files": [], "complete": False}
+        sources = []
+        try:
+            with self.lock:
                 for path in paths:
-                    target = dest / path.name
-                    with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=10)) as source:
+                    source = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=10)
+                    sources.append((path, source))
+                    if source.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal":
+                        # 固定读快照：之后的写入不进入本次备份，也不阻塞写入方。
+                        source.execute("BEGIN")
+                        source.execute("SELECT COUNT(*) FROM sqlite_master").fetchone()
+                released = getattr(self.lock, "released", None)
+                outside = released("backup") if released and reason != "pre-restore" else contextlib.nullcontext()
+                with outside:
+                    for path, source in sources:
+                        target = dest / path.name
                         with closing(sqlite3.connect(target)) as out:
-                            source.backup(out, pages=256, sleep=0.02)
+                            source.backup(out)
                             out.execute("PRAGMA journal_mode=DELETE")
                             if out.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
                                 raise RuntimeError("备份数据库完整性检查失败：" + path.name)
-                    digest = hashlib.sha256()
-                    with target.open("rb") as f:
-                        for chunk in iter(lambda: f.read(1024 * 1024), b""):
-                            digest.update(chunk)
-                    m["files"].append({"name": path.name, "bytes": target.stat().st_size, "sha256": digest.hexdigest()})
-                m["complete"] = True
-                self.last_error = ""
-            except Exception as e:
-                self.last_error = str(e)
-                m["error"] = self.last_error
-                raise
-            finally:
-                (dest / "manifest.json").write_text(json.dumps(m, ensure_ascii=False, indent=2), encoding="utf-8")
-            return m
+                        if source.in_transaction:
+                            source.rollback()
+                        digest = hashlib.sha256()
+                        with target.open("rb") as f:
+                            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                                digest.update(chunk)
+                        m["files"].append({"name": path.name, "bytes": target.stat().st_size, "sha256": digest.hexdigest()})
+            m["complete"] = True
+            self.last_error = ""
+        except Exception as e:
+            self.last_error = str(e)
+            m["error"] = self.last_error
+            raise
+        finally:
+            for _, source in sources:
+                try:
+                    source.close()
+                except Exception:
+                    pass
+            (dest / "manifest.json").write_text(json.dumps(m, ensure_ascii=False, indent=2), encoding="utf-8")
+        return m
 
     def before_upgrade(self):
         if (self.data / "jst.db").exists() and not any(m.get("version") == VERSION and m.get("complete") for m in self.manifests()):

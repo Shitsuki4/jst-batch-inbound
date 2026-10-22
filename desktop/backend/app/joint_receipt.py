@@ -5,6 +5,7 @@ import csv
 import hashlib
 import io
 import json
+from statelock import unlocking
 from decimal import Decimal
 from inbound import InboundService, InboundError, json_text, quantity
 from jst import normalize_po_item
@@ -58,7 +59,7 @@ class JointInbound(InboundService):
 
 class JointService:
     def __init__(self,path,client,find_purchase,lookup,scan_filter=None,learned=None):
-        self.client=client;self.find_purchase=find_purchase
+        self.client=unlocking(client);self.find_purchase=find_purchase
         self.receipt=UnplannedService(path,client,find_purchase,lookup,scan_filter,learned=learned)
         self.store=self.receipt.store
         self.store.db.executescript('''
@@ -130,6 +131,8 @@ class JointService:
         else: expected=None
         if self.store.db.execute('SELECT 1 FROM joint_group WHERE account=? AND mother=?',(account,mother)).fetchone(): raise ValueError('此母单已有联合批次，请查询原批次继续，不能重复新建')
         pos=[self.resolve_po(no) for no in nos];pos=list({p['po_id']:p for p in pos}.values())
+        # 采购单读取在锁外：回锁后重新确认母单未被其他请求抢先登记。
+        if self.store.db.execute('SELECT 1 FROM joint_group WHERE account=? AND mother=?',(self.account(),mother)).fetchone(): raise ValueError('此母单已有联合批次，请查询原批次继续，不能重复新建')
         if len({(p['owner'],p['auth']) for p in pos})!=1: raise ValueError('只能合并同货主、同仓库公司的采购单')
         s=self.receipt.new(body.get('note',''));sid=s['session']['id']
         with self.store.db:
@@ -145,6 +148,10 @@ class JointService:
         self.group(sid)
         pos=[dict(r) for r in self.store.db.execute('SELECT * FROM joint_purchase WHERE group_sid=?',(sid,))]
         reads=[(self.read_detail(p),p['id']) for p in pos]  # all-or-none, never turn a failed read into zero
+        # 明细读取在锁外：期间采购单被替换 / 增删则放弃本次刷新，不把旧单明细写进新关联。
+        ident=lambda rows:[(r['id'],r['po_id'],r['owner'],r['auth']) for r in rows]
+        if ident([dict(r) for r in self.store.db.execute('SELECT * FROM joint_purchase WHERE group_sid=?',(sid,))])!=ident(pos):
+            raise ValueError('刷新期间联合批次的采购单已变化，未更新；请重新刷新')
         with self.store.db:
             for raw,pid in reads:self.store.db.execute('UPDATE joint_purchase SET live_json=?,read_at=? WHERE id=?',(json_text(raw),now_str(),pid))
         self.store.db.execute('UPDATE session SET items_json=? WHERE id=?',(json_text([normalize_po_item(r) for raw,pid in reads for r in raw]),sid));self.store.db.commit()

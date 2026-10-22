@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """把 HTTP 业务请求翻译成操作记录。
 
-由 server.Handler._run_logged 在 state_lock 内调用：
+由 server.Handler._run_logged 在 state_lock 内调用（处理中途可能为远程调用临时释放锁，
+期间其他请求写入的 scan_audit 区间由 STATE_LOCK.audit_exclusion 排除）：
 * before()：只读快照（明细原数量、物流单号、收货单信息、设置原值、登录身份），并对入库请求先记一条「提交入库单请求」；
 * after()：根据响应和 scan_audit 增量（store 触发器记录的每次明细数量变化，含操作前 / 操作后）生成记录。
 两者都不改业务库、不抛异常；写入失败由 OpLog 自己吞掉。
@@ -266,9 +267,12 @@ def line_records(app, path, body, ctx, store):
     start = ctx.get("audit_max")
     if start is None or store is None:
         return None
+    lock = getattr(app, "STATE_LOCK", None)
+    # 本请求在锁外做远程调用期间，其他请求写入的 scan_audit 行不算本请求的操作。
+    excl, params = lock.audit_exclusion(store.db) if lock is not None else ("", [])
     try:
         rows = [dict(r) for r in store.db.execute(
-            "SELECT * FROM scan_audit WHERE id>? ORDER BY id LIMIT 2000", (start,))]
+            "SELECT * FROM scan_audit WHERE id>?" + excl + " ORDER BY id LIMIT 2000", [start] + params)]
     except Exception:
         return None
     action = ctx.get("action")

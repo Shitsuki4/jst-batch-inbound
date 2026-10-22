@@ -9,6 +9,7 @@ import json
 from decimal import Decimal, InvalidOperation
 from urllib.parse import urlencode
 from jst import CallbackRejected
+from statelock import keyed, unlocking
 
 
 
@@ -248,8 +249,28 @@ class PurchaseInAPI:
 
 
 class InboundService:
+    """入库生成。远程调用全部在 state_lock 之外（客户端经 Unlocking 包装）。
+
+    同一收货库同一批次的 create / resume 由 keyed 锁串行；远程核对期间其他终端仍可扫码，
+    预留（reserve_inbound）前在锁内比较本地状态令牌，期间有变化即报冲突，不用旧快照开单。
+    预留之后由 inbound_batch / inbound_line 触发器冻结相关明细。"""
+
     def __init__(self, store, client):
-        self.store, self.client = store, client
+        self.store, self.client = store, unlocking(client)
+
+    def _key(self, sid):
+        return ("inbound", getattr(self.store, "path", None) or id(self.store), int(sid or 0))
+
+    def local_token(self, sid):
+        """本批次本地状态的版本令牌：会话上下文、全部明细及入库记录状态。在锁内调用。"""
+        s = self.store.get_session(sid) or {}
+        lines = [tuple(r) for r in self.store.db.execute(
+            "SELECT id,batch_id,key,sku_id,qty,matched FROM line WHERE session_id=? ORDER BY id", (sid,))]
+        batches = [tuple(r) for r in self.store.db.execute(
+            "SELECT id,tracking_no FROM batch WHERE session_id=? ORDER BY id", (sid,))]
+        jobs = [(j["id"], j["status"], j["io_id"]) for j in self.store.inbound_jobs(sid)]
+        head = tuple(s.get(k) for k in ("po_id", "owner_co_id", "auth_co_id", "items_json", "state"))
+        return hashlib.sha256(json_text([head, lines, batches, jobs]).encode("utf-8")).hexdigest()
 
     def preview(self, sid, wh_id=None, *, validate_override=None, mode=None):
         session = self.store.get_session(sid)
@@ -343,7 +364,12 @@ class InboundService:
     def create(self, sid, fingerprint, wh_id=None, *, mode=None):
         if mode not in (None, "purchase_only", "all_received"):
             raise InboundError("请选择有效的入库方式")
+        with keyed(self._key(sid)):
+            return self._create(sid, fingerprint, wh_id, mode=mode)
+
+    def _create(self, sid, fingerprint, wh_id=None, *, mode=None):
         if getattr(self, "cross_guard", None): self.cross_guard(self.store, sid)
+        token = self.local_token(sid)
         existing = self.store.db.execute("SELECT id,session_id FROM inbound_job WHERE fingerprint=?",
                                          (fingerprint,)).fetchone()
         if existing:
@@ -378,6 +404,10 @@ class InboundService:
                     raise InboundError("商品 %s 在最新采购单中不存在或有多行，不能自动确定采购明细/成本" % p["sku_id"])
         # Check every SKU before reserving batches or creating an empty ERP draft.
         api.validate_products(snapshot)
+        # 以上远程核对都在锁外进行；回到锁内后确认期间没有其他终端改动本批次，再原子预留。
+        if self.local_token(sid) != token:
+            raise InboundError("核对期间收货明细或入库记录已变化（可能有其他终端操作），未生成入库单；请重新预览并确认")
+        if getattr(self, "cross_guard", None): self.cross_guard(self.store, sid)
         job_id = self.store.reserve_inbound(snapshot, fingerprint, text(self.client.coid))
         try:
             io_id = api.create(snapshot["po_id"])
@@ -391,6 +421,13 @@ class InboundService:
         return self.resume(job_id)
 
     def resume(self, job_id, bind_io_id=""):
+        job = self.store.get_inbound(job_id)
+        if not job:
+            raise InboundError("找不到入库生成记录")
+        with keyed(self._key(job["session_id"])):
+            return self._resume(job_id, bind_io_id)
+
+    def _resume(self, job_id, bind_io_id=""):
         job = self.store.get_inbound(job_id)
         if not job:
             raise InboundError("找不到入库生成记录")
@@ -417,6 +454,9 @@ class InboundService:
                 api.verify(rows, desired)
             elif row.get("status") != "待入库":
                 raise InboundError("只能关联待入库空草稿或数量完全一致的单据")
+            current = self.store.get_inbound(job_id)
+            if not current or current["status"] != job["status"] or (current["io_id"] or "") != (io_id or ""):
+                raise InboundError("入库记录在核对期间已变化，请刷新后查看原单")
             self.store.update_inbound(job_id, "pending", io_id=bind_io_id)
             io_id = bind_io_id
         if not io_id:

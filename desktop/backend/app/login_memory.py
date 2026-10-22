@@ -5,6 +5,7 @@ Only our own session is protected, not cookies read from a browser profile.
 """
 import ctypes
 from ctypes import wintypes
+import contextlib
 import json
 import os
 from pathlib import Path
@@ -111,7 +112,10 @@ class LoginMemory:
             self.forget()
             return None
 
-    def restore(self, client, factory):
+    def restore(self, client, factory, outside=None):
+        """outside：远程验证时使用的上下文（服务端传入 remote()，在全局锁外验证）。
+
+        读取保存的登录（会读本地设置）与写回共享客户端都在调用方的锁内；只有探测请求在 outside 内。"""
         if client.uid:
             return {'restored': True}
         cookies = self.read()
@@ -120,13 +124,16 @@ class LoginMemory:
         # Validate with a separate read-only client before exposing a logged-in state.
         probe = factory()
         try:
-            probe.adopt_cookies(cookies)
-            probe._viewstate(probe._list_url(probe.coid, probe.coid))
+            with (outside() if outside else contextlib.nullcontext()):
+                probe.adopt_cookies(cookies)
+                probe._viewstate(probe._list_url(probe.coid, probe.coid))
         except Exception as exc:
             if '登录态失效' in str(exc):
                 self.forget()
                 return {'restored': False, 'msg': '保存的登录已失效，请重新登录。'}
             # A transient network/permission failure must not destroy the saved token.
             return {'restored': False, 'msg': '暂时无法验证保存的登录，请检查网络后重试，或手动登录。'}
+        if client.uid:   # 验证期间用户已用其他方式登录：不覆盖新的登录
+            return {'restored': True}
         client.adopt_cookies(probe.cookies)
         return {'restored': True}

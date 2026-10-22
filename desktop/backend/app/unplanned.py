@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import math
+from statelock import unlocking
 from decimal import Decimal
 from store import Store, now_str, validate_qty, MAX_QTY, QTY_ERROR
 from inbound import InboundService, InboundError, json_text
@@ -79,7 +80,8 @@ class StrictInbound(InboundService):
 class UnplannedService:
     def __init__(self, path, client, find_purchase, lookup, scan_filter=None, learned=None):
         self.store = Store(path)
-        self.client, self.find_purchase, self.lookup = client, find_purchase, lookup
+        # 采购单读取等远程调用在 state_lock 外进行；回锁后用 revision / 会话上下文复核。
+        self.client, self.find_purchase, self.lookup = unlocking(client), find_purchase, lookup
         # learned(code, owner, auth, found_rows)：商品资料命中时让学习匹配让位并返回 []；
         # 商品资料完全查不到时返回本机学习匹配（仅兜底）。
         self.learned = learned
@@ -222,8 +224,17 @@ class UnplannedService:
             p = by_sku.get(row['sku_id'],{})
             self.store.db.execute('UPDATE line SET matched=?,poi_id=? WHERE id=?',(int(bool(p)),p.get('poi_id',''),row['id']))
 
-    def load_purchase(self, sid, po_id, owner, auth, outer=None, supplier=None):
+    def _context_token(self, sid):
+        s = self.session(sid)
+        return (s['po_id'], s['owner_co_id'], s['auth_co_id'], s['state'])
+
+    def load_purchase(self, sid, po_id, owner, auth, outer=None, supplier=None, recheck=None):
+        before = self._context_token(sid)
         values = self.client.fetch_detail(po_id, owner, auth).get('datas') or []
+        # 明细读取在锁外：回锁后确认期间关联 / 状态未被其他请求改动，再写入。
+        if self._context_token(sid) != before:
+            raise ValueError('读取采购单期间该批次已被其他操作修改，未更新；请刷新后重试')
+        if recheck: recheck()
         with self.store.db:
             self.write_purchase(sid,po_id,owner,auth,values,outer,supplier)
 
@@ -327,6 +338,9 @@ class UnplannedService:
             if action == 'scan':
                 code = clean(body.get('code'),200)
                 rows = self.candidates(sid,code)
+                # 缺码实时查询可能在锁外进行：回锁后重新校验版本与物流单，期间有变化即报冲突。
+                self.guard(sid,body.get('revision'))
+                self.batch(sid,bid)
                 chosen = clean(body.get('sku_id'),200)
                 if chosen: rows = [r for r in rows if r['sku_id']==chosen]
                 if len(rows)!=1: return {'candidates':rows,'selection_required':True,'code':code}
@@ -365,7 +379,8 @@ class UnplannedService:
                     or (row.get('owner_co_id') and str(row['owner_co_id']) != owner)
                     or (row.get('wms_co_id') and str(row['wms_co_id']) != auth)):
                 raise ValueError('采购单货主 / 分仓与当前收货批次范围不一致，未关联')
-            self.load_purchase(sid,str(row['po_id']),owner,auth,str(row.get('outer_po_id') or ''),str(row.get('supplier_name') or row.get('supplier') or ''))
+            self.load_purchase(sid,str(row['po_id']),owner,auth,str(row.get('outer_po_id') or ''),str(row.get('supplier_name') or row.get('supplier') or ''),
+                               recheck=lambda: self.guard(sid,body.get('revision'),reconciliation=True))
             return self.state(sid)
         elif action == 'refresh':
             self.refresh(sid);return self.state(sid)
