@@ -44,15 +44,15 @@ public static class Dependencies {
 
 public sealed class DependencyWindow:Window {
  readonly TextBlock state=new(){TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,12,0,12)};
- readonly TextBox output=new(){IsReadOnly=true,AcceptsReturn=true,TextWrapping=TextWrapping.Wrap,VerticalScrollBarVisibility=ScrollBarVisibility.Auto,Height=230};
- readonly Button install=new(){Content="一键安装缺少的依赖",Margin=new Thickness(4)},retry=new(){Content="重新检查",Margin=new Thickness(4)},enter=new(){Content="进入小助手",Margin=new Thickness(4),IsEnabled=false};
+ readonly TextBox output=new(){IsReadOnly=true,AcceptsReturn=true,TextWrapping=TextWrapping.Wrap,VerticalScrollBarVisibility=ScrollBarVisibility.Auto,Height=230,FontFamily=Palette.Mono,FontSize=12};
+ readonly Button install=new(){Content="一键安装缺少的依赖",Margin=new Thickness(0,0,8,0)},retry=new(){Content="重新检查",Margin=new Thickness(0,0,8,0)},enter=new Button{Content="进入扫码入库",Margin=new Thickness(0,0,8,0),IsEnabled=false}.Level(Theme.Primary);
  DependencyState? result;bool busy;public bool Accepted{get;private set;}
- public DependencyWindow(){Title="收货小助手 · 环境就绪检查";Width=750;Height=560;WindowStartupLocation=WindowStartupLocation.CenterScreen;
-  var panel=new StackPanel{Margin=new Thickness(22)};Content=panel;
-  panel.Children.Add(new TextBlock{Text="自动检查 WebView2 与录像组件",FontSize=23,FontWeight=FontWeights.Bold});
-  panel.Children.Add(new TextBlock{Text=AppPaths.Installed?"离线完整版：检查软件自带的浏览器与录像组件，无需下载或系统安装。若组件损坏，请重新运行完整安装包修复。业务数据与录像保留在独立目录。":"仅在缺失或不可用时安装，不修改收货数据库。断网电脑可先运行「运行依赖安装程序」（收货小助手-版本-运行依赖安装程序.exe），装好后点重新检查即可，无需联网。一键安装需要联网，可能显示Windows权限确认。点击一键安装即同意由Windows包管理器下载安装所缺组件及其许可条款（Microsoft WebView2 / Gyan FFmpeg）。",TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,12,0,0)});
+ public DependencyWindow(){Title="扫码入库 · 环境就绪检查";Theme.Dialog(this);Width=750;Height=560;WindowStartupLocation=WindowStartupLocation.CenterScreen;
+  var panel=new StackPanel();Content=new Border{Margin=new Thickness(18),Child=Theme.Card(panel,22)};
+  panel.Children.Add(new TextBlock{Text="自动检查 WebView2 与录像组件",FontSize=22,FontWeight=FontWeights.Bold,Foreground=Palette.Text});
+  panel.Children.Add(new TextBlock{Text=AppPaths.Installed?"离线完整版：检查软件自带的浏览器与录像组件，无需下载或系统安装。若组件损坏，请重新运行完整安装包修复。业务数据与录像保留在独立目录。":"仅在缺失或不可用时安装，不修改收货数据库。断网电脑可先运行「运行依赖安装程序」（收货小助手-版本-运行依赖安装程序.exe），装好后点重新检查即可，无需联网。一键安装需要联网，可能显示Windows权限确认。点击一键安装即同意由Windows包管理器下载安装所缺组件及其许可条款（Microsoft WebView2 / Gyan FFmpeg）。",TextWrapping=TextWrapping.Wrap,Foreground=Palette.Text2,Margin=new Thickness(0,12,0,0)});
   panel.Children.Add(state);panel.Children.Add(output);var buttons=new WrapPanel{Margin=new Thickness(0,12,0,0)};panel.Children.Add(buttons);buttons.Children.Add(install);buttons.Children.Add(retry);buttons.Children.Add(enter);
-  var store=new Button{Content="缺少winget？打开微软应用安装程序",Margin=new Thickness(4)};if(!AppPaths.Installed)buttons.Children.Add(store);else install.Visibility=Visibility.Collapsed;store.Click+=(_,_)=>{try{Process.Start(new ProcessStartInfo("ms-windows-store://pdp/?ProductId=9NBLGGH4NNS1"){UseShellExecute=true});}catch(Exception ex){Log(ex.Message+"；请在Microsoft Store搜索‘应用安装程序’。");}};
+  var store=new Button{Content="缺少winget？打开微软应用安装程序",Margin=new Thickness(0,0,8,0)}.Level(Theme.Ghost);if(!AppPaths.Installed)buttons.Children.Add(store);else install.Visibility=Visibility.Collapsed;store.Click+=(_,_)=>{try{Process.Start(new ProcessStartInfo("ms-windows-store://pdp/?ProductId=9NBLGGH4NNS1"){UseShellExecute=true});}catch(Exception ex){Log(ex.Message+"；请在Microsoft Store搜索‘应用安装程序’。");}};
   install.Click+=async(_,_)=>await Run(true);retry.Click+=async(_,_)=>await Run(false);enter.Click+=(_,_)=>{Accepted=true;Close();};Loaded+=async(_,_)=>await Run(false);
   Closing+=(_,e)=>{if(busy){e.Cancel=true;Log("正在检查或安装，请等待结束，不要中断系统安装进程。");}};
  }

@@ -111,6 +111,16 @@ sealed class LibraryAcceptanceRunner : IVideoLibraryHost {
  LibraryItem Item(VideoSegment s)=>store.List().Single(i=>i.Id==s.Id);
  bool Gone(VideoSegment s)=>!File.Exists(s.File)&&!File.Exists(s.File+".json")&&!File.Exists(s.File+".log")&&s.Photos.All(n=>!File.Exists(Path.Combine(Path.GetDirectoryName(s.File)!,n)));
  HashSet<string> AssociationKeys(){var f=Path.Combine(recordings,"video-associations.json");if(!File.Exists(f))return new();using var d=JsonDocument.Parse(File.ReadAllText(f));return d.RootElement.EnumerateObject().Select(p=>p.Name).ToHashSet();}
+ void ShotOf(Window w,string name){try{w.UpdateLayout();var image=new RenderTargetBitmap(Math.Max(1,(int)w.ActualWidth),Math.Max(1,(int)w.ActualHeight),96,96,PixelFormats.Pbgra32);image.Render(w);var enc=new PngBitmapEncoder();enc.Frames.Add(BitmapFrame.Create(image));using var f=File.Create(Path.Combine(output,name));enc.Save(f);soft["shot:"+name]=true;}catch(Exception ex){soft["shot:"+name]=ex.Message;}}
+ // C 风格主窗口外壳（无后端）：同一 ShellChrome 构建的工具栏 + 状态行，业务区用占位卡片代替 WebView2。Screenshot only (soft), not a check.
+ async Task ShellShot(){
+  var status=new TextBlock{Text="自动录像已启用，等待确认物流单号。　物流：—　业务服务：运行中"};var (top,bar)=ShellChrome.Build(status);
+  foreach(var (text,level) in new[]{("显示监控浮窗",Theme.Primary),("结束本单录像",Theme.Secondary),("继续本单新一段",Theme.Secondary),("打开录像目录",Theme.Ghost)})bar.Children.Add(ShellChrome.Action(text,level));
+  var dock=new DockPanel();DockPanel.SetDock(top,Dock.Top);dock.Children.Add(top);
+  dock.Children.Add(new Border{Margin=new Thickness(16),Child=Theme.Card(new TextBlock{Text="业务界面（WebView2 · 网页 C 风格，侧栏品牌「"+ShellChrome.Brand+"」）",Foreground=Palette.Text3,HorizontalAlignment=HorizontalAlignment.Center,VerticalAlignment=VerticalAlignment.Center},24)});
+  var w=Theme.Dialog(new Window{Title=ShellChrome.WindowTitle,Width=1280,Height=720,Content=dock,ShowActivated=false,WindowStartupLocation=WindowStartupLocation.CenterScreen});
+  try{w.Show();await Task.Delay(300);ShotOf(w,"shell-chrome.png");}finally{w.Close();}
+ }
  void Shot(string name){window.UpdateLayout();var image=new RenderTargetBitmap(Math.Max(1,(int)window.ActualWidth),Math.Max(1,(int)window.ActualHeight),96,96,PixelFormats.Pbgra32);image.Render(window);var enc=new PngBitmapEncoder();enc.Frames.Add(BitmapFrame.Create(image));using var f=File.Create(Path.Combine(output,name));enc.Save(f);}
  async Task Select(params VideoSegment[] segments){await Until(()=>!view.Loading,30,"列表加载");var ids=segments.Select(s=>s.Id).ToHashSet();view.Grid.SelectRows(view.Rows.Where(r=>ids.Contains(r.Id)));view.Grid.UpdateLayout();Check(view.SelectedRows.Count==segments.Length,"选中 "+string.Join(",",segments.Select(s=>s.Tracking)));}
  async Task Search(string text,bool enter=true){view.Query.Text=text;await view.SearchAsync(enter);await Task.Delay(50);}
@@ -158,7 +168,7 @@ sealed class LibraryAcceptanceRunner : IVideoLibraryHost {
 
    // ---- open: today's recordings, autofocus search
    view=new VideoLibraryView(this);
-   window=new Window{Title="录像查询 · 验收",Width=1280,Height=820,Content=view,ShowActivated=true,WindowStartupLocation=WindowStartupLocation.CenterScreen,FontFamily=new FontFamily("Microsoft YaHei UI"),FontSize=14};
+   window=new Window{Title="录像查询 · 验收",Background=Palette.Bg,Width=1280,Height=820,Content=view,ShowActivated=true,WindowStartupLocation=WindowStartupLocation.CenterScreen,FontFamily=new FontFamily("Microsoft YaHei UI"),FontSize=14};
    var loaded=new TaskCompletionSource();window.Loaded+=(_,_)=>loaded.TrySetResult();window.Show();await loaded.Task.WaitAsync(TimeSpan.FromSeconds(30));
    sw.Restart();await view.OpenAsync();timings["open_seconds"]=sw.Elapsed.TotalSeconds;
    Check(view.Preset==LibraryPreset.Today,"默认打开今天");
@@ -258,7 +268,7 @@ sealed class LibraryAcceptanceRunner : IVideoLibraryHost {
 
    // ---- multi delete: live always skipped, protected skipped by default, missing media cleans index
    view.Grid.UnselectAll();Toggle(view.HeaderCheck);await Task.Delay(50);Check(view.SelectedRows.Count==5,"今天 5 段全选（表头复选框）");
-   await Click("删除所选",DeleteConfirmDialog.DialogTitle,w=>{var d=(DeleteConfirmDialog)w;
+   await Click("删除所选",DeleteConfirmDialog.DialogTitle,w=>{var d=(DeleteConfirmDialog)w;ShotOf(w,"library-delete-confirm.png");
     Check(d.SummaryText.Text.Contains("将永久删除 3 段")&&d.SummaryText.Text.Contains("1 段视频文件已不存在"),"确认框：数量 / 大小 / 缺失文件 "+d.SummaryText.Text);
     Check(d.Details.Text.Contains("跳过（在录）")&&d.Details.Text.Contains("跳过（售后保护）")&&d.IncludeProtected.IsVisible&&d.IncludeProtected.IsChecked==false,"确认框：列出跳过项，售后保护默认不删");
     Check(d.CancelButton.IsDefault&&!d.ConfirmButton.IsDefault,"危险操作默认按钮为取消");
@@ -296,6 +306,7 @@ sealed class LibraryAcceptanceRunner : IVideoLibraryHost {
    foreach(var s in new[]{live,week,oldProt,oldFailed})Check(Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(s.File)))==originals[s.Id],"未选中录像字节不变："+s.Tracking);
    await view.ReloadAsync();Check(store.List().Count==view.AllItems.Count&&view.AllItems.Count==bulk+5,"重新读取后索引一致："+view.AllItems.Count);
    Shot("library-final.png");
+   await ShellShot();
    lock(unhandled)Check(unhandled.Count==0,"无未处理异常");
   }catch(Exception ex){error=ex;try{if(window!=null)Shot("library-failure.png");}catch{}}
   var ok=error==null;

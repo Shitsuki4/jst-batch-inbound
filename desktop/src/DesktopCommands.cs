@@ -161,8 +161,8 @@ public sealed partial class MainWindow {
   var existing=kind=="export"?exportWindow:libraryWindow;if(existing!=null){existing.Activate();return;}
   var content=kind=="export"?exportContent:libraryContent;
   var win=kind=="export"
-   ?new Window{Title="明细导出 · 秒级扫描记录",Owner=this,Width=1180,Height=760,MinWidth=820,MinHeight=580,WindowStartupLocation=WindowStartupLocation.CenterOwner,Content=content,FontFamily=FontFamily,FontSize=FontSize}
-   :new Window{Title="录像查询 · 视频举证",Owner=this,Width=Math.Min(1440,Math.Max(1024,SystemParameters.WorkArea.Width-40)),Height=Math.Min(900,Math.Max(640,SystemParameters.WorkArea.Height-40)),MinWidth=1000,MinHeight=600,WindowStartupLocation=WindowStartupLocation.CenterOwner,Content=content,FontFamily=FontFamily,FontSize=FontSize};
+   ?Theme.Dialog(new Window{Title="明细导出 · 秒级扫描记录",Owner=this,Width=1180,Height=760,MinWidth=820,MinHeight=580,WindowStartupLocation=WindowStartupLocation.CenterOwner,Content=content,FontFamily=FontFamily,FontSize=FontSize})
+   :Theme.Dialog(new Window{Title="录像查询 · 视频举证",Owner=this,Width=Math.Min(1440,Math.Max(1024,SystemParameters.WorkArea.Width-40)),Height=Math.Min(900,Math.Max(640,SystemParameters.WorkArea.Height-40)),MinWidth=1000,MinHeight=600,WindowStartupLocation=WindowStartupLocation.CenterOwner,Content=content,FontFamily=FontFamily,FontSize=FontSize});
   if(kind=="export")exportWindow=win;else libraryWindow=win;
   win.Closed+=(_,_)=>{if(kind!="export")libraryView?.Detach();win.Content=null;if(kind=="export")exportWindow=null;else libraryWindow=null;};win.Show();
  }

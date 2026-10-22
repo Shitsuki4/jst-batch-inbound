@@ -238,11 +238,11 @@ public sealed class PreviewWindow:Window {
   await rec.SetEvidenceAsync(value,old.Protected);
  }
  public static string? PromptNote(Window owner,string value){
-  var dialog=new Window{Title="本段录像备注 · 最多300字",Owner=owner,Width=470,Height=280,WindowStartupLocation=WindowStartupLocation.CenterOwner,ResizeMode=ResizeMode.NoResize};
-  var panel=new DockPanel{Margin=new Thickness(16)};var row=new StackPanel{Orientation=Orientation.Horizontal,HorizontalAlignment=HorizontalAlignment.Right};DockPanel.SetDock(row,Dock.Bottom);panel.Children.Add(row);
-  var text=new TextBox{Text=value,MaxLength=300,AcceptsReturn=true,TextWrapping=TextWrapping.Wrap,VerticalScrollBarVisibility=ScrollBarVisibility.Auto};panel.Children.Add(text);
-  var save=new Button{Content="保存备注",Padding=new Thickness(14,8,14,8),Margin=new Thickness(6)};save.Click+=(_,_)=>dialog.DialogResult=true;row.Children.Add(save);
-  var cancel=new Button{Content="取消",Padding=new Thickness(14,8,14,8),Margin=new Thickness(6),IsCancel=true};row.Children.Add(cancel);dialog.Content=panel;
+  var dialog=Theme.Dialog(new Window{Title="本段录像备注 · 最多300字",Owner=owner,Width=470,Height=280,WindowStartupLocation=WindowStartupLocation.CenterOwner,ResizeMode=ResizeMode.NoResize});
+  var panel=new DockPanel{Margin=new Thickness(16)};var row=new StackPanel{Orientation=Orientation.Horizontal,HorizontalAlignment=HorizontalAlignment.Right,Margin=new Thickness(0,12,0,0)};DockPanel.SetDock(row,Dock.Bottom);panel.Children.Add(row);
+  var text=new TextBox{Text=value,MaxLength=300,AcceptsReturn=true,TextWrapping=TextWrapping.Wrap,VerticalScrollBarVisibility=ScrollBarVisibility.Auto,VerticalContentAlignment=VerticalAlignment.Top};panel.Children.Add(text);
+  var save=new Button{Content="保存备注",Margin=new Thickness(8,0,0,0)}.Level(Theme.Primary);save.Click+=(_,_)=>dialog.DialogResult=true;row.Children.Add(save);
+  var cancel=new Button{Content="取消",Margin=new Thickness(8,0,0,0),IsCancel=true};row.Children.Insert(0,cancel);dialog.Content=panel;
   return dialog.ShowDialog()==true?text.Text:null;
  }
 
