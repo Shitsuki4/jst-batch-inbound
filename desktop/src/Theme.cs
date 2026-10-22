@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Markup;
+using System.Windows.Media;
 namespace Receiving.Native;
 public static class Theme {
  public static void Apply(){var dictionary=(ResourceDictionary)XamlReader.Parse("""
@@ -20,4 +21,19 @@ public static class Theme {
  <Style TargetType="DataGridColumnHeader"><Setter Property="Background" Value="#E3F0F0"/><Setter Property="Padding" Value="10"/><Setter Property="FontWeight" Value="SemiBold"/></Style>
 </ResourceDictionary>
 """);Application.Current.Resources.MergedDictionaries.Add(dictionary);}
+}
+
+// 方向 C tokens（与网页 C 风格同源）。录像浮窗 V2 先用，其他原生窗口后续迁移。
+public static class Palette {
+ static SolidColorBrush B(string hex){var b=new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex));b.Freeze();return b;}
+ public static readonly SolidColorBrush Surface=B("#FFFFFF"),Surface2=B("#F7F8FC"),Line=B("#E7E8F0"),LineStrong=B("#D4D6E2"),
+  Text=B("#1C1D2B"),Text2=B("#5D6075"),Text3=B("#737790"),
+  Brand=B("#4F46E5"),BrandHover=B("#4338CA"),BrandSoft=B("#EEF0FF"),BrandLine=B("#C7C9FB"),
+  Ok=B("#0F9D6B"),OkSoft=B("#E5F7F0"),Warn=B("#D97706"),WarnSoft=B("#FEF4E3"),WarnText=B("#92400E"),
+  Danger=B("#E11D48"),DangerSoft=B("#FFE9EE"),DangerText=B("#9F1239"),
+  Rec=B("#FF4D73"),Idle=B("#9A9DB4"),Grip=B("#B9BBCD"),
+  Stage=B("#14152A"),StageScrim=B("#7314152A"),Glass=B("#9914152A"),OnDark=B("#FFFFFF"),OnDark2=B("#D6D7EA"),OnDarkLine=B("#59FFFFFF");
+ public static readonly FontFamily Font=new("Microsoft YaHei UI, Microsoft YaHei, Segoe UI");
+ public static readonly FontFamily Mono=new("Cascadia Mono, Consolas, Microsoft YaHei UI");
+ public const double Radius=12, RadiusSm=8;
 }

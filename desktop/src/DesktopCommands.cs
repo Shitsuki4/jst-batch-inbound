@@ -92,7 +92,7 @@ public sealed partial class MainWindow {
       var detected=await Recorder.Run(saved.Engine,["-hide_banner","-list_options","true","-f","dshow","-i","video="+saved.Camera]);
       CameraMode.Choose(CameraMode.Parse(detected.Err),saved.Resolution,saved.FrameRate,saved.CaptureFormat);
      }
-     saved.Left=preview.Left;saved.Top=preview.Top;saved.Width=preview.Width;saved.Height=preview.Height;
+     saved.Left=preview.Left;saved.Top=preview.Top;saved.Width=preview.Width;saved.Height=preview.RestoreHeight;
      using var registration=hotkeys?.Prepare(saved);
      WriteSettings(saved);settingsLoadFailed=false;settingsLoadWarning="";nextCleanupCheck=default;cleanupHint="";settings=saved;enabled.IsChecked=saved.AutoRecordEnabled;rec.Configure(saved);rec.Probe=probe;preview.Configure(saved);registration?.Commit();
      return new{message="视频设置已保存；业务设置保持不变。全局快捷键："+(hotkeys?.Status??"未注册")};
