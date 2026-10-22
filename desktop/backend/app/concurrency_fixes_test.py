@@ -126,6 +126,63 @@ class LockedGetTests(Base):
             self.assertFalse(self.s.STORE.db.in_transaction)
 
 
+class ReplyAfterHandlerDoneTests(Base):
+    """A client that holds the response must be able to rely on the handler being finished.
+
+    CI hang (integration/4.0, Windows): the POST response was written while the handler still
+    held state_lock and then ran the operation-log after-hook (#16) on the shared STORE.db
+    connection. A caller that touched STORE right after the reply (the tests do; any in-process
+    caller could) used the same sqlite3 connection from two threads at once and deadlocked
+    (all threads parked in futex waits, set_qty vs oplog_hooks.line_records). Now the reply is
+    buffered and only sent after the after-hook, the rollback and the lock release.
+    """
+
+    def _slow_after_hook(self):
+        import oplog_hooks
+        done, old = threading.Event(), oplog_hooks.after
+        def slow(*a, **kw):
+            time.sleep(0.4)
+            try: return old(*a, **kw)
+            finally: done.set()
+        oplog_hooks.after = slow
+        self.addCleanup(setattr, oplog_hooks, 'after', old)
+        return done
+
+    def _assert_handler_finished(self, done):
+        self.assertTrue(done.is_set(), 'response arrived before the operation-log after-hook finished')
+        got = self.s.state_lock.acquire(blocking=False)
+        self.assertTrue(got, 'response arrived while the handler still held state_lock')
+        self.s.state_lock.release()
+
+    def test_desktop_post_reply_after_oplog_hook_and_unlock(self):
+        done = self._slow_after_hook()
+        lid = next(l['id'] for l in self.s.STORE.batch_lines(self.bid) if l['sku_id'] == 'A')
+        r = self.f.call('/api/line/set', dict(line_id=lid, qty=9, sid=self.sid, batch_id=self.bid, client_op_id=op()))
+        self.assertTrue(r['ok'], r)
+        self._assert_handler_finished(done)
+        self.s.STORE.set_qty(lid, 4)          # the exact call that deadlocked on CI
+        self.assertEqual(self.qty(), 4)
+
+    def test_pda_post_reply_after_oplog_hook_and_unlock(self):
+        self.f.pair()
+        done = self._slow_after_hook()
+        r = self.f.http_call('/api/item/scan', dict(sid=self.sid, batch_id=self.bid, code='A', qty=1),
+                             {'X-Request-ID': op()})[1]
+        self.assertTrue(r['ok'], r)
+        self._assert_handler_finished(done)
+
+    def test_reply_still_sent_when_handler_raises(self):
+        H = self.s.Handler
+        def crash(h):
+            h._body(); raise RuntimeError('boom')
+        H._post_api_test_crash2 = crash
+        try:
+            self.assertFalse(self.f.call('/api/test/crash2', {})['ok'])
+            self.assertTrue(self.s.state_lock.acquire(blocking=False)); self.s.state_lock.release()
+        finally:
+            del H._post_api_test_crash2
+
+
 class CookieTests(unittest.TestCase):
     def test_header_iteration_while_absorbing(self):
         c = JstClient()
