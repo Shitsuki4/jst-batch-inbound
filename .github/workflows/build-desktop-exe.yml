@@ -218,6 +218,35 @@ jobs:
             ${{ runner.temp }}/library-ui/*.png
           if-no-files-found: warn
 
+      - name: Run float window UI acceptance (录像浮窗)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $exe = (Resolve-Path -LiteralPath "desktop/dist/native/Receiving.Native.exe").Path
+          $out = Join-Path $env:RUNNER_TEMP "float-ui"
+          $p = Start-Process -FilePath $exe -ArgumentList @("--float-ui-test", "--output", "`"$out`"") -PassThru
+          $null = $p.Handle
+          if (-not $p.WaitForExit(180000)) { try { $p.Kill($true) } catch {}; throw "Float UI acceptance timed out" }
+          $result = Join-Path $out "float-ui-result.json"
+          if (Test-Path -LiteralPath $result) {
+            $json = Get-Content -LiteralPath $result -Raw -Encoding UTF8 | ConvertFrom-Json
+            Write-Host "ok=$($json.ok) checks=$($json.checks.Count) shots=$($json.shots -join ', ')"
+            $json.checks | ForEach-Object { Write-Host "  PASS $_" }
+            if ($json.error) { Write-Host "ERROR: $($json.error)" }
+            if ($json.unhandled) { $json.unhandled | ForEach-Object { Write-Host "UNHANDLED: $_" } }
+          } else { Write-Host "No result file was written" }
+          if ($p.ExitCode -ne 0) { throw "Float UI acceptance failed: exit $($p.ExitCode)" }
+
+      - name: Upload float window UI acceptance evidence (screenshots)
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: desktop-float-ui-acceptance
+          path: |
+            ${{ runner.temp }}/float-ui/*.json
+            ${{ runner.temp }}/float-ui/*.png
+          if-no-files-found: warn
+
       - name: Build full offline installer
         shell: pwsh
         run: |
