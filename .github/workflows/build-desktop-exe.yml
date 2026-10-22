@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       publish_release_tag:
-        description: "Attach the built assets to this existing release tag, e.g. desktop-v3.0.3 (optional; main only; version must match the csproj)."
+        description: "Attach the built assets to this existing release tag, e.g. desktop-v4.0.0 (optional; main only; version must match the csproj)."
         required: false
         type: string
   push:
@@ -101,6 +101,9 @@ jobs:
         run: python -m compileall -q desktop/backend/app
 
       - name: Run Python regression
+        env:
+          PYTHONIOENCODING: utf-8:replace
+          PYTHONUTF8: "1"
         run: python desktop/backend/app/regression_runner.py
 
       - name: Build recorder regression

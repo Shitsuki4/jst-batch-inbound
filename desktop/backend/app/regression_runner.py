@@ -48,13 +48,27 @@ _WRAP = ("import faulthandler,os,runpy,sys;p=sys.argv[1];sys.argv=sys.argv[1:];"
          "faulthandler.dump_traceback_later(%d,exit=True);runpy.run_path(p,run_name='__main__')")
 
 
+def _utf8_console():
+    """Windows CI 控制台默认 cp1252：改为 UTF-8 且遇到无法编码的字符替换而不是抛错，
+    保证超时栈转储（含中文路径 / 提示）能完整打印出来。"""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            pass
+
+
 def _say(text):
     """Print without crashing on a non-UTF-8 console (Windows CI defaults to cp1252)."""
     try:
         sys.stdout.write(text + "\n")
     except UnicodeEncodeError:
         enc = getattr(sys.stdout, "encoding", None) or "ascii"
-        sys.stdout.write(text.encode(enc, "replace").decode(enc, "replace") + "\n")
+        safe = text.encode(enc, "replace").decode(enc, "replace") + "\n"
+        try:
+            sys.stdout.write(safe)
+        except UnicodeEncodeError:
+            sys.stdout.buffer.write(safe.encode("utf-8", "replace"))
     sys.stdout.flush()
 
 
@@ -144,6 +158,7 @@ def run_block(name, base_port, prepare, tests):
 
 
 def main():
+    _utf8_console()
     results, all_log = [], []
     results.append(("smoke",) + run_block("smoke", 8791, None, ["app/smoke_test.py"]))
     prep = PREPARE % (HERE, PO_ITEMS)

@@ -1,4 +1,4 @@
-﻿; 收货小助手 3.0 完整离线安装程序 (Inno Setup 6)
+﻿; 收货小助手 4.0 完整离线安装程序 (Inno Setup 6)
 ; 由 desktop/build-offline-windows.ps1 调用 ISCC.exe 编译。
 ; 可选命令行定义：/DPayloadDir=... /DOutputDir=... /DAppVersion=... /DOutputBaseFilename=...
 ;
@@ -15,7 +15,7 @@
   #define OutputDir "..\dist\installer"
 #endif
 #ifndef AppVersion
-  #define AppVersion "3.0.3"
+  #define AppVersion "4.0.0"
 #endif
 #ifndef OutputBaseFilename
   #define OutputBaseFilename "收货小助手-" + AppVersion + "-离线完整安装程序"
