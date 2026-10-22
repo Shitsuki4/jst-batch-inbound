@@ -83,6 +83,8 @@ public sealed class VideoLibraryRow {
 
 // DataGrid exposes the batch selection API only to subclasses; used for select-all / cleanup selection.
 public sealed class LibraryGrid : DataGrid {
+ // Implicit styles do not apply to subclasses: pick up the shared C DataGrid style explicitly (else WPF default black grid lines).
+ public LibraryGrid() { SetResourceReference(StyleProperty, typeof(DataGrid)); }
  public void SelectRows(IEnumerable<object> items) {
   BeginUpdateSelectedItems();
   try { SelectedItems.Clear(); foreach (var i in items) SelectedItems.Add(i); }
