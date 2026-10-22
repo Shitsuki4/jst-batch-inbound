@@ -30,6 +30,13 @@
     if (row.done) return {kind:'complete',label:'收齐',fill:'#a5d6a7',ink:'#14532d',accent:'#2e7d32'};
     return {kind:'difference',label:'少收 / 多收',fill:'#fff176',ink:'#713f12',accent:'#f9a825'};
   }
+  // 四色状态：已齐 done（绿）/ 短收 short（橙）/ 超收 over（红）/ 未收 none（灰，含待核实）。
+  function status(row) {
+    if (row.done) return 'done';
+    if (row.over || row.extra) return 'over';
+    if (row.plan == null) return 'none';
+    return Number(row.recv) > 0 ? 'short' : 'none';
+  }
   function body(round, reportMode) {
     return (round.rows || []).map(function (r) {
       var cls = r.done ? 'pi-done' : r.over ? 'pi-over' : r.recv > 0 ? 'pi-part' : '';
@@ -39,7 +46,7 @@
         + '<td class="pi-product">' + product(r) + '</td>'
         + '<td class="pi-plan" data-label="本轮应收">' + num(r.plan) + '</td>'
         + '<td class="pi-recv" data-label="本轮已收">' + num(r.recv) + '</td>'
-        + '<td class="pi-mark" data-label="差额"><span class="round-mark ' + (r.done ? 'done' : r.over ? 'over' : '') + '">' + esc(r.reason || '待核实') + '</span></td></tr>';
+        + '<td class="pi-mark" data-label="差额"><span class="round-mark ' + (r.done ? 'done' : r.over ? 'over' : '') + ' st-' + status(r) + '">' + esc(r.reason || '待核实') + '</span></td></tr>';
     }).join('');
   }
   function notes(round) { return (round.warnings || []).map(function (s) { return '<div class="round-warning" role="status">' + esc(s) + '</div>'; }).join(''); }
@@ -49,5 +56,5 @@
       + '<div class="table-wrap"><table class="tbl round-table"><thead><tr><th>商品信息</th><th>本轮应收</th><th>本轮已收</th><th>差额</th></tr></thead><tbody>'
       + body(round, true) + '</tbody></table></div></div>';
   }
-  window.ReceivingRoundUI = {data:data,body:body,notes:notes,report:report,progress:progress,num:num,appearance:appearance};
+  window.ReceivingRoundUI = {data:data,body:body,notes:notes,report:report,progress:progress,num:num,appearance:appearance,status:status};
 }());

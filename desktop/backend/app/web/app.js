@@ -476,46 +476,33 @@
     }).join('');
   }
 
+  // 页头：单号 + 状态徽标 + 供应商 / 外部单号；右侧进度卡按四色状态计数。
+  // 批次操作按钮（退出批次 / 暂存并对单 / 结单 / 按实收生成入库单）是 index.html 里的静态按钮，只绑定一次。
   function renderStatus() {
-    var s = S.session, b = S.batches || [], p = ReceivingRoundUI.data(S).progress || {};
+    var s = S.session, round = ReceivingRoundUI.data(S), p = round.progress || {};
     var plan = p.plan || 0, recv = p.recv || 0;
     var pct = plan > 0 ? Math.min(100, Math.round(recv / plan * 100)) : 0;
     var over = p.plan != null && recv > plan;
-    var html = ''
-      + cell('po', '当前采购单号', s.po_id + (s.outer_po_id ? '  （外部单号 ' + esc(s.outer_po_id) + '）' : ''))
-      + cell('', '已录入物流单号', b.length + ' 个')
-      + cell('', '已扫商品行', (S.lines || []).length + ' 行')
-      + '<div class="st-cell st-prog">'
-      + '  <div class="k">本轮已收 ' + fmtNum(recv) + ' / 应收 ' + ReceivingRoundUI.num(p.plan) + (p.plan == null ? '' : '（' + pct + '%）') + '</div>'
-      + '  <div class="prog-bar"><div class="prog-inner' + (over ? ' over' : '') + '" style="width:' + pct + '%"></div></div>'
+    $('#status-box').innerHTML = '<div class="ph-title">'
+      + '<span class="ph-po mono" title="当前采购单号">' + esc(s.po_id) + '</span>'
+      + '<span class="badge badge-ok badge-live">收货中</span>'
+      + (s.supplier ? '<span class="chip-soft" title="供应商">' + esc(s.supplier) + '</span>' : '')
+      + (s.outer_po_id ? '<span class="chip-soft" title="外部单号">外部单号 ' + esc(s.outer_po_id) + '</span>' : '')
+      + '<span class="chip-soft">' + (S.batches || []).length + ' 个物流单 · ' + (S.lines || []).length + ' 行</span>'
       + '</div>';
-    var box = $('#status-box');
-    box.innerHTML = html;
-    if (!box.querySelector('.btn-exit')) {
-      // 退出批次：随时可走，不丢数据
-      var b1 = document.createElement('button');
-      b1.className = 'btn btn-ghost btn-lg btn-exit';
-      b1.textContent = '退出批次';
-      b1.style.flex = 'none';
-      b1.onclick = askExit;
-      box.appendChild(b1);
-      var br = document.createElement('button');
-      br.className = 'btn btn-primary btn-lg btn-pause-report';
-      br.textContent = '暂存并对单';
-      br.style.flex = 'none';
-      br.onclick = askPauseReport;
-      box.appendChild(br);
-      var b2 = document.createElement('button');
-      b2.className = 'btn btn-danger btn-lg btn-finish';
-      b2.textContent = '结单';
-      b2.style.flex = 'none';
-      b2.onclick = askFinish;
-      box.appendChild(b2);
-    }
-    function cell(k, kk, vv) {
-      return '<div class="st-cell ' + k + '"><div class="k">' + kk + '</div><div class="v">' + esc(vv) + '</div></div>';
-    }
+    var counts = { done: 0, short: 0, over: 0, none: 0 };
+    (round.rows || []).forEach(function (r) { counts[ReceivingRoundUI.status(r)]++; });
+    $('#pc-recv').textContent = fmtNum(recv);
+    $('#pc-plan').textContent = '/ ' + ReceivingRoundUI.num(p.plan) + ' 件';
+    $('#pc-pct').textContent = p.plan == null ? '' : pct + '%';
+    $('#pc-bar').style.width = pct + '%';
+    $('#pc-bar').className = over ? 'over' : '';
+    ['done', 'short', 'over', 'none'].forEach(function (k) { $('#pc-' + k).textContent = counts[k]; });
   }
+  // 退出批次：随时可走，不丢数据（全页只有这一个入口）
+  $('#btn-exit-batch').onclick = function () { if (S.session) askExit(); };
+  $$('.btn-pause-report').forEach(function (b) { b.onclick = function () { if (S.session) askPauseReport(); }; });
+  $$('.btn-finish').forEach(function (b) { b.onclick = function () { if (S.session) askFinish(); }; });
 
   /* -------------------- 商家 / 分仓选择 -------------------- */
   // 一张采购单归属哪个货主、从哪个分仓收货，决定了查询时用的 co_id 上下文。
@@ -1354,7 +1341,7 @@
       + '结单后本轮不可再扫码；如需继续收货，请先核对旧轮入库状态，再创建新一轮。</div>'
       + '</div>',
       [{ text: '取消', cls: 'btn-ghost', fn: function () { closeModal(); refocus(); } },
-      { text: '结单并校验差异', cls: 'btn-danger', fn: function () { doFinish(s.id); } }],
+      { text: '结单并校验差异', cls: 'btn-primary', fn: function () { doFinish(s.id); } }],
       function () { closeModal(); refocus(); });
   }
 
@@ -1894,6 +1881,8 @@
       if (current.dataset.view === 'home' && name === 'settings') sessionStorage.setItem('receiving:last-work', '/?view=home');
     }
     $$('.tab').forEach(function (t) { t.classList.toggle('active', t.dataset.tab === name); });
+    var navTab = document.querySelector('.side-nav .tab[data-tab="' + name + '"]'), crumb = $('#crumb');
+    if (navTab && crumb) crumb.innerHTML = esc(navTab.dataset.group || '') + ' / <b>' + esc((navTab.querySelector('.tab-label') || navTab).textContent.trim()) + '</b>';
     $$('.view').forEach(function (v) { v.classList.toggle('active', v.dataset.view === name); });
     document.dispatchEvent(new CustomEvent('app:tab', { detail: name }));
     if (name === 'query') loadRecents();
