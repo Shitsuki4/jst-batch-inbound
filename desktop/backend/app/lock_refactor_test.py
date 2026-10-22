@@ -27,9 +27,10 @@ class SlowJst(FakeJst):
         self.slow = set()
         self.entered = threading.Event()
         self.lookups = []
+        self.once = False
 
     def _maybe_slow(self, name):
-        if name in self.slow:
+        if name in self.slow and not (self.once and self.entered.is_set()):
             self.entered.set()
             time.sleep(SLOW)
 
@@ -107,7 +108,9 @@ class SlowRemoteDoesNotBlock(Base):
 
     def test_slow_inbound_create_keeps_state_and_other_session_responsive(self):
         body = self.preview_body()
+        # 入库流程会多次查明细 / 查商品；只让第一次慢调用 sleep，避免总时长超过客户端 15 秒超时（Windows CI 较慢）。
         self.s.JST.slow = {"fetch_detail", "item_search"}
+        self.s.JST.once = True
         fut = self.pool.submit(self.timed, "/api/inbound/create", body)
         self.wait_entered()
         for path in ("/api/state", "/api/state?sid=%s" % self.sid2, "/api/heartbeat", "/api/recents"):
