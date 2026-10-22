@@ -3,11 +3,11 @@
   --surface:#ffffff;
   --line:#e3e8ee;
   --line-strong:#cfd8e3;
-  --text:#1b2733;
+  --text:var(--c-text);
   --muted:#6b7a8d;
-  --primary:#1f6feb;
-  --primary-dark:#1255bd;
-  --danger:#d93a3a;
+  --primary:var(--c-primary);
+  --primary-dark:var(--c-primary-hover);
+  --danger:#e11d48;
   --danger-soft:#fdecec;
   --ok:#17864a;
   --ok-soft:#e8f6ee;
@@ -26,7 +26,7 @@ body{
   font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;
 }
 .hidden{display:none !important}
-kbd{font:inherit;font-size:11px;background:#eef2f7;border:1px solid var(--line-strong);
+kbd{font:inherit;font-size:11px;background:var(--c-panel-2);border:1px solid var(--line-strong);
   border-radius:4px;padding:0 5px;color:var(--muted)}
 .mono{font-family:Consolas,Menlo,monospace}
 
@@ -42,10 +42,10 @@ kbd{font:inherit;font-size:11px;background:#eef2f7;border:1px solid var(--line-s
 .field-label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px}
 .login-tip{min-height:20px;margin-top:12px;font-size:13px;color:var(--danger);text-align:center;line-height:1.6}
 .login-tip.bad{color:var(--danger)}
-.login-foot{margin-top:18px;text-align:center;font-size:12px;color:#9aa7b6}
+.login-foot{margin-top:18px;text-align:center;font-size:12px;color:var(--c-text-3)}
 
 /* 登录方式 tab */
-.login-tabs{display:flex;gap:4px;margin-bottom:20px;background:#eef2f7;
+.login-tabs{display:flex;gap:4px;margin-bottom:20px;background:var(--c-panel-2);
   border-radius:10px;padding:4px}
 .ltab{flex:1;height:34px;border:0;background:transparent;border-radius:7px;
   font-size:13px;color:var(--muted);cursor:pointer;transition:.15s}
@@ -67,7 +67,7 @@ kbd{font:inherit;font-size:11px;background:#eef2f7;border:1px solid var(--line-s
 .qr-choices{display:flex;gap:10px;margin-bottom:16px}
 .qr-choice{flex:1;display:flex;align-items:center;gap:10px;padding:12px 10px;cursor:pointer;
   border:1px solid var(--line-strong);border-radius:10px;background:#fff;text-align:left;transition:.15s}
-.qr-choice:hover{border-color:var(--primary);box-shadow:0 2px 8px rgba(31,111,235,.12)}
+.qr-choice:hover{border-color:var(--primary);box-shadow:0 2px 8px rgba(79,70,229,.12)}
 .qr-ico{flex:none;width:30px;height:30px;border-radius:8px;color:#fff;font-size:14px;font-weight:700;
   display:flex;align-items:center;justify-content:center}
 .qr-ico.wx{background:#2ba64a}
@@ -78,21 +78,21 @@ kbd{font:inherit;font-size:11px;background:#eef2f7;border:1px solid var(--line-s
 .qr-steps{margin:0 0 16px;padding-left:20px;font-size:12.5px;color:var(--muted);line-height:1.9}
 .qr-steps li.done{color:var(--primary)}
 .qr-steps li.done::marker{content:"✓ "}
-.qr-note{margin-top:12px;font-size:12px;color:#9aa7b6;text-align:center;line-height:1.7}
+.qr-note{margin-top:12px;font-size:12px;color:var(--c-text-3);text-align:center;line-height:1.7}
 #qr-finish.ready{animation:pulse 1.6s ease 2}
-@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(31,111,235,.5)}50%{box-shadow:0 0 0 8px rgba(31,111,235,0)}}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(79,70,229,.5)}50%{box-shadow:0 0 0 8px rgba(79,70,229,0)}}
 
 /* ---------------- 通用控件 ---------------- */
 .input,.select{
   height:40px;padding:0 12px;border:1px solid var(--line-strong);border-radius:8px;
   background:#fff;color:var(--text);outline:none;font-size:14px;width:100%;transition:border-color .12s,box-shadow .12s;
 }
-.input:focus,.select:focus{border-color:var(--primary);box-shadow:0 0 0 3px rgba(31,111,235,.14)}
+.input:focus,.select:focus{border-color:var(--primary);box-shadow:0 0 0 3px rgba(79,70,229,.14)}
 .input-sm{height:34px;width:160px}
 .input-xl{height:48px;font-size:17px}
 .input-huge{height:60px;font-size:24px;font-weight:600;letter-spacing:1px;flex:1}
 .input-huge.focus-tracking{border-color:#8a5a00;box-shadow:0 0 0 3px rgba(184,134,11,.16)}
-.input-huge.focus-item{border-color:var(--primary);box-shadow:0 0 0 3px rgba(31,111,235,.16)}
+.input-huge.focus-item{border-color:var(--primary);box-shadow:0 0 0 3px rgba(79,70,229,.16)}
 
 .btn{height:38px;padding:0 16px;border-radius:8px;border:1px solid var(--line-strong);
   background:#fff;color:var(--text);cursor:pointer;font-size:14px;transition:.12s;white-space:nowrap}
@@ -106,7 +106,7 @@ kbd{font:inherit;font-size:11px;background:#eef2f7;border:1px solid var(--line-s
 .btn-sm{height:30px;padding:0 11px;font-size:13px}
 .btn-block{width:100%}
 .btn-ghost{background:transparent;border-color:transparent;color:var(--muted)}
-.btn-ghost:hover{background:#eef2f7;color:var(--text)}
+.btn-ghost:hover{background:var(--c-panel-2);color:var(--text)}
 .btn:disabled{opacity:.55;cursor:not-allowed}
 
 .row{display:flex;gap:10px;align-items:center}
@@ -132,7 +132,7 @@ kbd{font:inherit;font-size:11px;background:#eef2f7;border:1px solid var(--line-s
 .prog-bar{height:8px;border-radius:99px;background:#eaeef4;overflow:hidden;margin-top:5px}
 .prog-inner{height:100%;background:var(--ok);transition:width .25s;border-radius:99px}
 .prog-inner.over{background:var(--warn)}
-.pill{display:inline-block;background:#eef2f7;color:var(--muted);border-radius:99px;
+.pill{display:inline-block;background:var(--c-panel-2);color:var(--muted);border-radius:99px;
   padding:1px 9px;font-size:12px;margin-left:6px;font-weight:400}
 
 .tabs{display:flex;gap:4px;padding:0 14px;background:var(--surface);border-bottom:1px solid var(--line)}
@@ -164,7 +164,7 @@ main{padding:14px}
 .scan-card{display:flex;align-items:center;gap:12px;padding:12px 14px;
   border:2px solid transparent;transition:border-color .15s}
 .scan-modes{display:flex;gap:6px;flex:none}
-.mode-btn{height:60px;padding:0 14px;border:1px solid var(--line-strong);background:#f7f9fc;
+.mode-btn{height:60px;padding:0 14px;border:1px solid var(--line-strong);background:var(--c-panel-2);
   border-radius:8px;cursor:pointer;font-size:14px;color:var(--muted);line-height:1.3}
 .mode-btn.active{background:var(--primary);border-color:var(--primary);color:#fff;font-weight:600}
 .mode-btn.active kbd{background:rgba(255,255,255,.22);border-color:transparent;color:#fff}
@@ -179,12 +179,12 @@ main{padding:14px}
 /* ---------------- 列表 / 表格 ---------------- */
 .list{display:flex;flex-direction:column;gap:6px;max-height:430px}
 .batch-item{border:1px solid var(--line);border-radius:8px;padding:9px 11px;cursor:pointer;transition:.12s;background:#fff}
-.batch-item:hover{border-color:var(--primary);background:#f5f9ff}
-.batch-item.active{border-color:var(--primary);background:#eaf2ff;box-shadow:inset 3px 0 0 var(--primary)}
+.batch-item:hover{border-color:var(--primary);background:var(--c-primary-soft)}
+.batch-item.active{border-color:var(--primary);background:var(--c-primary-soft);box-shadow:inset 3px 0 0 var(--primary)}
 .batch-no{font-weight:600;font-size:14px;word-break:break-all}
 .batch-meta{font-size:12px;color:var(--muted);margin-top:2px;display:flex;gap:8px}
 .batch-new{margin-top:2px;font-size:11px;color:var(--ok);font-weight:600}
-.empty{color:#9aa7b6;text-align:center;padding:24px 0;font-size:13px}
+.empty{color:var(--c-text-3);text-align:center;padding:24px 0;font-size:13px}
 
 /* ---------------- 待确认数量条 ---------------- */
 .pending-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
@@ -218,25 +218,25 @@ main{padding:14px}
 .pi-code{font-family:Consolas,monospace;font-size:13px;font-weight:600;color:#3d4c5e;letter-spacing:.3px}
 .pi-name{font-size:13px;color:var(--text);margin-top:1px}
 .pi-spec-inline{color:var(--muted);font-size:12px;margin-left:6px}
-.pi-barcode{font-family:Consolas,monospace;font-size:11px;color:#9aa7b6;margin-top:1px}
+.pi-barcode{font-family:Consolas,monospace;font-size:11px;color:var(--c-text-3);margin-top:1px}
 
 /* 明细表里「采购单没有的商品」分隔行 */
-.line-sep td{background:#f7f9fc !important;padding:5px 10px !important;border-bottom:1px solid var(--line)}
+.line-sep td{background:var(--c-panel-2) !important;padding:5px 10px !important;border-bottom:1px solid var(--line)}
 .line-sep-txt{font-size:11px;font-weight:600;color:var(--muted);letter-spacing:.5px}
 .chip-track{font-family:Consolas,monospace;font-size:12px}
 
 .table-wrap{overflow:auto;max-height:430px;border:1px solid var(--line);border-radius:8px}
 .tbl{width:100%;border-collapse:collapse;font-size:13px}
-.tbl th{position:sticky;top:0;background:#f7f9fc;text-align:left;padding:8px 10px;
+.tbl th{position:sticky;top:0;background:var(--c-panel-2);text-align:left;padding:8px 10px;
   font-weight:600;color:var(--muted);border-bottom:1px solid var(--line);white-space:nowrap;z-index:2}
 .tbl td{padding:8px 10px;border-bottom:1px solid #f0f3f7;vertical-align:middle}
 .tbl tr:last-child td{border-bottom:none}
-.tbl tbody tr:hover{background:#fafcff}
+.tbl tbody tr:hover{background:#fafaff}
 .tr-bad{background:var(--danger-soft) !important}
 .tr-bad:hover{background:#fce2e2 !important}
 .tr-ok{background:var(--ok-soft) !important}
 /* 已在别的物流单号收满 → 灰色只读行，沉在明细表最底部 */
-.tr-done-elsewhere{background:#f7f9fc !important;color:var(--muted)}
+.tr-done-elsewhere{background:var(--c-panel-2) !important;color:var(--muted)}
 .tr-done-elsewhere:hover{background:#f2f5f9 !important}
 .tr-done-elsewhere td{opacity:.72}
 .de-qty{font-weight:600;color:var(--muted)}
@@ -249,10 +249,10 @@ main{padding:14px}
 .qty-ctl{display:flex;align-items:center;gap:4px}
 .qty-ctl button{width:26px;height:26px;border-radius:6px;border:1px solid var(--line-strong);
   background:#fff;cursor:pointer;line-height:1;font-size:15px;color:var(--text)}
-.qty-ctl button:hover{background:#eef2f7}
+.qty-ctl button:hover{background:var(--c-panel-2)}
 .qty-input{width:66px;height:30px;text-align:center;border:1px solid var(--line-strong);border-radius:6px}
 .qty-input:focus{border-color:var(--primary);outline:none}
-.icon-btn{border:none;background:transparent;color:#9aa7b6;cursor:pointer;font-size:15px;padding:2px 6px}
+.icon-btn{border:none;background:transparent;color:var(--c-text-3);cursor:pointer;font-size:15px;padding:2px 6px}
 .icon-btn:hover{color:var(--danger)}
 
 /* ---------------- 查询 ---------------- */
@@ -268,7 +268,7 @@ main{padding:14px}
 .partner-row{align-items:flex-end;gap:10px;flex-wrap:wrap;margin-top:2px}
 .field-inline{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)}
 .field-inline .select{min-width:190px}
-.chip{display:inline-block;background:#eef2f7;border-radius:5px;padding:2px 8px;margin:3px 6px 0 0;font-size:12px}
+.chip{display:inline-block;background:var(--c-panel-2);border-radius:5px;padding:2px 8px;margin:3px 6px 0 0;font-size:12px}
 .chip.bad{background:var(--danger-soft);color:var(--danger)}
 .sum-chips{margin-top:6px}
 
@@ -306,24 +306,24 @@ main{padding:14px}
 .modal-bd{padding:16px 18px;overflow:auto;flex:1}
 .modal-ft{padding:12px 18px;border-top:1px solid var(--line);display:flex;justify-content:flex-end;gap:10px}
 .cand{border:1px solid var(--line);border-radius:8px;padding:11px 13px;margin-bottom:8px;cursor:pointer}
-.cand:hover{border-color:var(--primary);background:#f5f9ff}
+.cand:hover{border-color:var(--primary);background:var(--c-primary-soft)}
 .cand-title{font-weight:600}
 .cand-meta{font-size:12px;color:var(--muted);margin-top:3px}
 .diff-sum{display:flex;gap:18px;flex-wrap:wrap;margin-bottom:12px;font-size:13px}
 .diff-sum b{font-size:16px}
 .diff-sum .bad{color:var(--danger)}
 
-.toast{position:fixed;left:50%;bottom:42px;transform:translateX(-50%);background:#1b2733;color:#fff;
+.toast{position:fixed;left:50%;bottom:42px;transform:translateX(-50%);background:var(--c-text);color:#fff;
   padding:11px 20px;border-radius:8px;font-size:14px;z-index:200;box-shadow:0 8px 24px rgba(0,0,0,.24)}
 
 /* ---------------- 登录页：常用账号 ---------------- */
 .lg-accounts{margin:-6px 0 16px}
 .lga-label{font-size:12px;color:var(--muted);margin-bottom:6px}
 .lga-list{display:flex;flex-wrap:wrap;gap:6px}
-.lga-chip{display:inline-flex;align-items:center;gap:4px;background:#eef2f7;border:1px solid var(--line);
+.lga-chip{display:inline-flex;align-items:center;gap:4px;background:var(--c-panel-2);border:1px solid var(--line);
   border-radius:99px;padding:3px 6px 3px 11px;font-size:12.5px;color:var(--text);cursor:pointer;transition:.12s}
-.lga-chip:hover{border-color:var(--primary);background:#f5f9ff}
-.lga-x{font-style:normal;font-size:13px;color:#9aa7b6;padding:0 3px;border-radius:99px;line-height:1}
+.lga-chip:hover{border-color:var(--primary);background:var(--c-primary-soft)}
+.lga-x{font-style:normal;font-size:13px;color:var(--c-text-3);padding:0 3px;border-radius:99px;line-height:1}
 .lga-x:hover{color:var(--danger)}
 
 /* ---------------- 右栏：物流单号折叠列表 ---------------- */
@@ -331,7 +331,7 @@ main{padding:14px}
 .batch-list{display:flex;flex-direction:column;gap:6px;max-height:260px;overflow:auto}
 .bl-item{border:1px solid var(--line);border-radius:8px;padding:8px 10px;background:#fff;transition:.12s}
 .bl-item:hover{border-color:var(--line-strong)}
-.bl-item.active{border-color:var(--primary);background:#f2f7ff;box-shadow:inset 3px 0 0 var(--primary)}
+.bl-item.active{border-color:var(--primary);background:var(--c-primary-soft);box-shadow:inset 3px 0 0 var(--primary)}
 .bl-main{display:flex;align-items:center;gap:7px;cursor:pointer;min-width:0}
 .bl-caret{color:var(--muted);font-size:11px;flex:none}
 .bl-no{font-family:Consolas,Menlo,monospace;font-weight:600;font-size:13.5px;word-break:break-all}
@@ -343,10 +343,10 @@ main{padding:14px}
 /* ---------------- 多候选弹窗：大图商品卡 ---------------- */
 .cand{display:flex;gap:14px;align-items:stretch}
 .cand-pic{flex:none;width:150px;height:150px;border:1px solid var(--line);border-radius:8px;
-  background:#f7f9fc url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="%23c3cdd9" stroke-width="1.4"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.6"/><path d="M21 15l-5-5L5 21"/></svg>') center/44px no-repeat;
+  background:var(--c-panel-2) url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="%23c3cdd9" stroke-width="1.4"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.6"/><path d="M21 15l-5-5L5 21"/></svg>') center/44px no-repeat;
   overflow:hidden;display:flex;align-items:center;justify-content:center}
 .cand-pic img{width:100%;height:100%;object-fit:contain;display:block;animation:fadeUp .2s ease}
-.cand-pic-ph{font-size:11px;color:#9aa7b6}
+.cand-pic-ph{font-size:11px;color:var(--c-text-3)}
 .cand-main{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:4px}
 .cand-via{display:inline-block;background:#fdf6e3;color:var(--warn);border-radius:4px;
   padding:0 6px;font-size:11px;font-weight:600;margin-left:8px}
@@ -354,12 +354,12 @@ main{padding:14px}
 .cand-main .cand-meta b{font-family:Consolas,Menlo,monospace;font-weight:600;color:#3d4c5e}
 
 /* 实收入库预览，使用原生 dialog，保留后方收货/记录页面。 */
-.inbound-dialog { width: min(850px, 94vw); max-height: 88vh; border: 0; border-radius: 14px; padding: 24px; color: #1b2733; box-shadow: 0 16px 64px #14233b40; overflow: auto; }
+.inbound-dialog { width: min(850px, 94vw); max-height: 88vh; border: 0; border-radius: 14px; padding: 24px; color: var(--c-text); box-shadow: 0 16px 64px #14233b40; overflow: auto; }
 .inbound-dialog::backdrop { background: #17263c80; }
 .inbound-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .inbound-heading h2 { font-size: 21px; margin: 0; }
 .inbound-content p { line-height: 1.65; overflow-wrap: anywhere; }
-.inbound-note { background: #edf5ff; padding: 12px; border-radius: 8px; }
+.inbound-note { background: var(--c-primary-soft); padding: 12px; border-radius: 8px; }
 .inbound-warning, .inbound-message.error { color: #a3420c; background: #fff5e8; padding: 10px; border-radius: 6px; overflow-wrap: anywhere; }
 .inbound-message.success { color: #167142; }
 .inbound-table { max-height: 300px; overflow: auto; margin-bottom: 16px; }
@@ -369,7 +369,7 @@ main{padding:14px}
 .inbound-job button { margin-top: 8px; }
 
 /* 入库选仓 / 独立库存盘点 */
-.inbound-scope { padding:14px; border:1px solid #cfdbef; background:#f6f9ff; border-radius:8px; margin:14px 0; }
+.inbound-scope { padding:14px; border:1px solid var(--c-primary-line); background:var(--c-primary-soft); border-radius:8px; margin:14px 0; }
 .inventory-controls { border:0; padding:0; margin:0; min-width:0; }
 .inventory-grid { display:grid; grid-template-columns:1fr 1fr 1fr auto; gap:12px; align-items:end; }
 .inventory-grid label { display:flex; flex-direction:column; gap:8px; font-size:13px; font-weight:600; }
@@ -406,7 +406,7 @@ body, .view, .card, .tbl, .tbl td, .tbl th, .pi-code, .pi-barcode, .pi-name, .sc
 .round-table .pi-code{font-size:16px;color:var(--text);line-height:1.5}
 .round-table .pi-name{font-size:15px;line-height:1.5}
 .round-table .pi-barcode{color:#526477;font-size:13px;line-height:1.6}
-.round-table .pi-erp{display:inline-block;margin-top:4px;border-radius:4px;background:#edf3ff;color:#1f6feb;font-size:13px;padding:2px 7px}
+.round-table .pi-erp{display:inline-block;margin-top:4px;border-radius:4px;background:var(--c-primary-soft);color:var(--c-primary);font-size:13px;padding:2px 7px}
 .round-table .pi-plan,.round-table .pi-recv,.round-table .pi-mark{vertical-align:middle;text-align:center!important;white-space:normal!important;font-variant-numeric:tabular-nums}
 .round-table .pi-plan{font-size:21px;font-weight:600;color:var(--text)}
 .round-table .pi-recv{font-size:21px;color:var(--primary)}
@@ -429,46 +429,43 @@ body, .view, .card, .tbl, .tbl td, .tbl th, .pi-code, .pi-barcode, .pi-name, .sc
   .topbar .status-strip{order:3;flex-basis:100%;flex-wrap:wrap;gap:10px}
   .topbar .st-prog{min-width:180px;flex:1}
 }
-/* 2.0.18: calm blue/teal identity. Existing semantic difference colors are unchanged. */
-:root{--bg:#f3f6fb;--primary:#2169d5;--primary-dark:#1551af;--shadow:0 2px 5px #15385e06,0 8px 24px #15385e07}
-.login-wrap{background:radial-gradient(ellipse at 15% 15%,#daeafa 0,transparent 55%),radial-gradient(ellipse at 88% 82%,#dbf4ef 0,transparent 48%),#f4f7fb;padding:24px;min-height:100%;height:auto}
+/* 登录页与通用细节（颜色取自 ui-tokens.css） */
+/* 旧的第二套 :root 主色已移除，统一由 ui-tokens.css 提供 */
+.login-wrap{background:radial-gradient(ellipse at 15% 15%,#e4e5ff 0,transparent 55%),radial-gradient(ellipse at 88% 82%,#eef0ff 0,transparent 48%),var(--c-bg);padding:24px;min-height:100%;height:auto}
 .login-card{width:432px;max-width:100%;padding:30px 34px 24px;border-radius:22px;border-color:#fff;box-shadow:0 20px 70px #254b7520}
 .login-app-icon{width:78px;height:78px;display:block;margin:0 auto 13px;filter:drop-shadow(0 7px 10px #194d9420)}
-.login-logo{font-size:25px;letter-spacing:1px;color:#163858}
+.login-logo{font-size:25px;letter-spacing:1px;color:var(--c-text)}
 .login-sub{font-size:12px;letter-spacing:.5px}
-.brand{display:flex;align-items:center;gap:9px;letter-spacing:.3px;color:#1b3f63}
+.brand{display:flex;align-items:center;gap:9px;letter-spacing:.3px;color:var(--c-text)}
 .topbar{box-shadow:0 2px 12px #223f6906}
 .btn{transition:background-color .15s,box-shadow .15s,border-color .15s}
-.btn-primary{background:linear-gradient(135deg,#2875e0,#205fcb);border-color:#2169d5;box-shadow:0 2px 5px #2169d51a}
-.btn-primary:hover{background:#1551af;box-shadow:0 3px 10px #2169d52b}
-button:focus-visible,select:focus-visible,input:focus-visible{outline:3px solid #65a8ff;outline-offset:2px}
 .inbound-dialog{width:min(940px,94vw);padding:28px;border:1px solid #dae5f1;border-radius:20px}
-.inbound-heading h2{color:#183b60;font-size:22px}
-.inbound-step{color:#2269c6;font-size:12px;font-weight:700;letter-spacing:1px;margin:16px 0 8px}
+.inbound-heading h2{color:var(--c-text);font-size:22px}
+.inbound-step{color:var(--c-primary);font-size:12px;font-weight:700;letter-spacing:1px;margin:16px 0 8px}
 .inbound-intro{color:#536c83;margin:0 0 22px;font-size:15px}
 .inbound-mode-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}
-.inbound-mode-card{font:inherit;appearance:none;background:linear-gradient(155deg,#f5f9ff,#fff);border:1px solid #c9dcf4;border-radius:16px;padding:24px;text-align:left;display:flex;flex-direction:column;align-items:flex-start;gap:14px;cursor:pointer;color:#254563;min-width:0}
-.inbound-mode-card:nth-child(2){background:linear-gradient(155deg,#f1fbf8,#fff);border-color:#bcded5}
-.inbound-mode-card:hover{border-color:#2169d5;box-shadow:0 8px 22px #1b4d8b14}
-.inbound-mode-card strong{font-size:21px;color:#133e68}
+.inbound-mode-card{font:inherit;appearance:none;background:linear-gradient(155deg,var(--c-primary-soft),#fff);border:1px solid var(--c-primary-line);border-radius:16px;padding:24px;text-align:left;display:flex;flex-direction:column;align-items:flex-start;gap:14px;cursor:pointer;color:#254563;min-width:0}
+.inbound-mode-card:nth-child(2){background:linear-gradient(155deg,var(--c-panel-2),#fff);border-color:var(--c-line-strong)}
+.inbound-mode-card:hover{border-color:var(--c-primary);box-shadow:0 8px 22px #1b4d8b14}
+.inbound-mode-card strong{font-size:21px;color:var(--c-text)}
 .inbound-mode-card>span:not(.mode-icon){font-size:15px;line-height:1.8}
 .inbound-mode-card small{font-size:12px;color:#6a7d90;line-height:1.8}
-.inbound-mode-card b{font-size:13px;margin-top:auto;color:#2169d5}
-.mode-icon{border-radius:12px;background:#e3edff;color:#2169d5;padding:7px 12px;font-size:19px;font-weight:700}
-.inbound-mode-card:nth-child(2) .mode-icon{background:#d9f2e9;color:#147b64}
+.inbound-mode-card b{font-size:13px;margin-top:auto;color:var(--c-primary)}
+.mode-icon{border-radius:12px;background:var(--c-primary-soft);color:var(--c-primary);padding:7px 12px;font-size:19px;font-weight:700}
+.inbound-mode-card:nth-child(2) .mode-icon{background:var(--c-ok-soft);color:var(--c-ok)}
 .inbound-safe{background:#eef4fa;border:1px solid #dfe8f2;padding:13px 16px;border-radius:10px;color:#48617a;font-size:13px;line-height:1.8;margin:22px 0 0}
-.inbound-validation{display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:12px 15px;background:#eef5ff;border-radius:10px;margin:16px 0}
+.inbound-validation{display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:12px 15px;background:var(--c-primary-soft);border-radius:10px;margin:16px 0}
 .inbound-validation>span{font-size:12px;color:#597999}
 .inbound-validation>button{margin-left:auto}
-.inbound-excluded{background:#e0e0e0;border:1px solid #cfcfcf;border-radius:10px;padding:12px;margin:12px 0}
+.inbound-excluded{background:var(--c-none-soft);border:1px solid var(--c-line-strong);border-radius:10px;padding:12px;margin:12px 0}
 .inbound-excluded summary{cursor:pointer;font-weight:600}
 .inbound-excluded .inbound-table{max-height:190px;overflow:auto;margin-top:10px}
-.inbound-excluded td{background:#e0e0e0}
+.inbound-excluded td{background:var(--c-none-soft)}
 @media(max-width:650px){.inbound-mode-grid{grid-template-columns:1fr}.inbound-mode-card{padding:18px;gap:10px}.inbound-dialog{padding:18px}.login-card{padding:24px}.brand{gap:5px}}
 @media(prefers-reduced-motion:reduce){.btn{transition:none}}
 /* Login controls share the same full-width, readable treatment as receiving forms. */
-.login-card .field input{display:block;width:100%;height:44px;margin-top:6px;padding:0 13px;border:1px solid #cbd9e7;border-radius:9px;background:#fbfdff;color:#193c5e;font:inherit;transition:border-color .12s,box-shadow .12s}
-.login-card .field input:focus{border-color:#4386de;box-shadow:0 0 0 3px #2169d514;background:#fff}
+.login-card .field input{display:block;width:100%;height:44px;margin-top:6px;padding:0 13px;border:1px solid var(--c-line-strong);border-radius:9px;background:#fbfdff;color:var(--c-text);font:inherit;transition:border-color .12s,box-shadow .12s}
+.login-card .field input:focus{border-color:var(--c-primary);box-shadow:0 0 0 3px rgba(79,70,229,0.08);background:#fff}
 .login-card .captcha-box input{flex:1;min-width:0;width:0;margin-top:0}
 .login-card .captcha-box{margin-top:6px}
 .login-tabs .ltab{font-size:12px;white-space:nowrap;padding:0 5px;height:36px}
@@ -477,9 +474,9 @@ button:focus-visible,select:focus-visible,input:focus-visible{outline:3px solid 
 
 /* 2.0.19: keep gray / yellow / green reconciliation semantics. */
 /* 2.0.20: paint every cell so the generic table hover cannot erase status colors. */
-.purchase-total-table .tbl tr.total-done > td { background:#a5d6a7; }
-.purchase-total-table .tbl tr.total-diff > td { background:#fff176; }
-.purchase-total-table .tbl tr.total-unknown > td { background:#e0e0e0; }
+.purchase-total-table .tbl tr.total-done > td { background:var(--c-ok-soft); }
+.purchase-total-table .tbl tr.total-diff > td { background:var(--c-warn-soft); }
+.purchase-total-table .tbl tr.total-unknown > td { background:var(--c-none-soft); }
 .purchase-total-table .total-delta { font-weight:700; }
 .purchase-total-table .total-status { display:block;font-size:12px;line-height:1.6;font-weight:600;white-space:nowrap; }
 .purchase-total-table .total-done .total-status { color:#14532d; }

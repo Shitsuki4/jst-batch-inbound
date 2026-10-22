@@ -1,1 +1,25 @@
-.pair-table{width:100%;border-collapse:separate!important;border-spacing:8px;table-layout:fixed;min-width:680px}.pair-table th{background:#dae5f2;padding:16px;font-size:17px;text-align:left}.pair-table .pair-qty-col{width:88px}.pair-table .pair-qty-head{padding:12px 5px;font-size:14px;text-align:center}.pair-table .pair-qty{vertical-align:middle;text-align:center;padding:12px 4px;border:1px solid #b8c5d2;border-radius:6px;white-space:normal;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}.pair-qty-label{display:block;font-size:14px;font-weight:600;margin-bottom:8px}.pair-qty-value{display:block;line-height:1.25;color:#263548}.pair-table .pair-cell{vertical-align:middle;padding:16px;border:1px solid #b8c5d2;border-radius:6px;white-space:normal;overflow-wrap:anywhere}.pair-cell strong,.pair-full strong{font-size:17px}.pair-table .diff{background:#fff176!important}.pair-table .extra,.pair-full.unknown{background:#e0e0e0!important;color:#263548!important}.pair-full.good{background:#a5d6a7!important}.pair-full{padding:14px;margin:8px;border:1px solid #b8c5d2;border-radius:6px}.pair-code{font-family:Consolas,monospace;font-size:16px;margin:5px 0}.pair-count{font-weight:700;margin-top:10px;font-size:18px}.pair-sub,.pair-note{color:#576574;font-size:13px}.pair-note{margin:12px 8px}.pair-empty{background:#f8fafc;color:#8a97a5}.purchase-entry{position:relative;display:inline-flex;align-items:center;gap:6px;text-decoration:none}.purchase-badge{display:inline-flex;min-width:22px;height:22px;padding:0 5px;border-radius:50%;align-items:center;justify-content:center;font:700 13px Arial}.purchase-badge.yellow{background:#ffca28;color:#543b00}.purchase-badge.red{background:#d32f2f;color:white}.purchase-badge[hidden]{display:none}
+/* 采购单 ↔ 实收 横向对照表（屏幕显示）。状态用 ui-tokens 的浅色：已齐绿 / 差异橙 / 组外或待核实灰。
+   导出图片（purchase-pairs.js 的 canvas）保留原配色，不受本文件影响。 */
+.pair-table{width:100%;border-collapse:separate;border-spacing:6px;table-layout:fixed;min-width:680px}
+.pair-table th{background:var(--c-panel-2,#f7f8fc);color:var(--c-text-2,#5d6075);padding:12px 14px;font-size:14px;font-weight:700;text-align:left;border-radius:var(--r-sm,8px)}
+.pair-table .pair-qty-col{width:88px}
+.pair-table .pair-qty-head{padding:10px 5px;font-size:12px;text-align:center}
+.pair-table .pair-qty{vertical-align:middle;text-align:center;padding:10px 4px;border:1px solid var(--c-line,#e7e8f0);border-radius:var(--r-sm,8px);white-space:normal;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+.pair-qty-label{display:block;font-size:12px;font-weight:600;color:var(--c-text-3,#737790);margin-bottom:6px}
+.pair-qty-value{display:block;line-height:1.25;color:var(--c-text,#1c1d2b);font:700 15px var(--mono,monospace)}
+.pair-table .pair-cell{vertical-align:middle;padding:12px 14px;border:1px solid var(--c-line,#e7e8f0);border-radius:var(--r-sm,8px);white-space:normal;overflow-wrap:anywhere;background:var(--c-panel,#fff)}
+.pair-cell strong,.pair-full strong{font-size:15px}
+.pair-table .diff{background:var(--c-warn-soft,#fef4e3);border-color:#f8dcae}
+.pair-table .extra,.pair-full.unknown{background:var(--c-none-soft,#f0f1f6);color:var(--c-text,#1c1d2b)}
+.pair-table .good,.pair-full.good{background:var(--c-ok-soft,#e5f7f0);border-color:#bfe9d8}
+.pair-full{padding:12px 14px;margin:6px;border:1px solid var(--c-line,#e7e8f0);border-radius:var(--r-sm,8px)}
+.pair-code{font-family:var(--mono,Consolas,monospace);font-size:14px;margin:4px 0}
+.pair-count{font-weight:700;margin-top:8px;font-size:16px}
+.pair-sub,.pair-note{color:var(--c-text-3,#737790);font-size:12px}
+.pair-note{margin:10px 6px}
+.pair-empty{background:var(--c-panel-2,#f7f8fc);color:var(--c-text-3,#737790)}
+.purchase-entry{position:relative;display:inline-flex;align-items:center;gap:6px;text-decoration:none}
+.purchase-badge{display:inline-flex;min-width:22px;height:22px;padding:0 6px;border-radius:99px;align-items:center;justify-content:center;font:700 12px var(--font,sans-serif)}
+.purchase-badge.yellow{background:#f59e0b;color:#1c1d2b}
+.purchase-badge.red{background:var(--c-danger,#e11d48);color:#fff}
+.purchase-badge[hidden]{display:none}
