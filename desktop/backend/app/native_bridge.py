@@ -148,7 +148,9 @@ def install(s):
     item_action=p.startswith('/api/item/') or p in ('/api/line/set','/api/line/del','/api/line/edit') or (p in ('/api/batch/copy','/api/unplanned/action','/api/joint/action') and a in ('copy_previous','scan','manual','edit','delete_line'))
     if marker and item_action and not kw.get('selection_required'):
      source,before=marker;d=video_store(s,source).db
-     rows=d.execute('SELECT sid,bid,MAX(id) last_id FROM scan_audit WHERE id>? GROUP BY sid,bid ORDER BY last_id',(before,)).fetchall()
+     lock=getattr(s,'STATE_LOCK',None);excl,params=lock.audit_exclusion(d) if lock is not None else ('',[])
+     # 远程调用期间锁被临时释放：别的请求写入的流水不驱动本请求的录像 item 事件。
+     rows=d.execute('SELECT sid,bid,MAX(id) last_id FROM scan_audit WHERE id>?'+excl+' GROUP BY sid,bid ORDER BY last_id',[before]+params).fetchall()
      for row in rows:emit(s,'item',{'context':video_context(s,source,row['sid'],row['bid'])})
     if p in ('/api/batch/del','/api/batch/rename') or (p in ('/api/unplanned/action','/api/joint/action') and a in ('rename','delete_batch')):emit(s,'stop',{'reason':'物流记录修改，请重新确认物流'})
     if p in ('/api/session/pause','/api/session/pause-report','/api/session/close','/api/logout'):emit(s,'stop',{'reason':p})

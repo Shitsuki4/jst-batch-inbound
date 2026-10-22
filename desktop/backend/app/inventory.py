@@ -12,6 +12,7 @@ from decimal import Decimal, InvalidOperation
 from urllib.parse import urlencode
 from inbound import text, json_text
 from jst import CallbackRejected
+from statelock import unlocking, keyed
 
 
 class InventoryError(ValueError):
@@ -150,7 +151,8 @@ class InventoryAPI:
 
 class InventoryService:
     def __init__(self, store, client):
-        self.store, self.client = store, client
+        # 盘点读写聚水潭均在 state_lock 外；本地 inventory_op 状态（preview → sending）做互斥。
+        self.store, self.client = store, unlocking(client)
         self.db = store.db
         self.db.execute("""CREATE TABLE IF NOT EXISTS inventory_op (
             token TEXT PRIMARY KEY, identity TEXT NOT NULL, login_co_id TEXT NOT NULL,
@@ -253,6 +255,11 @@ class InventoryService:
         return [self.get(r["token"]) for r in rows]
 
     def submit(self, token):
+        # 同一 token 的提交 / 回读串行：远程调用在 state_lock 外，必须防止并发重复写入。
+        with keyed(("inventory", token)):
+            return self._submit(token)
+
+    def _submit(self, token):
         job = self.get(token)
         if job["status"] != "preview":
             return job  # 重复提交只返回原状态，从不重写
@@ -287,6 +294,10 @@ class InventoryService:
         return self.verify(token)
 
     def verify(self, token):
+        with keyed(("inventory", token)):
+            return self._verify(token)
+
+    def _verify(self, token):
         job = self.get(token)
         if job["status"] not in ("sending", "unknown"):
             return job

@@ -105,6 +105,7 @@ import qrview
 from report_clipboard import ReportClipboard, MAX_REQUEST_BYTES
 from oplog import OpLog, DEVICE_LABELS as OPLOG_DEVICE_LABELS, MODULES as OPLOG_MODULES, OPS as OPLOG_OPS, MIN_RETENTION_DAYS, MAX_RETENTION_DAYS
 import oplog_hooks
+from statelock import STATE_LOCK, remote, unlocked, keyed
 
 # Local packaging diagnostic: temporary certificate only, no DB or ERP requests.
 if __name__ == "__main__" and "--self-test" in sys.argv:
@@ -146,7 +147,9 @@ ID_TYPES = ["po_id", "outer_po_id", "source_o_id", "plat_so_id"]
 ID_TYPE_LABELS = {"po_id": "采购单号", "outer_po_id": "外部单号",
                   "source_o_id": "来源单号", "plat_so_id": "线上采购单号"}
 
-state_lock = threading.RLock()
+# 全局业务锁：只保护本地状态；聚水潭 / ERP 请求、导出文件、备份复制、登录浏览器控制都在锁外
+# （with remote() / unlocked()），详见 statelock.py。
+state_lock = STATE_LOCK
 BACKUPS = BackupManager(DATA, state_lock)
 BACKUPS.before_upgrade()
 STORE = Store(os.path.join(DATA, "jst.db"))
@@ -237,7 +240,8 @@ def _find_purchase_in_scope(no, owner, auth):
     errors = []
     for kind in ('po_id', 'outer_po_id'):
         try:
-            raw, _ = JST.search_po(no, owner, auth, kind)
+            with remote("search_po"):
+                raw, _ = JST.search_po(no, owner, auth, kind)
             if not isinstance(raw, list) or any(not isinstance(r, dict) for r in raw):
                 raise BizError('采购列表响应格式异常')
         except (BizError, OSError, ValueError) as exc:
@@ -285,7 +289,8 @@ def find_purchase_order(no, pick_owner="", pick_auth="", prefer="", *, strict_sc
     for owner, auth in _ctx_candidates(pick_owner, pick_auth):
         for t in order:
             try:
-                rows, _ = JST.search_po(no, owner, auth, t)
+                with remote("search_po"):
+                    rows, _ = JST.search_po(no, owner, auth, t)
             except BizError as e:
                 last_err = e
                 continue
@@ -304,7 +309,8 @@ def find_purchase_order(no, pick_owner="", pick_auth="", prefer="", *, strict_sc
 
 
 def fetch_items(row, ctx):
-    raw = JST.fetch_detail(row["po_id"], ctx["owner"], ctx["auth"])
+    with remote("fetch_detail"):
+        raw = JST.fetch_detail(row["po_id"], ctx["owner"], ctx["auth"])
     items = [normalize_po_item(r) for r in (raw.get("datas") or [])]
     items = [it for it in items if it["sku_id"] or it["name"]]
     if not items:
@@ -316,7 +322,9 @@ def refresh_purchase_session(sid):
     """Explicit read-only refresh, using the session's original exact company scope.
 
     Never activate a session, discard receipts, or substitute another PO on failure.
-    Caller holds state_lock. Background two-second sync never calls this function.
+    Caller holds state_lock; both remote reads run outside it (remote()), and the
+    result is applied only if the session's PO / company scope did not change meanwhile.
+    Background two-second sync never calls this function.
     """
     s = STORE.get_session(sid)
     if not s or not JST.uid:
@@ -324,7 +332,9 @@ def refresh_purchase_session(sid):
     owner, auth = s.get("owner_co_id") or "", s.get("auth_co_id") or ""
     if not owner or not auth:
         raise BizError("旧收货单缺少货主或仓库公司，请在电脑重新查询采购单")
-    raw, _ = JST.search_po(s["po_id"], owner, auth, "po_id")
+    ident = (s["po_id"], owner, auth, JST.uid, JST.coid)
+    with remote("search_po"):
+        raw, _ = JST.search_po(s["po_id"], owner, auth, "po_id")
     exact = [r for r in raw if str(r.get("po_id", "")).strip() == str(s["po_id"])]
     if len(exact) != 1:
         raise BizError("未找到唯一的原采购单，旧数据未更新，请核对权限和采购单状态")
@@ -333,7 +343,11 @@ def refresh_purchase_session(sid):
             or (row.get("wms_co_id") and row["wms_co_id"] != auth)):
         raise BizError("采购单公司上下文不一致，已停止刷新")
     items = fetch_items(row, {"owner": owner, "auth": auth})
-    # Both remote calls completed before changing the local snapshot.
+    # Both remote calls completed before changing the local snapshot. Back under the
+    # lock: refuse to apply if the session vanished or its scope / login changed.
+    cur = STORE.get_session(sid)
+    if not cur or (cur["po_id"], cur.get("owner_co_id") or "", cur.get("auth_co_id") or "", JST.uid, JST.coid) != ident:
+        raise BizError("刷新期间收货单或登录账号已变化，旧数据未更新，请重试")
     with STORE.db:
         STORE.db.execute(
             "UPDATE session SET supplier=?,wh_name=?,status=?,po_date=?,outer_po_id=?,items_json=? WHERE id=?",
@@ -399,8 +413,9 @@ def load_partners(refresh=False):
             pass
     gen, ident = PARTNERS_GEN, (JST.uid, JST.coid)
     try:
-        data = {"owners": JST.partners(), "wms": JST.wms_list(), "ts": now_str(),
-                "ver": PARTNERS_CACHE_VER}
+        with remote("partners"):
+            data = {"owners": JST.partners(), "wms": JST.wms_list(), "ts": now_str(),
+                    "ver": PARTNERS_CACHE_VER}
         if not data["owners"] and not data["wms"]:
             raise BizError("empty partner list")
         if gen != PARTNERS_GEN or ident != (JST.uid, JST.coid):
@@ -537,7 +552,9 @@ def lookup_item_by_code(code, owner="", auth="", all_matches=False):
             return dict(hit, src="legacy-cache")
     if not JST.uid or STORE.get_kv("catalog_online", "0") != "1": return None
     try:
-        info = JST.lookup_item(code, owner, auth or JST.coid)
+        coid = JST.coid
+        with remote("lookup_item"):
+            info = JST.lookup_item(code, owner, auth or coid)
     except Exception as e:
         from jst import ItemAmbiguousError
         if isinstance(e, ItemAmbiguousError):
@@ -996,6 +1013,24 @@ class _JointLazy:
         return getattr(self.instance,name)
 JOINT=_JointLazy()
 
+def _locked_connections(audit=False):
+    """state_lock 保护的共享 SQLite 连接；释放锁前检查无未提交事务，scan_audit 归属也据此计算。"""
+    out = [STORE.db]
+    for lazy in (UNPLANNED, JOINT):
+        inst = lazy.instance
+        if inst is not None:
+            out.append(inst.store.db)
+    if not audit:
+        watch = WATCH.instance
+        if watch is not None:
+            out.append(watch.db)
+    return out
+
+
+STATE_LOCK.register_db(_locked_connections)
+STATE_LOCK.register_audit(lambda: _locked_connections(audit=True))
+
+
 def cross_receipt_guard(store,sid):
     WATCH.cross_guard(store,sid)
     if JOINT.instance is None and not os.path.exists(os.path.join(DATA,'joint_receipts.db')):return
@@ -1176,6 +1211,7 @@ class Handler(BaseHTTPRequestHandler):
         """Run a POST handler with operation-log hooks; oplog failures never affect the request."""
         self._oplog_resp = None
         ctx = None
+        STATE_LOCK.begin_request()
         try:
             ctx = oplog_hooks.before(sys.modules[__name__], self, path, self._body())
         except Exception as e:  # noqa: BLE001
@@ -1638,16 +1674,17 @@ class Handler(BaseHTTPRequestHandler):
             # 现场取证：把分仓/货主接口的**原始返回**原样吐出来，用于排查"分仓显示数字"。
             # 这是个只读诊断入口，不写任何缓存，出问题让用户直接开这个页面看。
             out = {"uid": JST.uid, "coid": JST.coid}
-            try:
-                out["wms_raw"] = JST.wms_raw()
-            except Exception as e:
-                out["wms_err"] = "%s: %s" % (type(e).__name__, str(e)[:200])
-            try:
-                out["owners_raw"] = JST.owners_raw()
-            except Exception as e:
-                out["owners_err"] = "%s: %s" % (type(e).__name__, str(e)[:200])
-            out["wms_parsed"] = JST.wms_list()
-            out["owners_parsed"] = JST.partners()
+            with remote("debug-wms-raw"):
+                try:
+                    out["wms_raw"] = JST.wms_raw()
+                except Exception as e:
+                    out["wms_err"] = "%s: %s" % (type(e).__name__, str(e)[:200])
+                try:
+                    out["owners_raw"] = JST.owners_raw()
+                except Exception as e:
+                    out["owners_err"] = "%s: %s" % (type(e).__name__, str(e)[:200])
+                out["wms_parsed"] = JST.wms_list()
+                out["owners_parsed"] = JST.partners()
             return self._ok(**out)
 
         if path in ("/api/learned/search", "/api/learned/list", "/api/learned/export"):
@@ -1681,7 +1718,8 @@ class Handler(BaseHTTPRequestHandler):
             if not acc:
                 return self._send(400, b"missing account")
             try:
-                raw, ctype = JST.validcode_image(acc)
+                with remote("captcha"):
+                    raw, ctype = JST.validcode_image(acc)
             except LoginError as e:
                 log("captcha fail: %s" % e)
                 return self._send(502, str(e).encode("utf-8"), "text/plain; charset=utf-8")
@@ -1719,17 +1757,19 @@ class Handler(BaseHTTPRequestHandler):
                "range": "%s至%s" % (q.get("start", ""), q.get("end", ""))}.get(mode, "全部")
         base = "收货明细_%s_%s" % (tag, stamp)
         cols = ["采购单号", "对应物流单号", "扫描时间", "商品编码", "商品名称", "数量"]
-        if fmt == "xlsx":
-            name = safe_filename(base + ".xlsx")
-            path = os.path.join(EXPORT_DIR, name)
-            xlsx.write_xlsx(path, "收货明细", cols, rows)
-        else:
-            name = safe_filename(base + ".csv")
-            path = os.path.join(EXPORT_DIR, name)
-            with open(path, "w", encoding="utf-8-sig", newline="") as f:
-                f.write(",".join(cols) + "\r\n")
-                for r in rows:
-                    f.write(",".join('"%s"' % str(x).replace('"', '""') for x in r) + "\r\n")
+        # 数据已在锁内取完；写导出文件是本地慢 I/O，放到锁外。
+        with unlocked("export-file"):
+            if fmt == "xlsx":
+                name = safe_filename(base + ".xlsx")
+                path = os.path.join(EXPORT_DIR, name)
+                xlsx.write_xlsx(path, "收货明细", cols, rows)
+            else:
+                name = safe_filename(base + ".csv")
+                path = os.path.join(EXPORT_DIR, name)
+                with open(path, "w", encoding="utf-8-sig", newline="") as f:
+                    f.write(",".join(cols) + "\r\n")
+                    for r in rows:
+                        f.write(",".join('"%s"' % str(x).replace('"', '""') for x in r) + "\r\n")
         return self._ok(name=name, rows=len(rows), url="/files/" + urllib.parse.quote(name),
                         path=path, preview={"cols": cols, "rows": rows[:5]})
 
@@ -2099,7 +2139,10 @@ class Handler(BaseHTTPRequestHandler):
         return self._ok(msg="设置已保存")
 
     def _post_api_login_restore(self):
-        result = LOGIN_MEMORY.restore(JST, lambda: JstClient(timeout=10))
+        # 用独立探测客户端在锁外验证保存的登录；成功后才写入共享 JST。
+        with keyed("jst-login"):
+            result = LOGIN_MEMORY.restore(JST, lambda: JstClient(timeout=10),
+                                          outside=lambda: remote("login-restore"))
         if result['restored']:
             invalidate_partners()
         return self._ok(**result)
@@ -2124,7 +2167,8 @@ class Handler(BaseHTTPRequestHandler):
         code = (b.get("verify_code") or "").strip()
         log("login attempt account=%s fp=%s captcha=%s" % (acc, fp, bool(code)))
         try:
-            info = JST.login(acc, pwd, code, b.get("jd3", ""), b.get("vd144", ""))
+            with keyed("jst-login"), remote("login"):
+                info = JST.login(acc, pwd, code, b.get("jd3", ""), b.get("vd144", ""))
         except CaptchaError as e:
             log("login need captcha account=%s reason=%s" % (acc, e))
             return self._ok(need_captcha=True, msg=str(e) or "请输入图形验证码后再登录")
@@ -2149,7 +2193,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._fail("请输入手机号")
         SMS_STATE.clear()  # new challenge invalidates older mobile/suffix/cid
         try:
-            r = JST.sms_send(mobile, suffix)
+            with keyed("jst-login"), remote("sms_send"):
+                r = JST.sms_send(mobile, suffix)
         except LoginError as e:
             log("sms send fail: %s" % e)
             return self._fail(str(e))
@@ -2181,7 +2226,8 @@ class Handler(BaseHTTPRequestHandler):
                 SMS_STATE.get("suffix", "") != suffix or time.time() - SMS_STATE.get("sent_at", 0) > 600):
             return self._fail("请先获取验证码", hint="验证码凭据已失效，请重新点「获取验证码」")
         try:
-            info = JST.sms_login(mobile, code, cid, suffix)
+            with keyed("jst-login"), remote("sms_login"):
+                info = JST.sms_login(mobile, code, cid, suffix)
         except LoginError as e:
             log("sms login fail: %s" % e)
             return self._fail(str(e))
@@ -2226,7 +2272,8 @@ class Handler(BaseHTTPRequestHandler):
         return self._ok(user=r["user"], cookies=r["cookies"], msg="扫码登录成功", warning=r.get("warning", ""))
 
     def _post_api_qr_cancel(self):
-        qr_close()
+        with unlocked("qr-close"):
+            qr_close()
         return self._ok(msg="已关闭扫码登录窗口")
 
     def _post_api_logout(self):
@@ -2349,6 +2396,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._fail("该采购单已结单，不能继续扫码", hint="如需继续收货，请重新「创建收货批次」")
         if b.get("refresh") is True:
             refresh_purchase_session(sid)
+            s = STORE.get_session(sid)    # 刷新在锁外读取 ERP：回锁后按最新状态判断
+            if not s:
+                return self._fail("找不到该收货批次")
+            if s["state"] == "closed":
+                return self._fail("该采购单已结单，不能继续扫码", hint="如需继续收货，请重新「创建收货批次」")
         STORE.activate_session(sid)
         return self._ok(session=session_payload(sid), batches=STORE.batches(sid),
                         progress=STORE.progress(sid), msg="已回到 %s，可继续扫码" % s["po_id"])
@@ -2397,6 +2449,23 @@ class Handler(BaseHTTPRequestHandler):
         if op:
             STORE.client_op_finish(op["id"], dict(ok=True, **kw))
         return self._ok(**kw)
+
+    def _recheck_target(self, s, bid, mark, op=None):
+        """缺码实时查询等远程调用会在锁外进行：回锁后重新校验写入目标，并重查操作编号。
+
+        返回 (错误信息, 已有的同编号操作)；都为 None 表示可以照常入账（累加仍在锁内原子完成）。"""
+        if STATE_LOCK.mark() == mark:
+            return None, None
+        cur = STORE.get_session(s["id"])
+        if not cur:
+            return "收货批次已被删除，请刷新后重试", None
+        if cur["state"] == "closed":
+            return "该采购单已结单", None
+        if any(cur.get(k) != s.get(k) for k in ("po_id", "owner_co_id", "auth_co_id", "items_json")):
+            return "采购明细已更新，请重新扫码核对", None
+        if not any(x["id"] == bid for x in STORE.batches(s["id"])):
+            return "物流子批次已删除或变更，请重新扫描物流单号", None
+        return None, (STORE.client_op_get(op["id"]) if op else None)
 
     def _cur_session(self, bid=0):
         """收货类操作的上下文单据：优先 body 里的 sid，其次当前 active。"""
@@ -2487,10 +2556,16 @@ class Handler(BaseHTTPRequestHandler):
                 return self._fail(str(e))
             if old:
                 return self._replay_client_op(op, old, s["id"], bid)
+        mark = STATE_LOCK.mark()
         try:
             candidates = receipt_candidates(s, code)
         except ValueError as e:
             return self._fail(str(e))
+        err, old = self._recheck_target(s, bid, mark, op)
+        if err:
+            return self._fail(err)
+        if old:   # 同一操作编号的重试在我们查资料期间已入账：回放，不重复累加
+            return self._replay_client_op(op, old, s["id"], bid)
         info = candidates[0] if len(candidates) == 1 else None
         res = ({"mode": "multi", "items": candidates} if len(candidates) > 1 else
                {"mode": "one", "item": info, "via": info.get("_scan_via", "catalog")} if info and info["matched"] else {"mode": "none"})
@@ -2580,10 +2655,16 @@ class Handler(BaseHTTPRequestHandler):
             return self._fail(str(e))
         if old:
             return self._replay_client_op(op, old, s["id"], bid)
+        mark = STATE_LOCK.mark()
         try:
             it = receipt_selection(s, b)
         except ValueError as e:
             return self._fail(str(e))
+        err, old = self._recheck_target(s, bid, mark, op)
+        if err:
+            return self._fail(err)
+        if old:
+            return self._replay_client_op(op, old, s["id"], bid)
         matched = it["matched"]
         payload = {"key": it["sku_id"] if matched else "RAW:" + it["sku_id"],
                    "poi_id": it.get("poi_id", ""), "sku_id": it["sku_id"], "i_id": it.get("i_id", ""),
@@ -2825,14 +2906,20 @@ def open_browser(port):
 
 def qr_launch(kind="weixin", refresh=False):
     """Dedicated per-launch profile; use the browser's actual debug port, never Cookie DB."""
-    global QR_PROC, QR_CDP_PORT, QR_ACTIVE_PROFILE, QR_KIND, QR_STARTED
-    import tempfile
-    import subprocess
     if kind not in ("weixin", "dingtalk", "official"):
         raise BizError("不支持的登录方式")
     exe = edge_exe()
     if not exe:
         raise BizError("没有找到 Microsoft Edge，请安装后打开官方登录窗口")
+    # 启动浏览器并等待调试端口最长约 15 秒：不持有 state_lock（锁顺序：从不在持 QR_LOCK 时等 state_lock）。
+    with unlocked("qr-launch"):
+        return _qr_launch_locked(exe, kind, refresh)
+
+
+def _qr_launch_locked(exe, kind, refresh):
+    global QR_PROC, QR_CDP_PORT, QR_ACTIVE_PROFILE, QR_KIND, QR_STARTED
+    import tempfile
+    import subprocess
     with QR_LOCK:
         # Edge's launcher may exit while its browser process continues running.
         if QR_CDP_PORT and cdp.alive(QR_CDP_PORT, timeout=1):
@@ -2896,22 +2983,26 @@ def _adopt_browser(ck):
     invalidate_partners()
     LAN.invalidate()
     log("official login OK uid=%s" % info.get("uid"))
-    qr_close(wait=False)
+    with unlocked("qr-close"):    # 不在持 state_lock 时等待 QR_LOCK
+        qr_close(wait=False)
     return {"user": info, "cookies": len(ck), "via": "cdp", "warning": warning}
 
 
 def qr_poll():
-    with state_lock, QR_LOCK:
-        if QR_CDP_PORT and QR_STARTED and time.monotonic() - QR_STARTED > 600:
-            qr_close()
-            return {"logged": False, "pending": "登录等待已超时，请刷新二维码或重新打开官方网页登录。"}
-        ck = qr_take_cookies()
-        if not ck or not ck.get("u_id") or not ck.get("u_co_id"):
-            view = qrview.snapshot(QR_CDP_PORT, QR_KIND) if QR_CDP_PORT and QR_KIND != "official" else {}
-            return dict(logged=False, **view)
+    # 与登录浏览器的 CDP 通信在 state_lock 外进行（只持 QR_LOCK）；拿到登录 cookie 后再回锁内采纳。
+    with unlocked("qr-poll"):
+        with QR_LOCK:
+            if QR_CDP_PORT and QR_STARTED and time.monotonic() - QR_STARTED > 600:
+                qr_close()
+                return {"logged": False, "pending": "登录等待已超时，请刷新二维码或重新打开官方网页登录。"}
+            ck = qr_take_cookies()
+            if not ck or not ck.get("u_id") or not ck.get("u_co_id"):
+                view = qrview.snapshot(QR_CDP_PORT, QR_KIND) if QR_CDP_PORT and QR_KIND != "official" else {}
+                return dict(logged=False, **view)
+    with state_lock:
         result = _adopt_browser(ck)
-        result["logged"] = True
-        return result
+    result["logged"] = True
+    return result
 
 
 def qr_close(wait=True):
@@ -2941,7 +3032,8 @@ def qr_close(wait=True):
 
 
 def qr_adopt():
-    ck = qr_take_cookies()
+    with unlocked("qr-cookies"):
+        ck = qr_take_cookies()
     if not ck or not ck.get("u_id"):
         if not QR_CDP_PORT:
             raise LoginError("官方登录窗口还没有打开或已经关闭，请重新打开并完成登录；不会读取Cookie文件")

@@ -229,6 +229,7 @@ class Store(object):
         d = os.path.dirname(db_path)
         if d and not os.path.isdir(d):
             os.makedirs(d, exist_ok=True)
+        self.path = os.path.abspath(db_path)
         self.db = sqlite3.connect(db_path, check_same_thread=False, timeout=15)
         self.db.row_factory = sqlite3.Row
         self._drop_legacy_indexes()      # 必须早于建表：先清掉旧约束，否则建表脚本也会被它挡住
