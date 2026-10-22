@@ -200,6 +200,66 @@ def main():
     check("restore keeps current operation log", res["status"] == "applied" and marker(d4) == "old"
           and marker(d4, "operation_log.db") == "new" and "operation_log.db" not in res["restored"])
 
+    # --- learned_codes.db（未知条码学习数据）与其他库一样备份 / 恢复 / 回滚 ---
+    def mark(d, db, v):
+        with closing(sqlite3.connect(Path(d) / db)) as c:
+            c.execute("CREATE TABLE IF NOT EXISTS t (v TEXT)")
+            c.execute("DELETE FROM t")
+            c.execute("INSERT INTO t VALUES (?)", (v,))
+            c.commit()
+    d5 = root / "d5"
+    make_data(d5, ["L"], marker="old")
+    mark(d5, "learned_codes.db", "old")
+    b5 = take_backup(d5)
+    m5 = json.loads((b5 / "manifest.json").read_text(encoding="utf-8"))
+    check("backup includes learned_codes.db", "learned_codes.db" in [f["name"] for f in m5["files"]])
+    check("verify accepts learned_codes.db", restore.verify(b5)["ok"])
+    check("list_backups shows learned_codes.db", "learned_codes.db" in restore.list_backups(d5 / "backups")[0]["dbs"])
+    make_data(d5, ["L", "M"], marker="new")
+    mark(d5, "learned_codes.db", "new")
+    pv5 = restore.preview(b5, d5)
+    check("preview lists learned_codes.db", pv5["dbs"]["learned_codes.db"]["in_backup"]
+          and pv5["dbs"]["learned_codes.db"]["backup"]["t"] == 1)
+    lz = root / "learned.zip"
+    with zipfile.ZipFile(lz, "w") as z:
+        for p in b5.iterdir():
+            z.write(p, p.name)
+    restore.stage(lz, root / "lz-data")
+    check("zip stage includes learned_codes.db", (root / "lz-data" / restore.PENDING / "learned_codes.db").is_file())
+    (d5 / "learned_codes.db-wal").write_bytes(b"")
+    restore.stage(b5, d5)
+    res = restore.apply_pending(d5)
+    check("restore applies learned_codes.db", res["status"] == "applied" and "learned_codes.db" in res["restored"]
+          and marker(d5, "learned_codes.db") == "old" and marker(d5) == "old")
+    check("old learned_codes.db + wal in rollback dir", (Path(res["rollback"]) / "learned_codes.db").is_file()
+          and (Path(res["rollback"]) / "learned_codes.db-wal").is_file())
+    # 注入故障：learned_codes.db 移入失败时整体回滚
+    d6 = root / "d6"
+    make_data(d6, ["R"], marker="old")
+    mark(d6, "learned_codes.db", "old")
+    b6 = take_backup(d6)
+    make_data(d6, ["R", "S"], marker="new")
+    mark(d6, "learned_codes.db", "new")
+    restore.stage(b6, d6)
+    restore._FAULT = lambda step: (_ for _ in ()).throw(OSError("injected")) if step == "in:learned_codes.db" else None
+    try:
+        res = restore.apply_pending(d6)
+    finally:
+        restore._FAULT = None
+    check("learned_codes.db failure rolled back", res["status"] == "rolled_back" and marker(d6) == "new"
+          and marker(d6, "learned_codes.db") == "new" and not list(d6.glob("restore-rollback-*")))
+    # 旧备份不含 learned_codes.db：保留当前学习数据
+    d7 = root / "d7"
+    make_data(d7, ["O"], marker="old")
+    b7 = take_backup(d7)
+    mark(d7, "learned_codes.db", "cur")
+    pv7 = restore.preview(b7, d7)
+    check("preview: absent learned_codes.db kept", pv7["dbs"]["learned_codes.db"]["kept_current"])
+    restore.stage(b7, d7)
+    res = restore.apply_pending(d7)
+    check("old backup keeps current learned_codes.db", res["status"] == "applied"
+          and marker(d7, "learned_codes.db") == "cur" and "learned_codes.db" in res["kept_current"])
+
     import shutil
     shutil.rmtree(root, ignore_errors=True)
     print("restore_test: %d failure(s)" % len(FAILS))

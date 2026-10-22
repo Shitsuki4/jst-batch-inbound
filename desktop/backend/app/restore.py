@@ -16,7 +16,9 @@ import time
 import zipfile
 
 FORMAT = 1
-DB_NAMES = ("jst.db", "catalog.db", "unplanned.db", "purchase_watch.db", "joint_receipts.db")
+DB_NAMES = ("jst.db", "catalog.db", "unplanned.db", "purchase_watch.db", "joint_receipts.db", "learned_codes.db")
+# 备份中没有这些库时（如旧版备份不含未知条码学习数据）保留当前数据，而不是把当前库移走。
+KEEP_IF_ABSENT = ("catalog.db", "learned_codes.db")
 # 操作记录库会进备份（审计用），但恢复时始终保留当前操作记录，不用备份覆盖。
 KEEP_CURRENT_NAMES = ("operation_log.db",)
 ALLOWED_NAMES = DB_NAMES + KEEP_CURRENT_NAMES
@@ -174,7 +176,7 @@ def preview(backup_dir, data_dir):
         if not in_backup and not (d / n).is_file():
             continue
         dbs[n] = {"in_backup": in_backup,
-                  "kept_current": (not in_backup and n == "catalog.db"),
+                  "kept_current": (not in_backup and n in KEEP_IF_ABSENT),
                   "backup": _counts(b / n) if in_backup else None,
                   "current": _counts(d / n)}
     missing = sorted(_io_ids(d / "jst.db") - _io_ids(b / "jst.db")) if "jst.db" in names else sorted(_io_ids(d / "jst.db"))
@@ -298,7 +300,7 @@ def apply_pending(data_dir):
         _write_json_atomic(data / RESULT, res)
         return res
     incoming = [f["name"] for f in v["manifest"]["files"] if f["name"] in DB_NAMES]
-    outgoing = [n for n in DB_NAMES if not (n == "catalog.db" and n not in incoming)]
+    outgoing = [n for n in DB_NAMES if not (n in KEEP_IF_ABSENT and n not in incoming)]
     rb = data / ("restore-rollback-" + datetime.now().strftime("%Y%m%d-%H%M%S-%f"))
     j = {"state": "applying", "rollback": str(rb), "incoming": incoming, "outgoing": outgoing,
          "started": time.time()}
