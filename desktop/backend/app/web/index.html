@@ -7,7 +7,7 @@
 <link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/settings-workspace.css">
 <link rel="stylesheet" href="/pda.css"><link rel="stylesheet" href="/receiving-workspace.css">
 <link rel="stylesheet" href="/difference-report.css"><link rel="stylesheet" href="/barcode-learn.css">
-<link rel="stylesheet" href="/purchase-pairs.css"><script src="/purchase-pairs.js"></script><link rel="icon" type="image/svg+xml" href="/app-icon.svg">
+<link rel="stylesheet" href="/purchase-pairs.css"><link rel="stylesheet" href="/ui-tokens.css"><script src="/purchase-pairs.js"></script><link rel="icon" type="image/svg+xml" href="/app-icon.svg">
 <link rel="icon" sizes="32x32" href="/app-icon.png">
 <script src="/native-receipt.js"></script><script src="/barcode-learn.js"></script></head>
 <body>
@@ -105,43 +105,48 @@
 </div>
 
 <!-- ============ 主体 ============ -->
-<div id="app" hidden>
-  <!-- 顶部常驻状态条 -->
-  <header class="topbar">
-    <div class="brand"><img src="/app-icon.svg" alt="" width="32" height="32"><span>扫码入库</span></div>
-
-    <div id="status-box" class="status-strip">
-      <span class="st-empty">尚未激活采购单</span>
+<div id="app" class="app-shell" hidden>
+  <!-- 左侧分组导航（方向 C）：按钮仍是 .tab[data-tab]，app.js 的 switchTab 照常工作 -->
+  <aside class="sidebar">
+    <div class="side-brand"><img src="/app-icon.svg" alt="" width="34" height="34"><div><b>扫码入库</b><small>聚水潭收货助手</small></div></div>
+    <nav class="side-nav" aria-label="主模块">
+      <div class="side-group">收货作业</div>
+      <button class="tab active i-inbox" data-tab="home" data-group="收货作业">有采购单收货</button>
+      <button class="tab i-layers" data-tab="joint" data-group="收货作业">多采购单合并收货</button>
+      <button class="tab i-box" data-tab="unplanned" data-group="收货作业">无采购单收货</button>
+      <div class="side-group">单据</div>
+      <button class="tab purchase-entry i-clip" data-tab="purchase" data-group="单据"><span class="tab-label">采购单</span> <span class="purchase-badge yellow" hidden></span><span class="purchase-badge red" hidden></span></button>
+      <button class="tab i-search" data-tab="query" data-group="单据">记录查询</button>
+      <button class="tab i-download" data-tab="export" data-group="单据">明细导出</button>
+      <div class="side-group">库存与系统</div>
+      <button class="tab i-grid" data-tab="inventory" data-group="库存与系统">库存盘点</button>
+      <button class="tab i-alert" data-tab="operations" data-group="库存与系统">异常与记录</button>
+      <button class="tab i-edit" data-tab="oplog" data-group="库存与系统">操作记录</button>
+      <button class="tab i-settings" data-tab="settings" data-group="库存与系统">设置</button>
+    </nav>
+    <div class="side-foot native-quick">
+      <b id="native-video-brief">视频举证 · 正在读取录像状态</b>
+      <div class="side-foot-acts"><button class="btn btn-sm side-btn i-video" data-native-action="preview">监控浮窗</button><button class="btn btn-sm side-btn i-settings" id="video-settings-shortcut">视频设置</button></div>
     </div>
-    <div id="receiving-mode-status" class="status-strip" hidden></div>
+  </aside>
 
+  <div class="shell-main">
+  <!-- 顶栏：面包屑 + 合并/无采购单收货状态 + 账号 -->
+  <header class="topbar">
+    <div class="crumb" id="crumb">收货作业 / <b>有采购单收货</b></div>
+    <div id="receiving-mode-status" class="status-strip mode-status" hidden></div>
     <div class="topbar-right">
-      <span id="who" class="who"></span>
-      <button class="btn btn-ghost btn-sm" data-tab="settings">设置</button>
-      <button class="btn btn-ghost btn-sm" id="btn-logout">退出</button>
+      <span id="who" class="who i-user"></span>
+      <button class="btn btn-ghost btn-sm i-exit" id="btn-logout">退出登录</button>
     </div>
   </header>
-
-  <nav class="tabs" aria-label="主模块">
-    <button class="tab active" data-tab="home">收货</button>
-    <button class="tab" data-tab="joint">多采购单合并收货</button>
-    <button class="tab" data-tab="unplanned">无采购单收货</button>
-    <button class="tab purchase-entry" data-tab="purchase">采购单 <span class="purchase-badge yellow" hidden></span><span class="purchase-badge red" hidden></span></button>
-    <button class="tab" data-tab="query">记录查询</button>
-    <button class="tab" data-tab="export">明细导出</button>
-    <button class="tab" data-tab="inventory">库存盘点</button>
-    <button class="tab" data-tab="operations">异常与记录</button>
-    <button class="tab" data-tab="oplog">操作记录</button>
-    <button class="tab" data-tab="settings">设置</button>
-  </nav>
 
   <main id="main">
     <section class="view" data-view="joint"><iframe id="joint-frame" class="receiving-frame" data-receiving-frame title="多采购单合并收货"></iframe></section>
     <section class="view" data-view="unplanned"><iframe id="unplanned-frame" class="receiving-frame" data-receiving-frame title="无采购单收货"></iframe></section>
-    <section class="view" data-view="purchase"><iframe id="purchase-frame" title="采购单跟踪工作台" style="display:block;width:100%;height:calc(100vh - 160px);min-height:560px;border:0;border-radius:12px" ></iframe></section>
+    <section class="view" data-view="purchase"><iframe id="purchase-frame" class="embed-frame" title="采购单跟踪工作台"></iframe></section>
     <!-- ---------- 收货 ---------- -->
     <section class="view active" data-view="home">
-      <div class="native-quick"><b id="native-video-brief">视频举证 · 正在读取录像状态</b><button class="btn btn-ghost btn-sm" data-native-action="preview">显示监控浮窗</button><button class="btn btn-ghost btn-sm" id="video-settings-shortcut">视频设置</button></div>
       <!-- 未在收货：创建收货批次 -->
       <div id="idle-card" class="card hero">
         <div class="hero-title">创建收货批次</div>
@@ -155,7 +160,7 @@
             <option value="plat_so_id">线上采购单号</option>
           </select>
           <input id="po-input" class="input input-xl" placeholder="请扫描 / 输入采购单号" autocomplete="off">
-          <button class="btn btn-primary btn-lg" id="btn-activate">创建收货批次</button>
+          <button class="btn btn-primary btn-lg i-plus" id="btn-activate">创建收货批次</button>
         </div>
         <div class="row partner-row">
           <label class="field-inline">商家 / 货主
@@ -164,7 +169,7 @@
           <label class="field-inline">分仓
             <select id="pick-auth" class="select"></select>
           </label>
-          <button class="btn btn-ghost btn-sm" id="btn-refresh-partners">刷新清单</button>
+          <button class="btn btn-ghost btn-sm i-refresh" id="btn-refresh-partners">刷新清单</button>
           <span class="hint">默认「自动」；查其他分仓的单据时可手动指定。</span>
         </div>
         <div id="idle-msg" class="hint"></div>
@@ -180,48 +185,69 @@
 
       <!-- 收货中 -->
       <div id="work-area" hidden>
-        <div class="card scan-card">
-          <div class="scan-modes">
-            <button class="mode-btn active" id="mode-tracking" data-mode="tracking">物流单号 <kbd>F1</kbd></button>
-            <button class="mode-btn" id="mode-item" data-mode="item">商品条码 <kbd>F2</kbd></button>
-          </div>
-          <input id="scan-input" class="input input-huge"
-                 placeholder="请扫描物流单号" autocomplete="off" spellcheck="false">
-          <div class="scan-side">
-            <div id="cur-batch-name" class="cur-batch">物流单号：—</div>
-            <button class="btn btn-ghost btn-sm" id="btn-skip-tracking">跳过物流单直接收货</button>
-            <button class="btn btn-primary btn-sm" id="btn-inbound-current">按实收生成入库单</button>
-            <button class="btn btn-ghost btn-sm" id="btn-exit-batch">退出批次</button>
+        <!-- 页头：单号与状态 + 唯一一组批次操作（退出批次只出现这一次） -->
+        <div class="page-head">
+          <div id="status-box" class="status-strip"><span class="st-empty">尚未创建收货批次</span></div>
+          <div class="page-actions">
+            <button class="btn btn-ghost i-exit" id="btn-exit-batch" type="button">退出批次</button>
+            <button class="btn btn-secondary i-pause btn-pause-report" type="button">暂存并对单</button>
+            <button class="btn btn-secondary i-flag btn-finish" type="button">结单</button>
+            <button class="btn btn-primary btn-lg i-inbound" id="btn-inbound-current" type="button">按实收生成入库单</button>
           </div>
         </div>
-        <div id="scan-flash" class="flash"></div>
+        <div class="work-top">
+        <div class="card scan-card">
+          <div class="scan-top">
+            <div class="scan-modes">
+              <button class="mode-btn i-truck" id="mode-tracking" data-mode="tracking">物流单号 <kbd>F1</kbd></button>
+              <button class="mode-btn i-scan" id="mode-item" data-mode="item">商品条码 <kbd>F2</kbd></button>
+            </div>
+            <div id="cur-batch-name" class="cur-batch">物流单号：—</div>
+            <button class="btn btn-ghost btn-sm i-truck" id="btn-skip-tracking">跳过物流单直接收货</button>
+          </div>
+          <input id="scan-input" class="input input-huge input-scan"
+                 placeholder="请扫描物流单号" autocomplete="off" spellcheck="false">
+          <div id="scan-flash" class="flash"></div>
 
-        <!-- 扫码后待确认数量：光标停在这里，默认 1 且全选；回车确认，改数字再回车用新数字 -->
-        <div id="pending-bar" class="pending-bar" hidden>
-          <span class="pb-tag">待确认</span>
-          <span class="pb-name" id="pb-name">—</span>
-          <span class="pb-code sku" id="pb-code"></span>
-          <label class="pb-qty">本次数量
-            <input id="pending-qty" class="pb-qty-input" type="text" inputmode="numeric" value="1">
-          </label>
-          <span class="pb-unit">件</span>
-          <button class="btn btn-primary btn-sm" id="btn-pending-ok">确认 <kbd>Enter</kbd></button>
-          <button class="btn btn-ghost btn-sm" id="btn-pending-cancel">取消 <kbd>Esc</kbd></button>
+          <!-- 扫码后待确认数量：光标停在这里，默认 1 且全选；回车确认，改数字再回车用新数字 -->
+          <div id="pending-bar" class="pending-bar" hidden>
+            <span class="pb-tag">待确认</span>
+            <span class="pb-name" id="pb-name">—</span>
+            <span class="pb-code sku" id="pb-code"></span>
+            <label class="pb-qty">本次数量
+              <input id="pending-qty" class="pb-qty-input" type="text" inputmode="numeric" value="1">
+            </label>
+            <span class="pb-unit">件</span>
+            <button class="btn btn-primary btn-sm i-check" id="btn-pending-ok">确认 <kbd>Enter</kbd></button>
+            <button class="btn btn-ghost btn-sm" id="btn-pending-cancel">取消 <kbd>Esc</kbd></button>
+          </div>
+        </div>
+        <div class="card progress-card" id="round-progress-card">
+          <div class="pc-hd">本轮收货进度</div>
+          <div class="pc-big"><b id="pc-recv">0</b><span id="pc-plan">/ 0 件</span><em id="pc-pct"></em></div>
+          <div class="pc-bar"><i id="pc-bar"></i></div>
+          <div class="pc-legend">
+            <div><span>已齐</span><b class="c-ok" id="pc-done">0</b></div>
+            <div><span>短收</span><b class="c-warn" id="pc-short">0</b></div>
+            <div><span>超收</span><b class="c-danger" id="pc-over">0</b></div>
+            <div><span>未收</span><b class="c-none" id="pc-none">0</b></div>
+          </div>
+        </div>
         </div>
 
         <div class="grid">
           <div class="card">
             <div class="card-hd">采购单明细 <span id="item-count" class="pill">0</span>
               <span class="card-hd-note">本轮所有物流单合计，切换物流单不清零</span>
-              <button id="po-live-refresh" class="btn btn-ghost btn-sm" type="button">刷新采购状态</button>
+              <button id="po-live-refresh" class="btn btn-ghost btn-sm i-refresh" type="button">刷新采购状态</button>
             </div>
-            <div id="po-live-status" class="hint" role="status" aria-live="polite" style="padding:8px 12px"></div>
+            <div id="po-live-status" class="hint" role="status" aria-live="polite"></div>
             <div id="po-round-notice"></div>
             <div class="table-wrap scroll">
               <table class="tbl round-table">
                 <thead>
-                  <tr><th style="width:55%">商品信息</th><th style="width:15%">本轮应收</th>
-                      <th style="width:15%">本轮已收</th><th style="width:15%">差额</th></tr>
+                  <tr><th style="width:52%">商品信息</th><th style="width:16%">本轮应收</th>
+                      <th style="width:16%">本轮已收</th><th style="width:16%">差额</th></tr>
                 </thead>
                 <tbody id="poitem-body"></tbody>
               </table>
@@ -469,6 +495,7 @@
   </div>
 </section>
   </main>
+  </div>
 </div>
 
 <!-- ============ 弹窗 ============ -->
