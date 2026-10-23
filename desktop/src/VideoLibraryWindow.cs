@@ -49,8 +49,7 @@ public interface IVideoLibraryHost {
 public enum LibraryPreset { Today, Last7, Last30, All, Custom }
 
 public sealed class VideoLibraryRow {
- static readonly Brush Blue = Frozen(0x1D, 0x6F, 0xD8), Green = Frozen(0x16, 0x8A, 0x4A), Red = Frozen(0xC6, 0x28, 0x28), Amber = Frozen(0xB4, 0x6A, 0x00), Plain = Frozen(0x33, 0x41, 0x55);
- static Brush Frozen(byte r, byte g, byte b) { var x = new SolidColorBrush(Color.FromRgb(r, g, b)); x.Freeze(); return x; }
+ // C tokens: soft pill background + strong text. Red is reserved for delete, so 异常 uses the warning pair.
  public VideoLibraryRow(LibraryItem item, string? activeId) { Item = item; Live = item.Id == activeId; }
  public LibraryItem Item { get; }
  public bool Live { get; }
@@ -63,11 +62,12 @@ public sealed class VideoLibraryRow {
  public string Purchase => Item.Purchase;
  public string Outer => Item.Linked.Purchases.Count == 0 ? "" : Item.Outer;
  public string Status => Live ? "在录" : Item.State == "saved" ? "已完成" : "异常";
- public Brush StatusBrush => Live ? Blue : Item.State == "saved" ? Green : Red;
+ public Brush StatusBrush => Live ? Palette.BrandSoft : Item.State == "saved" ? Palette.OkSoft : Palette.WarnSoft;
+ public Brush StatusForeground => Live ? Palette.Brand : Item.State == "saved" ? Palette.Ok : Palette.WarnText;
  public long Bytes => Item.Bytes;
  public string SizeText => Item.Bytes > 0 ? VideoLibraryView.Size(Item.Bytes) : Live ? "写入中" : "文件缺失";
  public string Protection => Item.Protected ? "售后保护" : "—";
- public Brush ProtectionBrush => Item.Protected ? Amber : Plain;
+ public Brush ProtectionBrush => Item.Protected ? Palette.WarnText : Palette.Text3;
  public string Archive => Item.ArchiveStatus;
  public string Note => Item.Note;
  public string Tip => Item.File + (Item.State != "saved" && !Live && Item.Segment.Reason != "" ? "\n原因：" + Item.Segment.Reason : "");
@@ -83,6 +83,8 @@ public sealed class VideoLibraryRow {
 
 // DataGrid exposes the batch selection API only to subclasses; used for select-all / cleanup selection.
 public sealed class LibraryGrid : DataGrid {
+ // Implicit styles do not apply to subclasses: pick up the shared C DataGrid style explicitly (else WPF default black grid lines).
+ public LibraryGrid() { SetResourceReference(StyleProperty, typeof(DataGrid)); }
  public void SelectRows(IEnumerable<object> items) {
   BeginUpdateSelectedItems();
   try { SelectedItems.Clear(); foreach (var i in items) SelectedItems.Add(i); }
@@ -104,10 +106,10 @@ public sealed class VideoLibraryView : DockPanel {
  public ComboBox CleanupBox { get; } = new() { Width = 110 };
  public DatePicker From { get; } = new() { Width = 128 };
  public DatePicker To { get; } = new() { Width = 128 };
- public TextBlock Summary { get; } = new() { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 0, 0), FontWeight = FontWeights.SemiBold };
- public TextBlock Notice { get; } = new() { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(8, 6, 8, 6) };
+ public TextBlock Summary { get; } = new() { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(12, 0, 0, 0), FontWeight = FontWeights.SemiBold, Foreground = Palette.Text2 };
+ public TextBlock Notice { get; } = new() { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(4, 10, 4, 0), Foreground = Palette.Text2, FontSize = 13 };
  readonly Dictionary<LibraryPreset, RadioButton> presets = new();
- readonly TextBlock placeholder = new() { Text = Placeholder, Foreground = Brushes.Gray, IsHitTestVisible = false, Margin = new Thickness(13, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center, FontSize = 15 };
+ readonly TextBlock placeholder = new() { Text = Placeholder, Foreground = Palette.Text3, IsHitTestVisible = false, Margin = new Thickness(13, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center, FontSize = 15 };
  readonly DispatcherTimer debounce = new() { Interval = TimeSpan.FromMilliseconds(300) };
  readonly ColumnDefinition gridColumn = new() { Width = new GridLength(1, GridUnitType.Star), MinWidth = 360 }, splitColumn = new() { Width = new GridLength(6) }, playerColumn = new() { Width = new GridLength(430), MinWidth = 320 };
  readonly UIElement topArea, actionArea; readonly GridSplitter splitter;
@@ -125,12 +127,12 @@ public sealed class VideoLibraryView : DockPanel {
  Window Owner => Window.GetWindow(this) ?? Application.Current.MainWindow;
 
  public VideoLibraryView(IVideoLibraryHost host) {
-  this.host = host; Player = new LibraryPlayer(host); Margin = new Thickness(10);
-  // ---- search bar
-  var top = new StackPanel(); DockPanel.SetDock(top, Dock.Top); Children.Add(top); topArea = top;
-  var searchRow = new DockPanel { Margin = new Thickness(0, 0, 0, 6) }; top.Children.Add(searchRow);
-  var clear = ActionButton("清空", () => { Query.Clear(); productHits = new(); productQuery = ""; ApplyFilter(); FocusSearch(); return Task.CompletedTask; }); DockPanel.SetDock(clear, Dock.Right); searchRow.Children.Add(clear);
-  var refresh = ActionButton("刷新", () => ReloadAsync()); DockPanel.SetDock(refresh, Dock.Right); searchRow.Children.Add(refresh);
+  this.host = host; Player = new LibraryPlayer(host); Margin = new Thickness(14); Background = Palette.Bg; System.Windows.Documents.TextElement.SetForeground(this, Palette.Text); System.Windows.Documents.TextElement.SetFontFamily(this, Palette.Font);
+  // ---- search bar (C 风格：白色卡片承载搜索与筛选)
+  var top = new StackPanel(); var topCard = Theme.Card(top, 12); DockPanel.SetDock(topCard, Dock.Top); Children.Add(topCard); topArea = topCard;
+  var searchRow = new DockPanel { Margin = new Thickness(0, 0, 0, 8) }; top.Children.Add(searchRow);
+  var clear = ActionButton(Theme.Ghost, "清空", () => { Query.Clear(); productHits = new(); productQuery = ""; ApplyFilter(); FocusSearch(); return Task.CompletedTask; }); DockPanel.SetDock(clear, Dock.Right); searchRow.Children.Add(clear);
+  var refresh = ActionButton(Theme.Secondary, "刷新", () => ReloadAsync()); DockPanel.SetDock(refresh, Dock.Right); searchRow.Children.Add(refresh);
   var searchBox = new Grid(); searchBox.Children.Add(Query); searchBox.Children.Add(placeholder); searchRow.Children.Add(searchBox);
   Query.TextChanged += (_, _) => { placeholder.Visibility = Query.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed; debounce.Stop(); debounce.Start(); };
   Query.KeyDown += async (_, e) => { if (e.Key == Key.Enter) { e.Handled = true; debounce.Stop(); await Safe(() => SearchNowAsync(true)); } };
@@ -144,25 +146,25 @@ public sealed class VideoLibraryView : DockPanel {
   From.IsEnabled = To.IsEnabled = false; From.SelectedDate = To.SelectedDate = DateTime.Today;
   From.SelectedDateChanged += (_, _) => { if (preset == LibraryPreset.Custom) ApplyFilter(); };
   To.SelectedDateChanged += (_, _) => { if (preset == LibraryPreset.Custom) ApplyFilter(); };
-  filterRow.Children.Add(From); filterRow.Children.Add(new TextBlock { Text = " 至 ", VerticalAlignment = VerticalAlignment.Center }); filterRow.Children.Add(To);
-  filterRow.Children.Add(new TextBlock { Text = "   状态 ", VerticalAlignment = VerticalAlignment.Center });
+  filterRow.Children.Add(From); filterRow.Children.Add(Theme.Label(" 至 ")); filterRow.Children.Add(To);
+  filterRow.Children.Add(Theme.Label("   状态 "));
   StatusBox.ItemsSource = new[] { "全部", "已完成", "在录", "异常", "售后保护", "已归档" }; StatusBox.SelectedIndex = 0;
   StatusBox.SelectionChanged += (_, _) => ApplyFilter(); filterRow.Children.Add(StatusBox); filterRow.Children.Add(Summary);
   // ---- row actions
-  var actions = new WrapPanel { Margin = new Thickness(0, 2, 0, 6) }; DockPanel.SetDock(actions, Dock.Top); Children.Add(actions); actionArea = actions;
-  actions.Children.Add(ActionButton("播放所选", PlaySelectedAsync));
-  actions.Children.Add(ActionButton("删除所选", DeleteSelectedAsync));
-  actions.Children.Add(ActionButton("备注", EditNoteAsync));
-  actions.Children.Add(ActionButton("售后保护 / 解除", ToggleProtectionAsync));
-  actions.Children.Add(ActionButton("后补采购归档", ArchiveAsync));
-  actions.Children.Add(new TextBlock { Text = "   清理旧录像：", VerticalAlignment = VerticalAlignment.Center });
+  var actions = new WrapPanel { Margin = new Thickness(0, 10, 0, 10) }; DockPanel.SetDock(actions, Dock.Top); Children.Add(actions); actionArea = actions;
+  actions.Children.Add(ActionButton(Theme.Primary, "播放所选", PlaySelectedAsync));
+  actions.Children.Add(ActionButton(Theme.Secondary, "备注", EditNoteAsync));
+  actions.Children.Add(ActionButton(Theme.Secondary, "售后保护 / 解除", ToggleProtectionAsync));
+  actions.Children.Add(ActionButton(Theme.Secondary, "后补采购归档", ArchiveAsync));
+  actions.Children.Add(ActionButton(Theme.DangerSoft, "删除所选", DeleteSelectedAsync));
+  actions.Children.Add(Theme.Label("   清理旧录像："));
   CleanupBox.ItemsSource = new[] { "90天以上", "180天以上" }; CleanupBox.SelectedIndex = host.CleanupDays == 90 ? 0 : 1; actions.Children.Add(CleanupBox);
-  actions.Children.Add(ActionButton("选出旧录像", () => { SelectOld(CleanupBox.SelectedIndex == 0 ? 90 : 180); return Task.CompletedTask; }));
+  actions.Children.Add(ActionButton(Theme.Ghost, "选出旧录像", () => { SelectOld(CleanupBox.SelectedIndex == 0 ? 90 : 180); return Task.CompletedTask; }));
   DockPanel.SetDock(Notice, Dock.Bottom); Children.Add(Notice);
   // ---- grid + player
   var body = new Grid(); body.ColumnDefinitions.Add(gridColumn); body.ColumnDefinitions.Add(splitColumn); body.ColumnDefinitions.Add(playerColumn); Children.Add(body);
   BuildGrid(); body.Children.Add(Grid);
-  splitter = new GridSplitter { Width = 6, HorizontalAlignment = HorizontalAlignment.Stretch, Background = new SolidColorBrush(Color.FromRgb(220, 230, 234)), ResizeBehavior = GridResizeBehavior.PreviousAndNext, ToolTip = "拖动调整播放器宽度" };
+  splitter = new GridSplitter { Width = 6, HorizontalAlignment = HorizontalAlignment.Stretch, Background = Palette.Bg, ResizeBehavior = GridResizeBehavior.PreviousAndNext, ToolTip = "拖动调整播放器宽度" };
   System.Windows.Controls.Grid.SetColumn(splitter, 1); body.Children.Add(splitter);
   System.Windows.Controls.Grid.SetColumn(Player, 2); body.Children.Add(Player);
   Player.FullscreenRequested += ToggleFullscreen;
@@ -175,8 +177,8 @@ public sealed class VideoLibraryView : DockPanel {
   };
  }
 
- Button ActionButton(string text, Func<Task> action) {
-  var b = new Button { Content = text, Margin = new Thickness(3), Padding = new Thickness(12, 6, 12, 6) };
+ Button ActionButton(string level, string text, Func<Task> action) {
+  var b = new Button { Content = text, Margin = new Thickness(0, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center }.Level(level);
   b.Click += async (_, _) => { if (Busy) return; b.IsEnabled = false; try { await Safe(action); } finally { b.IsEnabled = true; } };
   return b;
  }
@@ -210,8 +212,8 @@ public sealed class VideoLibraryView : DockPanel {
   Text("采购", nameof(VideoLibraryRow.Purchase), nameof(VideoLibraryRow.Purchase), 130);
   Text("外部单号", nameof(VideoLibraryRow.Outer), nameof(VideoLibraryRow.Outer), 130);
   var status = new FrameworkElementFactory(typeof(Border));
-  status.SetBinding(Border.BackgroundProperty, new Binding(nameof(VideoLibraryRow.StatusBrush))); status.SetValue(Border.CornerRadiusProperty, new CornerRadius(4)); status.SetValue(Border.PaddingProperty, new Thickness(8, 2, 8, 2)); status.SetValue(HorizontalAlignmentProperty, HorizontalAlignment.Left); status.SetValue(VerticalAlignmentProperty, VerticalAlignment.Center);
-  var statusText = new FrameworkElementFactory(typeof(TextBlock)); statusText.SetBinding(TextBlock.TextProperty, new Binding(nameof(VideoLibraryRow.Status))); statusText.SetValue(TextBlock.ForegroundProperty, Brushes.White); status.AppendChild(statusText);
+  status.SetBinding(Border.BackgroundProperty, new Binding(nameof(VideoLibraryRow.StatusBrush))); status.SetValue(Border.CornerRadiusProperty, new CornerRadius(10)); status.SetValue(Border.PaddingProperty, new Thickness(9, 2, 9, 2)); status.SetValue(HorizontalAlignmentProperty, HorizontalAlignment.Left); status.SetValue(VerticalAlignmentProperty, VerticalAlignment.Center);
+  var statusText = new FrameworkElementFactory(typeof(TextBlock)); statusText.SetBinding(TextBlock.TextProperty, new Binding(nameof(VideoLibraryRow.Status))); statusText.SetBinding(TextBlock.ForegroundProperty, new Binding(nameof(VideoLibraryRow.StatusForeground))); statusText.SetValue(TextBlock.FontWeightProperty, FontWeights.SemiBold); statusText.SetValue(TextBlock.FontSizeProperty, 12.5); status.AppendChild(statusText);
   g.Columns.Add(new DataGridTemplateColumn { Header = "状态", SortMemberPath = nameof(VideoLibraryRow.Status), CanUserSort = true, Width = 76, CellTemplate = new DataTemplate { VisualTree = status } });
   Text("大小", nameof(VideoLibraryRow.SizeText), nameof(VideoLibraryRow.Bytes), 84);
   var prot = new FrameworkElementFactory(typeof(TextBlock)); prot.SetBinding(TextBlock.TextProperty, new Binding(nameof(VideoLibraryRow.Protection))); prot.SetBinding(TextBlock.ForegroundProperty, new Binding(nameof(VideoLibraryRow.ProtectionBrush))); prot.SetValue(VerticalAlignmentProperty, VerticalAlignment.Center);
@@ -419,27 +421,26 @@ public sealed record DeletePlan(List<VideoLibraryRow> Normal, List<VideoLibraryR
 public sealed class DeleteConfirmDialog : Window {
  public const string DialogTitle = "确认删除所选录像";
  public CheckBox IncludeProtected { get; } = new() { Margin = new Thickness(0, 8, 0, 4) };
- public Button ConfirmButton { get; } = new() { Padding = new Thickness(14, 7, 14, 7), Margin = new Thickness(6) };
- public Button CancelButton { get; } = new() { Content = "取消", Padding = new Thickness(14, 7, 14, 7), Margin = new Thickness(6), IsCancel = true, IsDefault = true };
- public TextBlock SummaryText { get; } = new() { TextWrapping = TextWrapping.Wrap, FontWeight = FontWeights.SemiBold };
- public TextBox Details { get; } = new() { IsReadOnly = true, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, FontFamily = new FontFamily("Consolas, Microsoft YaHei UI"), MinHeight = 140 };
+ // Danger level is used only here: the one irreversible action in 录像查询.
+ public Button ConfirmButton { get; } = new Button { Margin = new Thickness(8, 0, 0, 0) }.Level(Theme.Danger);
+ public Button CancelButton { get; } = new() { Content = "取消", Margin = new Thickness(8, 0, 0, 0), IsCancel = true, IsDefault = true };
+ public TextBlock SummaryText { get; } = new() { TextWrapping = TextWrapping.Wrap, FontWeight = FontWeights.SemiBold, Foreground = Palette.DangerText };
+ public TextBox Details { get; } = new() { IsReadOnly = true, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, FontFamily = Palette.Mono, FontSize = 12.5, MinHeight = 140, VerticalContentAlignment = VerticalAlignment.Top };
  readonly DeletePlan plan;
  DeleteConfirmDialog(Window owner, DeletePlan plan) {
-  this.plan = plan; Title = DialogTitle; Owner = owner; Width = 620; Height = 480; MinWidth = 480; MinHeight = 360; WindowStartupLocation = WindowStartupLocation.CenterOwner; ShowInTaskbar = false;
+  this.plan = plan; Title = DialogTitle; Owner = owner; Theme.Dialog(this); Width = 620; Height = 480; MinWidth = 480; MinHeight = 360; WindowStartupLocation = WindowStartupLocation.CenterOwner; ShowInTaskbar = false;
   var panel = new DockPanel { Margin = new Thickness(16) };
-  var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right }; DockPanel.SetDock(buttons, Dock.Bottom); panel.Children.Add(buttons);
-  buttons.Children.Add(ConfirmButton); buttons.Children.Add(CancelButton);
-  ConfirmButton.Background = new SolidColorBrush(Color.FromRgb(0xFD, 0xEC, 0xEC)); ConfirmButton.Foreground = new SolidColorBrush(Color.FromRgb(0xB0, 0x1E, 0x1E));
+  var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 12, 0, 0) }; DockPanel.SetDock(buttons, Dock.Bottom); panel.Children.Add(buttons);
+  buttons.Children.Add(CancelButton); buttons.Children.Add(ConfirmButton);
   ConfirmButton.Click += (_, _) => DialogResult = true;
-  var head = new StackPanel(); DockPanel.SetDock(head, Dock.Top); panel.Children.Add(head);
-  head.Children.Add(SummaryText);
+  var head = new StackPanel(); var headCard = new Border { Background = Palette.DangerSoft, CornerRadius = new CornerRadius(Palette.Radius), Padding = new Thickness(14, 12, 14, 12), Margin = new Thickness(0, 0, 0, 10), Child = SummaryText }; DockPanel.SetDock(headCard, Dock.Top); panel.Children.Add(headCard); DockPanel.SetDock(head, Dock.Top); panel.Children.Add(head);
   if (plan.Live.Count > 0) head.Children.Add(new TextBlock { Text = $"跳过 {plan.Live.Count} 段正在录制的录像（始终跳过）。", Margin = new Thickness(0, 6, 0, 0), TextWrapping = TextWrapping.Wrap });
   if (plan.Protected.Count > 0) {
    IncludeProtected.Content = $"同时删除售后保护片段（{plan.Protected.Count} 段，{VideoLibraryView.Size(plan.Protected.Sum(r => r.Bytes))}）";
    head.Children.Add(new TextBlock { Text = "售后保护片段默认跳过。", Margin = new Thickness(0, 6, 0, 0) }); head.Children.Add(IncludeProtected);
    IncludeProtected.Checked += (_, _) => Refresh(); IncludeProtected.Unchecked += (_, _) => Refresh();
   } else IncludeProtected.Visibility = Visibility.Collapsed;
-  head.Children.Add(new TextBlock { Text = "明细：", Margin = new Thickness(0, 8, 0, 4) });
+  head.Children.Add(new TextBlock { Text = "明细：", Margin = new Thickness(0, 8, 0, 4), Foreground = Palette.Text2 });
   panel.Children.Add(Details); Content = panel; Refresh();
   Loaded += (_, _) => CancelButton.Focus();
  }
@@ -464,13 +465,13 @@ public static class LibraryDialog {
  public static bool Confirm(Window owner, string title, string text, string yes) => Show(owner, title, text, yes, "取消") == true;
  public static void Info(Window owner, string title, string text) => Show(owner, title, text, null, "确定");
  static bool? Show(Window owner, string title, string text, string? yes, string no) {
-  var w = new Window { Title = title, Owner = owner, Width = 560, SizeToContent = SizeToContent.Height, MaxHeight = 640, ResizeMode = ResizeMode.NoResize, WindowStartupLocation = WindowStartupLocation.CenterOwner, ShowInTaskbar = false };
+  var w = Theme.Dialog(new Window { Title = title, Owner = owner, Width = 560, SizeToContent = SizeToContent.Height, MaxHeight = 640, ResizeMode = ResizeMode.NoResize, WindowStartupLocation = WindowStartupLocation.CenterOwner, ShowInTaskbar = false });
   var panel = new DockPanel { Margin = new Thickness(16) };
   var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 12, 0, 0) }; DockPanel.SetDock(buttons, Dock.Bottom); panel.Children.Add(buttons);
-  if (yes != null) { var ok = new Button { Content = yes, Padding = new Thickness(14, 7, 14, 7), Margin = new Thickness(6) }; ok.Click += (_, _) => w.DialogResult = true; buttons.Children.Add(ok); }
-  var cancel = new Button { Content = no, Padding = new Thickness(14, 7, 14, 7), Margin = new Thickness(6), IsCancel = true, IsDefault = true }; buttons.Children.Add(cancel);
+  var cancel = new Button { Content = no, Margin = new Thickness(8, 0, 0, 0), IsCancel = true, IsDefault = true }; if (yes == null) cancel.Level(Theme.Primary); buttons.Children.Add(cancel);
+  if (yes != null) { var ok = new Button { Content = yes, Margin = new Thickness(8, 0, 0, 0) }.Level(Theme.Primary); ok.Click += (_, _) => w.DialogResult = true; buttons.Children.Add(ok); }
   if (yes == null) cancel.Click += (_, _) => w.DialogResult = false;
-  panel.Children.Add(new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, MaxHeight = 520, Content = new TextBlock { Text = text, TextWrapping = TextWrapping.Wrap } });
+  panel.Children.Add(new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, MaxHeight = 520, Content = Theme.Card(new TextBlock { Text = text, TextWrapping = TextWrapping.Wrap, Foreground = Palette.Text }, 14) });
   w.Content = panel; w.Loaded += (_, _) => cancel.Focus();
   return w.ShowDialog();
  }
@@ -481,17 +482,17 @@ public static class LibraryDialog {
 // screenshots and clip export use the resolved FFmpeg so they work on the original file at full resolution.
 public sealed class LibraryPlayer : Grid {
  readonly IVideoLibraryHost host;
- readonly Border surface = new() { Background = Brushes.Black, MinHeight = 180 };
- readonly TextBlock title = new() { FontWeight = FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(2, 0, 2, 6), Text = "未选择录像" };
- readonly TextBlock overlay = new() { Foreground = Brushes.Gainsboro, TextWrapping = TextWrapping.Wrap, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(16), Text = "双击左侧录像开始播放" };
+ readonly Border surface = new() { Background = Palette.Dark, MinHeight = 180, CornerRadius = new CornerRadius(Palette.Radius) };
+ readonly TextBlock title = new() { FontWeight = FontWeights.SemiBold, Foreground = Palette.Text, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(2, 0, 2, 6), Text = "未选择录像" };
+ readonly TextBlock overlay = new() { Foreground = Palette.OnDark2, TextWrapping = TextWrapping.Wrap, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(16), Text = "双击左侧录像开始播放" };
  readonly Grid surfaceGrid = new();
- public Button PlayButton { get; } = new() { Content = "▶ 播放", MinWidth = 76, Margin = new Thickness(2) };
+ public Button PlayButton { get; } = new Button { Content = "▶ 播放", MinWidth = 84, Margin = new Thickness(0, 0, 4, 0) }.Level(Theme.Primary);
  public Slider Seek { get; } = new() { Minimum = 0, Maximum = 1, IsMoveToPointEnabled = true, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 6, 0) };
  public ComboBox Speed { get; } = new() { Width = 70, Margin = new Thickness(2) };
- public Button FullscreenButton { get; } = new() { Content = "全屏", Margin = new Thickness(2) };
- readonly TextBlock time = new() { VerticalAlignment = VerticalAlignment.Center, MinWidth = 96, TextAlignment = TextAlignment.Center };
+ public Button FullscreenButton { get; } = new Button { Content = "全屏", Margin = new Thickness(4, 0, 0, 0) }.Level(Theme.Ghost);
+ readonly TextBlock time = new() { VerticalAlignment = VerticalAlignment.Center, MinWidth = 96, TextAlignment = TextAlignment.Center, FontFamily = Palette.Mono, Foreground = Palette.Text2 };
  public ListView Cues { get; } = new() { MinHeight = 90 };
- readonly TextBlock cueEmpty = new() { Text = "该录像没有扫码记录", Foreground = Brushes.Gray, Margin = new Thickness(8), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, IsHitTestVisible = false };
+ readonly TextBlock cueEmpty = new() { Text = "该录像没有扫码记录", Foreground = Palette.Text3, Margin = new Thickness(8), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, IsHitTestVisible = false };
  readonly UIElement cuePanel, toolPanel, cueLabel;
  WebView2? web; Task? init; string playerUrl = ""; bool syncing; LibraryItem? item; string lastFolder = Environment.GetFolderPath(Environment.SpecialFolder.MyPictures);
  public event Action? FullscreenRequested; public event Action<string>? Message;
@@ -508,7 +509,7 @@ public sealed class LibraryPlayer : Grid {
  public int CueVersion { get; private set; }
 
  public LibraryPlayer(IVideoLibraryHost host) {
-  this.host = host; Margin = new Thickness(6, 0, 0, 0);
+  this.host = host; Margin = new Thickness(4, 0, 0, 0);
   foreach (var h in new[] { GridLength.Auto, new GridLength(3, GridUnitType.Star), GridLength.Auto, GridLength.Auto, new GridLength(2, GridUnitType.Star), GridLength.Auto }) RowDefinitions.Add(new RowDefinition { Height = h });
   Add(title, 0);
   surfaceGrid.Children.Add(surface); surfaceGrid.Children.Add(overlay); Add(surfaceGrid, 1);
@@ -523,7 +524,7 @@ public sealed class LibraryPlayer : Grid {
   PlayButton.Click += async (_, _) => await TogglePlay();
   FullscreenButton.Click += (_, _) => FullscreenRequested?.Invoke();
   Seek.ValueChanged += async (_, e) => { if (!syncing && item != null && Math.Abs(e.NewValue - Position) > 0.3) await SeekTo(e.NewValue); };
-  var label = new TextBlock { Text = "扫码记录（点击跳转到对应时间）", Margin = new Thickness(2, 6, 2, 4), FontWeight = FontWeights.SemiBold }; Add(label, 3); cueLabel = label;
+  var label = new TextBlock { Text = "扫码记录（点击跳转到对应时间）", Margin = new Thickness(2, 8, 2, 6), FontWeight = FontWeights.SemiBold, Foreground = Palette.Text2 }; Add(label, 3); cueLabel = label;
   var view = new GridView();
   foreach (var (header, path, width) in new[] { ("时间", nameof(ScanCue.OffsetText), 60.0), ("商品", nameof(ScanCue.Product), 150.0), ("条码", nameof(ScanCue.Barcode), 110.0), ("数量", nameof(ScanCue.Quantity), 50.0) }) view.Columns.Add(new GridViewColumn { Header = header, DisplayMemberBinding = new Binding(path), Width = width });
   Cues.View = view; VirtualizingPanel.SetIsVirtualizing(Cues, true);
@@ -536,7 +537,7 @@ public sealed class LibraryPlayer : Grid {
  }
  void Add(UIElement e, int row) { SetRow(e, row); Children.Add(e); }
  void Tool(Panel p, string text, Func<Task> action) {
-  var b = new Button { Content = text, Margin = new Thickness(3), Padding = new Thickness(10, 5, 10, 5) };
+  var b = new Button { Content = text, Margin = new Thickness(0, 0, 6, 6), Padding = new Thickness(11, 6, 11, 6), FontSize = 13 }.Level(p.Children.Count < 2 ? Theme.Secondary : Theme.Ghost);
   b.Click += async (_, _) => { b.IsEnabled = false; try { await action(); } catch (Exception ex) { Message?.Invoke(ex.Message); LibraryDialog.Info(Window.GetWindow(this), "操作未完成", ex.Message); } finally { b.IsEnabled = true; } };
   p.Children.Add(b);
  }
@@ -706,14 +707,14 @@ document.addEventListener('keydown',e=>{if(e.key==='Escape')post({type:'escape'}
 public sealed class ClipDialog : Window {
  readonly TextBox start = new() { Width = 120 }, end = new() { Width = 120 };
  ClipDialog(Window owner, double s, double e, double duration) {
-  Title = "导出片段"; Owner = owner; Width = 420; SizeToContent = SizeToContent.Height; ResizeMode = ResizeMode.NoResize; WindowStartupLocation = WindowStartupLocation.CenterOwner; ShowInTaskbar = false;
+  Title = "导出片段"; Owner = owner; Theme.Dialog(this); Width = 420; SizeToContent = SizeToContent.Height; ResizeMode = ResizeMode.NoResize; WindowStartupLocation = WindowStartupLocation.CenterOwner; ShowInTaskbar = false;
   var p = new StackPanel { Margin = new Thickness(16) };
   p.Children.Add(new TextBlock { Text = "时间格式 分:秒 或 时:分:秒（也可直接填秒数）。" + (duration > 0 ? "录像总长 " + VideoLibraryView.Clock(duration) + "。" : "") + "\n不重新编码，起点会对齐到之前最近的关键帧（约1秒内）。", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 10) });
   start.Text = VideoLibraryView.Clock(s); end.Text = VideoLibraryView.Clock(e);
-  foreach (var (label, box) in new[] { ("起点", start), ("终点", end) }) { var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 3, 0, 3) }; row.Children.Add(new TextBlock { Text = label, Width = 50, VerticalAlignment = VerticalAlignment.Center }); row.Children.Add(box); p.Children.Add(row); }
+  foreach (var (label, box) in new[] { ("起点", start), ("终点", end) }) { var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 3, 0, 3) }; row.Children.Add(new TextBlock { Text = label, Width = 50, VerticalAlignment = VerticalAlignment.Center, Foreground = Palette.Text2 }); row.Children.Add(box); p.Children.Add(row); }
   var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 10, 0, 0) };
-  var ok = new Button { Content = "选择保存位置…", Padding = new Thickness(12, 6, 12, 6), Margin = new Thickness(6), IsDefault = true }; ok.Click += (_, _) => { if (Parse(start.Text) is double a && Parse(end.Text) is double b && b > a) DialogResult = true; else LibraryDialog.Info(this, "时间无效", "请填写有效的起点和终点，终点必须晚于起点。"); };
-  buttons.Children.Add(ok); buttons.Children.Add(new Button { Content = "取消", Padding = new Thickness(12, 6, 12, 6), Margin = new Thickness(6), IsCancel = true }); p.Children.Add(buttons); Content = p;
+  var ok = new Button { Content = "选择保存位置…", Margin = new Thickness(8, 0, 0, 0), IsDefault = true }.Level(Theme.Primary); ok.Click += (_, _) => { if (Parse(start.Text) is double a && Parse(end.Text) is double b && b > a) DialogResult = true; else LibraryDialog.Info(this, "时间无效", "请填写有效的起点和终点，终点必须晚于起点。"); };
+  buttons.Children.Add(new Button { Content = "取消", Margin = new Thickness(8, 0, 0, 0), IsCancel = true }); buttons.Children.Add(ok); p.Children.Add(buttons); Content = p;
  }
  public static double? Parse(string text) {
   text = text.Trim(); if (double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var secs)) return secs >= 0 ? secs : null;
