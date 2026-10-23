@@ -83,7 +83,7 @@ public sealed partial class MainWindow {
   await Until(()=>rec.Ready&&rec.Current?.Tracking==currentTracking);await Task.Delay(10000);
   if(!rec.Ready||rec.FrameAge>3)throw new Exception("继续录像在健康检查并发下误停");
   await rec.StopAsync("继续录像验收结束");if(rec.Current!.State!="saved")throw new Exception("继续录像未正常保存");checks.Add("实际点击继续本单新一段，10秒录像及收尾通过");
-  if(await web.CoreWebView2.ExecuteScriptAsync("Boolean(document.getElementById('video-diagnostics'))")!="true"||!rec.Diagnostics.Contains("版本：4.0.0"))throw new Exception("诊断入口缺失");checks.Add("诊断入口及录像状态可用（不改用户剪贴板）");
+  if(await web.CoreWebView2.ExecuteScriptAsync("Boolean(document.getElementById('video-diagnostics'))")!="true"||!rec.Diagnostics.Contains("版本：4.1.0"))throw new Exception("诊断入口缺失");checks.Add("诊断入口及录像状态可用（不改用户剪贴板）");
   await web.CoreWebView2.ExecuteScriptAsync("document.querySelector('[data-settings-pane=video] [data-native-action=continue]').click()");await Until(()=>rec.Ready);await Task.Delay(2500);
   var paused=await Post("/api/session/pause-report",new{sid=UiTest.Sid});if(!paused.GetProperty("ok").GetBoolean())throw new Exception(paused.ToString());await Until(()=>!rec.Active);if(rec.Current?.State!="saved")throw new Exception("暂存未收尾录像");checks.Add("成功暂存对单停止录像并保存，不继续占用摄像头");
   var ex=await Js("NativeDesk.call('export')");if(exportWindow==null||!exportWindow.IsVisible)throw new Exception("统一导出入口失败");exportWindow.Close();checks.Add("统一明细导出入口打开秒级导出窗口");
