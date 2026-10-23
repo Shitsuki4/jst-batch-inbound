@@ -1,0 +1,176 @@
+/* =====================================================================
+   收货工作台（多采购单合并收货 joint.html / 无采购单收货 unplanned.html）
+   方向 C：与主界面同一套 ui-tokens.css。取代旧的 unplanned.css、joint.css、
+   receiving-desk.css 以及 receiving-workspace.css 里的 body[data-desk] 规则。
+   加载顺序：style.css → purchase-pairs.css → receiving-workspace.css →
+   barcode-learn.css → ui-tokens.css → desk.css（最后）。
+   按钮层级全部走 class（.btn-primary / .btn-secondary / .btn-ghost / .btn-danger），
+   JS 动态生成、没有 class 的按钮按普通次要按钮显示，删除类按钮自动红色。
+   ===================================================================== */
+body[data-desk]{margin:0;height:auto;min-height:100%;font:14px/1.55 var(--font);background:var(--c-bg);color:var(--c-text)}
+body[data-desk] h2{font-size:16px;font-weight:700;color:var(--c-text);margin:0 0 10px}
+body[data-desk] h3{font-size:14px;margin:14px 0 8px}
+body[data-desk] p{margin:8px 0}
+body[data-desk] .muted,body[data-desk] .secondary{color:var(--c-text-3);font-size:12px;line-height:1.7}
+body[data-desk] .hint{margin-top:6px}
+body[data-desk] .error{color:var(--c-danger)}
+body[data-desk] small{color:var(--c-text-3)}
+
+/* ---------- 页头（独立打开时才显示；嵌入主界面侧栏时由 receiving-workspace.css 隐藏） ---------- */
+.desk-brand{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 24px;background:var(--c-panel);border-bottom:1px solid var(--c-line)}
+.desk-brand>div{display:flex;align-items:center;gap:12px;min-width:0;flex-wrap:wrap}
+.desk-brand img{width:34px;height:34px}
+.desk-brand strong{display:block;font-size:17px;color:var(--c-text)}
+.desk-brand small{display:block;font-size:11px;color:var(--c-text-3)}
+.desk-brand a{font-size:13px;color:var(--c-text-2);text-decoration:none}
+.desk-brand a:hover{color:var(--c-primary)}
+.desk-nav{display:flex;gap:4px;padding:8px 20px;background:var(--c-panel);border-bottom:1px solid var(--c-line);overflow-x:auto;white-space:nowrap}
+.desk-tab{padding:8px 12px;border-radius:var(--r-sm);color:var(--c-text-2);text-decoration:none;font-size:14px}
+.desk-tab:hover{background:var(--c-panel-2);color:var(--c-text)}
+.desk-tab.active{background:var(--c-primary-soft);color:var(--c-primary);font-weight:600}
+
+/* ---------- 布局 ---------- */
+body[data-desk] main{display:flex;flex-direction:column;max-width:none;margin:0;padding:20px 24px 24px}
+.receiving-embedded body[data-desk] main{padding:2px 2px 24px}
+.receiving-embedded body[data-desk] #message{margin:0 2px}
+.receiving-embedded body[data-desk] #message:not(:empty){margin:2px 2px 14px}
+body[data-desk] .card{background:var(--c-panel);border:1px solid #eceef5;border-radius:var(--r-lg);box-shadow:var(--sh-card);padding:18px 20px;margin:0 0 16px;min-width:0}
+body[data-desk] .desk-history{order:2}
+body[data-desk] .bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:12px 0}
+body[data-desk] .bar>*{max-width:100%}
+body[data-desk] .scroll{overflow:auto;max-width:100%}
+.desk-card-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:6px}
+.desk-card-head h2{margin:0}
+.desk-work-grid{display:grid;grid-template-columns:minmax(0,1.07fr) minmax(0,1fr);gap:16px;align-items:start}
+.desk-right{min-width:0}
+
+/* ---------- 消息条：普通 = 主色浅底，错误 = 红色 ---------- */
+body[data-desk] #message{position:sticky;top:0;z-index:5;margin:0 24px;padding:0;background:var(--c-primary-soft);color:var(--c-primary-hover);border-radius:var(--r);font-size:13px;white-space:pre-line}
+body[data-desk] #message:empty{display:none}
+body[data-desk] #message:not(:empty){margin-top:16px;padding:10px 14px}
+body[data-desk] #message.error{background:var(--c-danger-soft);color:var(--c-danger)}
+
+/* ---------- 输入 ---------- */
+body[data-desk] input:where(:not([type=checkbox],[type=radio])),body[data-desk] select,body[data-desk] textarea{height:var(--h-md);padding:0 12px;border:1px solid var(--c-line-strong);border-radius:var(--r);background:#fff;color:var(--c-text);font:14px var(--font);min-width:0;max-width:100%;outline:none}
+body[data-desk] textarea{height:auto;min-height:72px;padding:8px 12px;width:100%}
+body[data-desk] input:focus,body[data-desk] select:focus,body[data-desk] textarea:focus{border-color:var(--c-primary);box-shadow:0 0 0 3px var(--c-primary-soft)}
+body[data-desk] input[type=checkbox],body[data-desk] input[type=radio]{width:auto;min-width:0;margin:0;accent-color:var(--c-primary)}
+body[data-desk] label:has(input[type=checkbox]),body[data-desk] label:has(input[type=radio]){display:inline-flex;align-items:center;gap:6px;margin-right:12px}
+body[data-desk] #query,body[data-desk] #tracking-query{flex:1 1 220px}
+#desk-po-input{flex:1 1 360px;max-width:520px}
+#mother{width:220px}#expected{width:200px}
+#first-tracking{flex:1 1 320px}#new-note{width:240px}
+#note{flex:1 1 260px;max-width:480px}#po{flex:1 1 360px;max-width:560px}
+#warehouse{min-width:200px}
+
+/* ---------- 按钮：默认 = 普通描边按钮；层级由 class 决定 ---------- */
+body[data-desk] button,body[data-desk] .button{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:var(--h-md);padding:0 14px;
+  border:1px solid var(--c-line-strong);border-radius:var(--r);background:var(--c-panel);color:var(--c-text);font:600 13px/1.2 var(--font);
+  cursor:pointer;text-decoration:none;white-space:nowrap;box-shadow:none}
+body[data-desk] button:hover,body[data-desk] .button:hover{background:var(--c-panel-2);color:var(--c-text)}
+body[data-desk] button:disabled{opacity:.5;cursor:not-allowed}
+body[data-desk] .btn-sm{height:var(--h-sm);padding:0 11px;font-size:13px;border-radius:var(--r-sm)}
+body[data-desk] .btn-primary{background:var(--c-primary);border-color:var(--c-primary);color:#fff;box-shadow:var(--sh-primary)}
+body[data-desk] .btn-primary:hover{background:var(--c-primary-hover);border-color:var(--c-primary-hover);color:#fff}
+body[data-desk] .btn-secondary{background:var(--c-primary-soft);border-color:transparent;color:var(--c-primary)}
+body[data-desk] .btn-secondary:hover{background:#e2e5ff;color:var(--c-primary-hover)}
+body[data-desk] .btn-ghost{background:transparent;border-color:transparent;color:var(--c-text-2);font-weight:500}
+body[data-desk] .btn-ghost:hover{background:var(--c-panel-2);color:var(--c-text)}
+/* 红色只给删除 */
+body[data-desk] .btn-danger,body[data-desk] button[data-delete]{background:var(--c-danger-soft);border-color:transparent;color:var(--c-danger)}
+body[data-desk] .btn-danger:hover,body[data-desk] button[data-delete]:hover{background:#ffd9e1;color:#be123c}
+body[data-desk] td button,body[data-desk] .history-row button,body[data-desk] .stage button{height:var(--h-sm);padding:0 10px;border-radius:var(--r-sm)}
+
+/* ---------- 新建批次 ---------- */
+.desk-po-chip{display:inline-flex;align-items:center;gap:6px;margin:4px 6px 4px 0;padding:0 4px 0 12px;height:30px;background:var(--c-primary-soft);border-radius:99px;color:var(--c-primary);font:600 13px var(--mono)}
+body[data-desk] .desk-po-chip button{height:24px;width:24px;padding:0;border:0;border-radius:50%;background:transparent;color:var(--c-primary)}
+body[data-desk] .desk-po-chip button:hover{background:#fff}
+.desk-context{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:12px}
+.desk-context label{display:flex;align-items:center;gap:8px;color:var(--c-text-2)}
+.desk-context .hint{flex-basis:100%;margin:0}
+
+/* ---------- 批次状态条 ---------- */
+.desk-status{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:8px 16px}
+.desk-status>div:first-child{min-width:0}
+.desk-status #meta{color:var(--c-text-2);font-size:13px}
+.desk-status .bar{margin:0}
+.desk-status #warnings{flex:1 0 100%}
+.desk-status #warnings:empty{display:none}
+.receiving-embedded .desk-status #title{display:none}
+.warning{margin:8px 0;padding:8px 12px;border-left:3px solid var(--c-warn);background:var(--c-warn-soft);color:#92400e;border-radius:0 var(--r-sm) var(--r-sm) 0;font-size:13px}
+
+/* ---------- 扫码区：与主界面一致的分段切换 + 大扫码框 ---------- */
+.desk-scanner{display:flex;flex-direction:column;gap:12px}
+.desk-modes{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+body[data-desk] .desk-modes button{height:34px;padding:0 14px;border-radius:99px;border:1px solid var(--c-line);background:var(--c-panel-2);color:var(--c-text-2);font-weight:500}
+body[data-desk] .desk-modes button.active{background:var(--c-primary);border-color:var(--c-primary);color:#fff;font-weight:600;box-shadow:var(--sh-primary)}
+.desk-modes kbd{font:11px var(--mono);padding:0 5px;border-radius:5px;background:#fff;border:1px solid var(--c-line);color:var(--c-text-3)}
+.desk-modes button.active kbd{background:rgba(255,255,255,.18);border-color:transparent;color:#fff}
+.desk-modes>span{margin-left:auto;color:var(--c-text-3);font-size:12px}
+.desk-scan-row{display:flex;gap:10px;align-items:stretch}
+body[data-desk] .desk-scan-input{flex:1;width:100%;height:var(--h-scan);padding:0 16px;border:2px solid var(--c-primary);border-radius:var(--r-md);
+  box-shadow:0 0 0 4px var(--c-primary-soft);font-size:19px;font-weight:600;letter-spacing:.5px}
+body[data-desk] .desk-scan-input::placeholder{color:var(--c-text-3);font-weight:400}
+body[data-desk] .desk-scan-row button{height:var(--h-scan);min-width:110px;border-radius:var(--r-md);font-size:14px}
+#candidates:empty{display:none}
+.desk-pending{display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:12px 14px;background:var(--c-primary-soft);border:1px solid var(--c-primary-line);border-radius:var(--r-md)}
+.desk-pending strong{flex:1;min-width:220px}
+body[data-desk] .desk-pending input{width:110px;height:var(--h-lg);font:700 20px var(--mono);text-align:center}
+
+/* ---------- 汇总 / 物流 / 当前物流 ---------- */
+.stats{display:flex;gap:10px;flex-wrap:wrap;margin-top:8px}
+.stat{padding:8px 14px;background:var(--c-panel-2);border-radius:var(--r);min-width:90px;color:var(--c-text-3);font-size:12px}
+.stat b{display:block;font:700 20px var(--mono);color:var(--c-text)}
+.desk-summary .scroll{max-height:610px}
+.desk-summary details{margin-top:12px}
+.desk-summary details summary{cursor:pointer;font-weight:600;line-height:2;color:var(--c-text-2)}
+.desk-current-label{margin:12px 0;padding:8px 12px;background:var(--c-panel-2);border-radius:var(--r);font-weight:700;color:var(--c-text);overflow-wrap:anywhere}
+.desk-current-label:empty{display:none}
+.desk-logistics #desk-batches{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;max-height:230px;overflow:auto;margin-top:8px}
+body[data-desk] .desk-batch{display:block;height:auto;padding:10px 12px;text-align:left;background:var(--c-panel-2);border:1px solid var(--c-line);border-radius:var(--r);white-space:normal}
+.desk-batch b,.desk-batch span{display:block;overflow-wrap:anywhere}
+.desk-batch b{font-family:var(--mono)}
+.desk-batch span{color:var(--c-text-3);font-size:12px;font-weight:400;margin-top:3px}
+body[data-desk] .desk-batch.active{background:var(--c-primary-soft);border:1px solid var(--c-primary-line);box-shadow:inset 3px 0 var(--c-primary);color:var(--c-text)}
+.desk-current #lines{max-height:380px}
+.desk-empty{padding:20px;color:var(--c-text-3);text-align:center}
+.desk-history{padding:12px 20px}
+.desk-history #history:empty{display:none}
+.desk-history .bar{margin:2px 0}
+.history-row{display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:9px 4px;border-bottom:1px solid var(--c-line);font-size:13px}
+.stage{border:1px solid var(--c-line);border-radius:var(--r-md);padding:12px 14px;margin:10px 0;background:var(--c-panel-2)}
+
+/* ---------- 表格：浅表头 + 细分隔；状态用浅色，不再整行饱和涂底 ---------- */
+body[data-desk] table:not(.pair-table){width:100%;border-collapse:separate;border-spacing:0;margin:10px 0;font-size:13px}
+body[data-desk] table:not(.pair-table) th,body[data-desk] table:not(.pair-table) td{padding:9px 10px;text-align:left;border-bottom:1px solid #f0f1f6;overflow-wrap:anywhere;word-break:normal;vertical-align:middle}
+body[data-desk] table:not(.pair-table) th{background:var(--c-panel-2);color:var(--c-text-3);font-size:12px;font-weight:600;border-bottom-color:var(--c-line);white-space:nowrap}
+body[data-desk] .qty,body[data-desk] td.num{font-family:var(--mono);font-variant-numeric:tabular-nums;font-weight:700}
+body[data-desk] td.num{font-size:16px;color:var(--c-text)}
+body[data-desk] .qty{text-align:right}
+.desk-current td.qty,.desk-current td.num{cursor:pointer;color:var(--c-primary)}
+body[data-desk] .sku{font-family:var(--mono);font-weight:600}
+body[data-desk] tr.good td{background:var(--c-ok-soft)}
+body[data-desk] tr.diff td{background:var(--c-warn-soft)}
+body[data-desk] tr.extra td,body[data-desk] tr.unknown td{background:var(--c-none-soft)}
+.joint-summary{min-width:520px}
+.allocation-qty{width:95px}
+.status{padding:12px 14px;background:var(--c-panel-2);border-radius:var(--r);line-height:1.8}
+.status.good{background:var(--c-ok-soft);color:#065f46}
+.status.diff{background:var(--c-warn-soft);color:#92400e}
+#fallback img{max-width:100%}
+
+/* ---------- 对话框 ---------- */
+body[data-desk] dialog{width:min(1300px,94vw);max-width:94vw;max-height:91vh;overflow:auto;border:1px solid var(--c-line);border-radius:var(--r-lg);
+  padding:20px 22px;background:var(--c-panel);color:var(--c-text);box-shadow:0 24px 70px rgba(23,25,60,.22)}
+body[data-desk] dialog::backdrop{background:rgba(25,26,46,.45)}
+.dialog-head{display:flex;justify-content:space-between;align-items:center;gap:16px;position:sticky;top:-20px;background:var(--c-panel);z-index:2;padding:8px 0}
+.dialog-head h2{margin:0}
+#editor,#context-editor{width:min(460px,94vw)}
+#editor label{display:block;margin:10px 0;color:var(--c-text-2);font-size:13px}
+body[data-desk] #editor input{display:block;width:100%;margin-top:4px}
+#saved-report-dialog{width:min(1050px,94vw)}
+#saved-report-content{max-height:65vh;overflow:auto}
+#po-link-dialog{width:min(980px,94vw)}
+
+@media(max-width:1100px){.desk-modes>span{display:none}.desk-logistics #desk-batches{grid-template-columns:1fr}.desk-status>.bar{width:100%}}
+@media(max-width:850px){.desk-work-grid{grid-template-columns:minmax(0,1fr)}body[data-desk] main{padding:12px}.desk-scan-row{flex-wrap:wrap}}

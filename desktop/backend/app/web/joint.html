@@ -3,15 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>多采购单合并收货 · 收货小助手</title>
+<title>多采购单合并收货 · 扫码入库</title>
 <link rel="stylesheet" href="/style.css">
-<link rel="stylesheet" href="/unplanned.css">
 <link rel="stylesheet" href="/purchase-pairs.css">
-<link rel="stylesheet" href="/joint.css">
-<link rel="stylesheet" href="/receiving-desk.css">
-<link rel="icon" href="/app-icon.svg">
 <link rel="stylesheet" href="/receiving-workspace.css">
 <link rel="stylesheet" href="/barcode-learn.css">
+<link rel="stylesheet" href="/ui-tokens.css">
+<link rel="stylesheet" href="/desk.css">
+<link rel="icon" href="/app-icon.svg">
 <script src="/barcode-learn.js"></script>
 <script src="/receiving-embed.js">
 </script>
@@ -23,20 +22,20 @@
 <div>
 <img src="/app-icon.svg" alt="">
 <div>
-<strong>收货小助手</strong>
-<small>收货 · 对单 · 视频举证</small>
+<strong>扫码入库</strong>
+<small>聚水潭收货助手</small>
 </div>
 </div>
 <div>
-<button data-native-action="preview">监控预览</button>
+<button class="btn btn-sm btn-ghost i-video" data-native-action="preview">监控预览</button>
 <a href="/?view=settings&amp;section=video">视频设置</a>
 <a href="/">账号 / 普通收货</a>
 </div>
 </header>
 <nav class="desk-nav" aria-label="主模块">
-<a class="desk-tab" href="/?view=home">收货</a>
+<a class="desk-tab" href="/?view=home">有采购单收货</a>
 <a class="desk-tab active" href="/joint.html">多采购单合并收货</a>
-<a class="desk-tab" href="/unplanned.html">无采购单登记</a>
+<a class="desk-tab" href="/unplanned.html">无采购单收货</a>
 <a class="desk-tab" href="/?view=purchase">采购单</a>
 <a class="desk-tab" href="/?view=query">记录查询</a>
 <a class="desk-tab" href="/?view=export">明细导出</a>
@@ -44,15 +43,14 @@
 <a class="desk-tab" href="/?view=operations">异常与记录</a>
 <a class="desk-tab" href="/?view=settings">设置</a>
 </nav>
-<div id="message" role="status" aria-live="polite">
-</div>
+<div id="message" role="status" aria-live="polite"></div>
 <main>
 <section class="card desk-start" id="start">
 <h2>创建多采购单收货批次</h2>
 <p class="muted">逐张扫描采购单回车添加，再填写母物流 / 整票号。无需知道每个子件装什么。</p>
 <div class="bar">
 <input id="desk-po-input" placeholder="扫描 / 输入采购单号，回车添加" aria-label="添加采购单">
-<button id="desk-po-add">添加采购单</button>
+<button id="desk-po-add" class="btn btn-secondary">添加采购单</button>
 </div>
 <div id="desk-po-chips">
 </div>
@@ -61,16 +59,16 @@
 <div class="bar">
 <input id="mother" placeholder="母物流 / 整票号" aria-label="母物流 / 整票号">
 <input id="expected" type="number" min="1" step="1" inputmode="numeric" placeholder="预计子件数（可选）" aria-label="预计子件数">
-<button id="new">读取采购单并创建批次</button>
+<button id="new" class="btn btn-primary">读取采购单并创建批次</button>
 </div>
 </section>
 <section class="card desk-history">
 <div class="bar">
 <input id="query" placeholder="采购单 / 外部单号 / 供应商 / 批次号" aria-label="按采购资料查询">
-<button id="search">按采购资料查询</button>
+<button id="search" class="btn">按采购资料查询</button>
 <input id="tracking-query" placeholder="母单 / 子物流单号（支持模糊查询）" aria-label="按物流单号查询">
-<button id="search-tracking">按物流查询</button>
-<button id="close-history">关闭结果</button>
+<button id="search-tracking" class="btn">按物流查询</button>
+<button id="close-history" class="btn btn-ghost">关闭结果</button>
 </div>
 <div id="history">
 </div>
@@ -85,12 +83,12 @@
 <p id="lifecycle-status" class="hint"></p>
 </div>
 <div class="bar">
-<button id="refresh">刷新采购明细</button>
-<button id="summary">汇总对单</button>
-<button id="pause">暂存并对单</button>
-<button id="close-session">结单并查看汇总</button>
-<button id="delete-session">删除整批</button>
-<button id="exit">退出批次</button>
+<button id="refresh" class="btn btn-ghost i-refresh">刷新采购明细</button>
+<button id="summary" class="btn btn-secondary">汇总对单</button>
+<button id="pause" class="btn btn-secondary i-pause">暂存并对单</button>
+<button id="close-session" class="btn btn-secondary i-flag">结单并查看汇总</button>
+<button id="delete-session" class="btn btn-danger i-trash">删除整批</button>
+<button id="exit" class="btn btn-ghost i-exit">退出批次</button>
 </div>
 <div id="warnings">
 </div>
@@ -106,8 +104,8 @@
 <div class="desk-scan-row">
 <input id="tracking" class="desk-scan-input" placeholder="请扫描物流单号，支持子母件 / 独立单号" autocomplete="off" aria-label="扫描物流单号">
 <input id="code" class="desk-scan-input" placeholder="请扫描商品 69 码 / 辅助条码 / 商品编码" autocomplete="off" aria-label="扫描商品条码" hidden>
-<button id="enter-tracking">确认物流</button>
-<button id="scan" hidden>识别商品</button>
+<button id="enter-tracking" class="btn btn-secondary">确认物流</button>
+<button id="scan" class="btn btn-secondary" hidden>识别商品</button>
 </div>
 <div id="candidates">
 </div>
@@ -116,15 +114,15 @@
 </strong>
 <span>本次数量</span>
 <input id="qty" type="number" min="1" max="1000000000" step="1" inputmode="numeric" pattern="[0-9]*" value="1" aria-label="本次数量（整数）">
-<button id="confirm-qty">确认数量并登记 ↵</button>
-<button id="cancel-qty">取消 Esc</button>
+<button id="confirm-qty" class="btn btn-primary">确认数量并登记 ↵</button>
+<button id="cancel-qty" class="btn btn-ghost">取消 Esc</button>
 </div>
 </section>
 <div class="desk-work-grid">
 <section class="card desk-summary">
 <div class="desk-card-head">
 <h2>采购汇总 · 本轮应收与实收</h2>
-<a id="export" class="button">导出明细 CSV</a>
+<a id="export" class="button btn btn-sm btn-ghost i-download">导出明细 CSV</a>
 </div>
 <div id="totals" class="stats">
 </div>
@@ -132,7 +130,7 @@
 <div id="brief" class="scroll">
 </div>
 <div class="bar">
-<button id="allocate">按实收入库 · 确认采购归属</button>
+<button id="allocate" class="btn btn-primary i-inbound">按实收入库 · 确认采购归属</button>
 </div>
 <details>
 <summary>逐张采购单 · 修改采购单号 / 初始快照 / 实时明细</summary>
@@ -153,16 +151,16 @@
 <div id="desk-batches" role="list">
 </div>
 <div class="bar">
-<button id="finish-package">本包扫完</button>
-<button id="rename">修改单号</button>
-<button id="copy-previous">复制上一单商品</button>
-<button id="delete-batch">删除此物流单</button>
+<button id="finish-package" class="btn btn-sm">本包扫完</button>
+<button id="rename" class="btn btn-sm">修改单号</button>
+<button id="copy-previous" class="btn btn-sm i-copy">复制上一单商品</button>
+<button id="delete-batch" class="btn btn-sm btn-danger i-trash">删除此物流单</button>
 </div>
 </section>
 <section class="card desk-current">
 <div class="desk-card-head">
 <h2>当前物流商品</h2>
-<button id="manual" data-edit>手动登记商品</button>
+<button id="manual" class="btn btn-sm btn-secondary i-plus" data-edit>手动登记商品</button>
 </div>
 <p id="desk-current-tracking" class="desk-current-label">
 </p>
@@ -179,7 +177,7 @@
 <select id="warehouse" aria-label="入库仓库">
 <option value="">请选择入库仓库</option>
 </select>
-<button id="warehouses">读取仓库</button>
+<button id="warehouses" class="btn">读取仓库</button>
 </div>
 <div id="stages">
 </div>
@@ -189,28 +187,28 @@
 <dialog id="report-dialog">
 <div class="dialog-head">
 <h2>多采购单汇总对单</h2>
-<button data-close>关闭 ×</button>
+<button class="btn btn-ghost i-x" data-close>关闭</button>
 </div>
 <p id="report-title">
 </p>
 <div class="bar">
 <label>
 <input id="only" type="checkbox" checked> 仅显示差异</label>
-<button id="copy-summary">复制汇总图</button>
-<button id="copy-diff">复制差异图</button>
-<button id="save-image">保存当前对单图片</button>
+<button id="copy-summary" class="btn btn-sm i-copy">复制汇总图</button>
+<button id="copy-diff" class="btn btn-sm i-copy">复制差异图</button>
+<button id="save-image" class="btn btn-sm i-download">保存当前对单图片</button>
 </div>
 <p>绿色收齐 · 黄色数量差异 · 灰色组外或待核实。相似商品只是并排参考。</p>
 <div id="report" class="scroll">
 </div>
 <p id="image-status">
 </p>
-<button data-close>关闭</button>
+<button class="btn btn-ghost" data-close>关闭</button>
 </dialog>
 <dialog id="allocation-dialog">
 <div class="dialog-head">
 <h2>按实收入库 · 确认采购归属</h2>
-<button data-close>关闭 ×</button>
+<button class="btn btn-ghost i-x" data-close>关闭</button>
 </div>
 <p>同编码出现在多张采购单时，必须手动填写；不按比例或顺序偷偷分配。允许只分配本次要入库的一部分。</p>
 <div class="bar">
@@ -223,8 +221,8 @@
 </div>
 <p id="allocation-message">
 </p>
-<button id="save-allocation">确认归属并保存数量占用</button>
-<button data-close>取消</button>
+<button id="save-allocation" class="btn btn-primary">确认归属并保存数量占用</button>
+<button class="btn btn-ghost" data-close>取消</button>
 </dialog>
 <dialog id="editor">
 <form id="edit-form">
@@ -239,8 +237,8 @@
 </label>
 <label>数量（整数）<input name="qty" type="number" min="0" max="1000000000" step="1" inputmode="numeric" pattern="[0-9]*" required>
 </label>
-<button type="submit">保存</button>
-<button type="button" data-close>取消</button>
+<button type="submit" class="btn btn-primary">保存</button>
+<button type="button" class="btn btn-ghost" data-close>取消</button>
 </form>
 </dialog>
 <script src="/native-shell.js">

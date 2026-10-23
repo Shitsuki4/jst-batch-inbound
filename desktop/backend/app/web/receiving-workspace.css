@@ -1,50 +1,14 @@
-/* Shared normal-receiving tokens, including dialogs inside the embedded desks. */
+/* 主界面与嵌入工作台共用：iframe 尺寸、嵌入时隐藏重复页头、商品选择弹窗、登录记忆。
+   工作台本身的样式见 desk.css。 */
 .receiving-frame{display:block;width:100%;height:calc(100vh - 144px);min-height:600px;border:0;background:var(--bg)}
 .receiving-embedded .desk-brand,.receiving-embedded .desk-nav{display:none!important}
 html.receiving-embedded,html.receiving-embedded body{height:auto;min-height:100%}
-body[data-desk]{font-family:"Microsoft YaHei UI","Microsoft YaHei",system-ui,sans-serif;background:var(--bg);color:var(--text)}
-body[data-desk] main{max-width:none;margin:0;padding:0 2px 18px}
-body[data-desk] .card{border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);background:var(--surface);padding:20px;margin-bottom:16px}
-body[data-desk] h2{color:var(--text);font-size:17px}
-body[data-desk] button,body[data-desk] .button{font-family:inherit;border-color:var(--line-strong);background:var(--surface);color:var(--text);border-radius:8px;cursor:pointer}
-body[data-desk] button:hover{border-color:var(--primary);color:var(--primary)}
-body[data-desk] button:disabled{opacity:.5;cursor:not-allowed}
-body[data-desk] input,body[data-desk] select{font-family:inherit;border:1px solid var(--line-strong);border-radius:8px;padding:9px 12px;background:white;color:var(--text)}
-body[data-desk] input:focus,body[data-desk] select:focus,body[data-desk] button:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
-body[data-desk] #new,body[data-desk] #scan,body[data-desk] #scan-tracking,body[data-desk] #enter-tracking,body[data-desk] #confirm-qty{background:var(--primary);border-color:var(--primary);color:white}
-body[data-desk] .desk-modes button.active{background:#eaf2ff;color:var(--primary);border-color:#b6d0fa}
-body[data-desk] .desk-scan-input{height:56px;font-size:23px!important;letter-spacing:.5px;border:2px solid var(--line-strong);background:#fff}
-body[data-desk] .desk-pending{background:#eef5ff;border:1px solid #b6d0fa;color:var(--text);border-radius:8px;padding:14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
-body[data-desk] .desk-batch.active{background:#eaf2ff;border-color:var(--primary);color:var(--primary)}
-body[data-desk] .desk-current-label{background:#f0f5fc;color:#295a92;border-color:var(--line)}
-body[data-desk] .desk-work-grid{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
-body[data-desk] main{display:flex;flex-direction:column}
-body[data-desk] .desk-history{order:2}
-body[data-desk] .desk-scanner{display:grid;grid-template-columns:235px minmax(0,1fr);align-items:center;gap:12px}
-body[data-desk] .desk-modes{display:flex;gap:6px;margin:0}
-body[data-desk] .desk-modes button{height:56px;border:1px solid var(--line-strong)!important;border-radius:8px;background:#f7f9fc!important;padding:9px 12px!important}
-body[data-desk] .desk-modes button.active{color:white!important;background:var(--primary)!important;border-color:var(--primary)!important}
-body[data-desk] .desk-modes>span{display:none}
-body[data-desk] .desk-pending,body[data-desk] #candidates{grid-column:1/-1}
-body[data-desk] #candidates:empty{display:none}
-body[data-desk] .desk-scan-input{border-color:var(--line-strong)!important}
-body[data-desk] .desk-scan-input:focus{border-color:var(--primary)!important;box-shadow:0 0 0 3px #2268da20}
-body[data-desk] .desk-batch.active{border-color:var(--primary)!important;background:#f1f6ff!important}
-body[data-desk] .desk-status #pause,body[data-desk] .desk-status #pause-report,body[data-desk] #allocate,body[data-desk] #inbound{background:var(--primary);border-color:var(--primary);color:white}
-.receiving-embedded .desk-status #title{display:none}
-body[data-desk] .desk-po-chip{background:#eaf2ff;border-color:#c6daf8;color:#244a82}
-body[data-desk] #message{position:sticky;top:0;z-index:5;min-height:0;padding:0 12px;background:#edf4ff;color:#244a82;border:0}
-body[data-desk] #message:not(:empty){padding:10px 12px;margin-bottom:12px;border-radius:8px}
-body[data-desk] #message.error{background:#fdecec;color:var(--danger)}
-.desk-context{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:14px}
-.desk-context label{display:flex;align-items:center;gap:8px}
-.desk-context .hint{flex-basis:100%}
 .product-picker{width:min(820px,94vw);max-height:88vh;border:1px solid var(--line);border-radius:12px;padding:0;color:var(--text);background:var(--surface);box-shadow:0 18px 64px #10243b35}
 .product-picker::backdrop{background:#10203080}
 .product-picker .modal-hd,.product-picker .modal-ft{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;gap:12px;background:#f7f9fc}
 .product-picker .modal-hd{font-size:18px;font-weight:700}
 .product-picker .modal-bd{padding:12px 20px;overflow:auto;max-height:65vh}
-.product-picker .cand,body[data-desk] .product-picker .cand{display:flex;width:100%;align-items:center;text-align:left;gap:18px;margin:10px 0;padding:14px;border:1px solid var(--line);border-radius:9px;background:#fff;color:var(--text);white-space:normal}
+.product-picker .cand,body[data-desk] .product-picker .cand{display:flex;height:auto;width:100%;align-items:center;text-align:left;gap:18px;margin:10px 0;padding:14px;border:1px solid var(--line);border-radius:9px;background:#fff;color:var(--text);white-space:normal}
 .product-picker .cand:hover,.product-picker .cand:focus-visible{outline:2px solid var(--primary);outline-offset:1px;background:#f1f6ff}
 .product-picker .cand-pic{display:flex;align-items:center;justify-content:center;width:100px;height:100px;flex:none;background:#f3f5f8;color:var(--muted);font-size:12px;border-radius:7px;overflow:hidden}
 .product-picker .cand-pic img{width:100%;height:100%;object-fit:contain}
@@ -52,7 +16,7 @@ body[data-desk] #message.error{background:#fdecec;color:var(--danger)}
 .product-picker .cand-title{font-size:16px;font-weight:700;margin-bottom:8px}
 .product-picker .cand-meta{font-size:13px;color:var(--muted);line-height:1.8}
 .login-memory{display:flex;align-items:center;gap:20px;flex-wrap:wrap;margin:14px 0 0;font-size:13px}
+.login-memory input{accent-color:var(--c-primary)}
 .login-memory label{display:flex;align-items:center;gap:6px;cursor:pointer}
 .login-memory-note{font-size:11px;color:var(--muted);margin:8px 0}
-@media(max-width:850px){body[data-desk] .desk-work-grid{grid-template-columns:minmax(0,1fr)}.receiving-frame{min-height:600px}.product-picker .cand-pic{width:64px;height:64px}}
-@media(max-width:850px){body[data-desk] .desk-scanner{grid-template-columns:minmax(0,1fr)}}
+@media(max-width:850px){.receiving-frame{min-height:600px}.product-picker .cand-pic{width:64px;height:64px}}
