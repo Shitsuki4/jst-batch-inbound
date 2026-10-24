@@ -3,7 +3,7 @@
 面向仓库收货台的 Windows 桌面工具：扫物流单号、扫商品条码，自动对照聚水潭采购单统计实收，
 一键生成入库单；同时按物流单号自动录制开箱视频，方便售后举证。
 
-当前版本：**4.1.0**　·　[下载最新版](https://github.com/Shitsuki4/jst-batch-inbound/releases)
+当前版本：**4.1.1**　·　[下载最新版](https://github.com/Shitsuki4/jst-batch-inbound/releases)
 
 ## 功能
 
@@ -91,6 +91,10 @@ CI（[`build-desktop-exe.yml`](.github/workflows/build-desktop-exe.yml)）会构
 跑完回归与安装 / 覆盖升级 / 卸载验收后创建 GitHub Release。PR 修改 `desktop/**` 时也会自动构建。
 
 ## 版本记录
+
+### 4.1.1
+
+修复采购单少收商品与替代商品的相似品并排：优先按品牌（含中英文别名）、容量、品类匹配；品牌不明确时只在品类、规格、数量都一致且唯一时并排。同一少收项可对应多个颜色款，减少跨品牌误配。新增相似品回归测试。
 
 ### 4.1.0
 
