@@ -19,8 +19,11 @@
   });
   $('delete-session').onclick=()=>run(async()=>{
    idle();const s=getState();if(!s)return;
+   if(window.DeskUI?.confirmDelete){if(!await window.DeskUI.confirmDelete(s)){notify('已取消，未删除');return;}}
+   else{
    if(!confirm('删除整个本地收货批次？\n批次：'+s.session.input_no+'\n包含 '+s.batches.length+' 个物流单，实收 '+s.total+' 件。\n\n本操作不可撤销，不删除录像、不修改ERP采购单和库存。\n存在入库记录（含失败 / 待核实记录）时禁止删除。'))return;
    if(prompt('再次确认：请输入要删除的完整批次号', '')!==s.session.input_no){notify('批次号未确认，未删除');return;}
+   }
    const result=await action('delete_session',{confirmed:true,expected_session_no:s.session.input_no});
    if(!result.deleted)throw Error('未确认删除结果，请刷新核对，勿重复操作');
    await clear();window.dispatchEvent(new CustomEvent('native-receipt',{detail:{kind:'stop'}}));notify(result.message);

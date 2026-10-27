@@ -1,0 +1,58 @@
+/* 4.1.2 收货页公共界面：顶部固定扫码条 / 录像状态 / 更多菜单 / 删除确认 / 重复扫码 / 汇总紧凑行 */
+body[data-desk] .desk-sticky{position:sticky;top:0;z-index:30;box-shadow:0 6px 16px -10px rgba(15,23,42,.35)}
+.desk-topbar{display:flex;align-items:stretch;gap:12px;flex-wrap:wrap;text-align:left;width:100%}
+.desk-topbar>div{display:flex;flex-direction:column;justify-content:center;align-items:flex-start;min-width:0}
+.desk-topbar small{font-size:12px;color:var(--c-text-3);line-height:1.2}
+.desk-top-current{flex:1 1 320px}
+.desk-top-no{font-family:var(--mono);font-size:28px;line-height:1.15;font-weight:700;color:var(--c-text);letter-spacing:.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.desk-top-count{flex:0 0 auto;padding:0 14px;border-left:1px solid var(--c-line)}
+.desk-top-count strong{font-size:28px;line-height:1.15;font-weight:700;color:var(--c-primary);font-variant-numeric:tabular-nums}
+.desk-topbar.empty .desk-top-no,.desk-topbar.empty .desk-top-count strong{color:var(--c-text-3)}
+.desk-rec{align-self:center;display:inline-flex;align-items:center;min-height:40px;padding:0 14px;border-radius:var(--r);font-weight:700;font-size:15px;white-space:nowrap;border:1px solid transparent;font-variant-numeric:tabular-nums}
+.desk-rec.on{background:var(--c-ok-soft);color:var(--c-ok);border-color:var(--c-ok)}
+.desk-rec.stop{background:var(--c-danger-soft);color:var(--c-danger);border-color:var(--c-danger)}
+.desk-rec.warn{background:var(--c-warn-soft);color:var(--c-warn);border-color:var(--c-warn)}
+.desk-rec.off{background:var(--c-panel-2);color:var(--c-text-3);border-color:var(--c-line);font-weight:600}
+.desk-rec.flash{animation:desk-rec-flash .6s ease-in-out 3}
+@keyframes desk-rec-flash{50%{box-shadow:0 0 0 4px var(--c-warn-soft);border-color:var(--c-warn)}}
+.desk-help-btn{align-self:center;width:32px;padding:0;font-weight:700;border-radius:50%}
+body.desk-help-open .desk-help-btn{background:var(--c-primary-soft);color:var(--c-primary)}
+/* 说明文字收进「?」 */
+body[data-desk]:not(.desk-help-open) #work p.muted,
+body[data-desk]:not(.desk-help-open) .desk-modes>span{display:none}
+/* 批次卡片压成一行 */
+body[data-desk] #work>.desk-status{padding-top:10px;padding-bottom:10px}
+body[data-desk] .desk-status .bar{flex-wrap:nowrap}
+body[data-desk] .desk-status .bar .btn,body[data-desk] .desk-status .bar .button{white-space:nowrap}
+body[data-desk]:not(.desk-help-open) .desk-status #desk-active-context{display:none}
+.desk-more{position:relative;display:inline-block}
+.desk-more-menu{position:absolute;right:0;top:calc(100% + 4px);z-index:40;min-width:168px;padding:6px;display:flex;flex-direction:column;gap:4px;background:var(--c-panel);border:1px solid var(--c-line);border-radius:var(--r);box-shadow:var(--sh-card,0 8px 24px rgba(15,23,42,.18))}
+.desk-more-menu[hidden]{display:none}
+.desk-more-menu .desk-menu-item{width:100%;justify-content:flex-start;text-align:left}
+.desk-more-menu #delete-session{margin-top:4px;border-top:1px solid var(--c-line)}
+dialog.desk-delete-dialog{width:min(480px,92vw)!important;max-width:92vw!important;border:1px solid var(--c-line);border-radius:var(--r-lg,10px);padding:20px 22px}
+.desk-delete-dialog h2{margin:0 0 8px;color:var(--c-danger)}
+.desk-delete-dialog .desk-delete-what{font-weight:600}
+.desk-delete-dialog label{display:block;margin-top:10px}
+.desk-delete-dialog b{font-family:var(--mono)}
+.desk-delete-dialog input{display:block;width:100%;margin-top:6px;height:36px;font-family:var(--mono)}
+/* 重复扫码 */
+body[data-desk] .desk-batch.desk-dup{background:var(--c-warn-soft);border-color:var(--c-warn);box-shadow:inset 3px 0 var(--c-warn),0 0 0 2px var(--c-warn-soft);animation:desk-dup-pulse .5s ease-in-out 2}
+@keyframes desk-dup-pulse{50%{box-shadow:inset 3px 0 var(--c-warn),0 0 0 5px var(--c-warn-soft)}}
+.desk-toast{position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:1000;min-width:300px;max-width:560px;padding:12px 18px;border-radius:var(--r);box-shadow:0 10px 30px rgba(15,23,42,.28);display:flex;flex-direction:column;gap:4px;color:#fff}
+.desk-toast[hidden]{display:none}
+.desk-toast.warn{background:#b45309}
+.desk-toast.info{background:#1e40af}
+.desk-toast strong{font-size:18px}
+.desk-toast span{font-size:14px;color:#fff;opacity:.95}
+/* 汇总：一行一个商品（编码 | 名称·规格 | 数量），隔行底色 */
+.desk-summary #report table{width:100%;border-collapse:collapse;table-layout:auto}
+.desk-summary #report th,.desk-summary #report td{padding:5px 8px;line-height:1.35;vertical-align:middle}
+.desk-summary #report tbody tr:nth-child(even) td{background:var(--c-panel-2)}
+.desk-summary #report td:first-child{max-width:0;width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.desk-summary #report td:first-child .sku{display:inline-block;vertical-align:middle;line-height:1.35;width:7.5em;margin:0 8px 0 0;padding:0;font-family:var(--mono);font-size:12px;color:var(--c-text-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.desk-summary #report td:first-child strong{font-weight:500;vertical-align:middle;line-height:1.35}
+.desk-summary #report td:first-child .secondary{display:inline;vertical-align:middle;line-height:1.35;margin:0 0 0 6px;color:var(--c-text-3);font-size:12px}
+.desk-summary #report td:first-child .secondary:not(:empty)::before{content:'· '}
+.desk-summary #report td:first-child>*{float:none}
+.desk-summary #report td.num{text-align:right;font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap}
