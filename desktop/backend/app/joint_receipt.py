@@ -11,7 +11,7 @@ from inbound import InboundService, InboundError, json_text, quantity
 from jst import normalize_po_item
 from receiving_round import aggregate
 from store import now_str
-from unplanned import UnplannedService, clean, qty
+from unplanned import UnplannedService, clean, qty, scan_time_text
 
 
 def digest(value):
@@ -323,7 +323,9 @@ class JointService:
         def row(v):w.writerow(["'"+x if isinstance(x,str) and x.startswith(('=','+','-','@','\t','\r')) else x for x in v])
         row(['联合批次',d['session']['input_no'],'母单',d['group']['mother']]);row(['编码','商品','本轮合计应收','实收','差异','采购来源'])
         for r in d['rows']:row([r['sku_id'],r['name'],r['plan'] if r['plan'] is not None else '待核实',r['recv'],r['delta'] if r['delta'] is not None else '待核实',' / '.join(p['po_id'] for p in r['sources'])])
-        row([]);row(['物流单','编码','实收','已占用','未分配'])
+        row([]);row(['物流单','扫描登记时间','编码','实收','已占用','未分配'])
+        started=d['session'].get('started_at')
         for b in d['batches']:
-            for r in b['lines']:row([b['tracking_no'],r['sku_id'],r['qty'],r['reserved'],r['available']])
+            at=scan_time_text(b.get('first_scan_at'),started)
+            for r in b['lines']:row([b['tracking_no'],at,r['sku_id'],r['qty'],r['reserved'],r['available']])
         return ('\ufeff'+out.getvalue()).encode('utf-8')

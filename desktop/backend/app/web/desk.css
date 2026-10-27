@@ -174,3 +174,9 @@ body[data-desk] #editor input{display:block;width:100%;margin-top:4px}
 
 @media(max-width:1100px){.desk-modes>span{display:none}.desk-logistics #desk-batches{grid-template-columns:1fr}.desk-status>.bar{width:100%}}
 @media(max-width:850px){.desk-work-grid{grid-template-columns:minmax(0,1fr)}body[data-desk] main{padding:12px}.desk-scan-row{flex-wrap:wrap}}
+
+/* 快递单登记：几百个物流单号时列表固定高度、框内滚动，带搜索框 */
+body[data-desk="express"] .desk-logistics #desk-batches{position:relative;max-height:260px;overscroll-behavior:contain}
+.desk-batch-search{width:100%;margin-top:8px;height:32px;padding:0 10px;border:1px solid var(--c-line);border-radius:var(--r);font:inherit;background:var(--c-panel)}
+.desk-batch-search:focus{outline:none;border-color:var(--c-primary-line);box-shadow:0 0 0 2px var(--c-primary-soft)}
+body[data-desk="express"] .desk-batch[hidden]{display:none}

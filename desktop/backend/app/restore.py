@@ -16,9 +16,9 @@ import time
 import zipfile
 
 FORMAT = 1
-DB_NAMES = ("jst.db", "catalog.db", "unplanned.db", "purchase_watch.db", "joint_receipts.db", "learned_codes.db")
+DB_NAMES = ("jst.db", "catalog.db", "unplanned.db", "express.db", "purchase_watch.db", "joint_receipts.db", "learned_codes.db")
 # 备份中没有这些库时（如旧版备份不含未知条码学习数据）保留当前数据，而不是把当前库移走。
-KEEP_IF_ABSENT = ("catalog.db", "learned_codes.db")
+KEEP_IF_ABSENT = ("catalog.db", "learned_codes.db", "express.db")  # 快递单登记为 4.1.x 新增：旧备份没有该库时保留当前快递单记录
 # 操作记录库会进备份（审计用），但恢复时始终保留当前操作记录，不用备份覆盖。
 KEEP_CURRENT_NAMES = ("operation_log.db",)
 ALLOWED_NAMES = DB_NAMES + KEEP_CURRENT_NAMES

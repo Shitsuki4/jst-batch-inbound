@@ -1252,6 +1252,23 @@
       });
   }
 
+  /* 改的是正在录像的物流单：询问是否按新单号重新录制。是 → 保存当前片段并按新单号开新片段；否 → 当前录像原样继续 */
+  function askRerecordAfterRename(bid, from, to) {
+    var link = window.NativeReceiptLink;
+    if (!link || !link.afterRename || !S.session) return;
+    link.afterRename({ key: '普通:' + S.session.id + ':' + bid, from: from, to: to }, function (text) {
+      return new Promise(function (resolve) {
+        suppressRefocus = Date.now() + 120000;
+        var done = function (yes) { closeModal(); resolve(yes); refocus(); };
+        openModal('按新单号重新录制？',
+          '<div style="white-space:pre-line;padding:4px 0">' + esc(text) + '</div>',
+          [{ text: '否，继续当前录像', cls: 'btn-ghost', fn: function () { done(false); } },
+          { text: '是，按新单号重新录制', cls: 'btn-primary', fn: function () { done(true); } }],
+          function () { done(false); });
+      });
+    }).catch(function () { });
+  }
+
   /* 编辑物流单号：该单号下明细不动，只改单号 */
   function askRenameBatch(bid, no) {
     suppressRefocus = Date.now() + 120000;
@@ -1272,6 +1289,7 @@
             if (!r.ok) { handleFail(r); return; }
             toast(r.msg || '已修改', 'ok');
             refreshAfterMutation((S.current_batch && S.current_batch !== bid) ? S.current_batch : 0);
+            askRerecordAfterRename(bid, no, v);
           }).catch(function () { closeModal(); permAlert(); });
       } }],
       function () { closeModal(); refocus(); });
@@ -1552,7 +1570,7 @@
         }).join('') + '</tr>'; }).join('') + '</tbody></table></details>';
   }
 
-  function extraHistoryHTML(rows){return (rows||[]).map(function(r){return '<div class="q-block"><strong>'+esc(r.label)+'</strong><p>'+esc(r.description)+'</p><a class="btn btn-primary" href="/'+(r.source==='joint'?'joint':'unplanned')+'.html?sid='+Number(r.id)+'">查看明细 / 继续收货'+(r.source==='joint'?' / 汇总对单':'')+'</a></div>';}).join('');}
+  function extraHistoryHTML(rows){return (rows||[]).map(function(r){return '<div class="q-block"><strong>'+esc(r.label)+'</strong><p>'+esc(r.description)+'</p><a class="btn btn-primary" href="/'+(r.source==='joint'?'joint':r.source==='express'?'express':'unplanned')+'.html?sid='+Number(r.id)+'">查看明细 / 继续收货'+(r.source==='joint'?' / 汇总对单':'')+'</a></div>';}).join('');}
   function runPoQuery() {
     if(document.querySelector('.qty-saving,.qty-save-error,.qty-unsaved'))return toast('请先保存当前数量，失败时可按Enter重试','warn');
     lastQ = 'po';

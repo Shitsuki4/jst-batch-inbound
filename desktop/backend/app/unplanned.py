@@ -11,6 +11,23 @@ from inbound import InboundService, InboundError, json_text
 from jst import normalize_po_item, match_item
 
 
+def scan_time_text(value, fallback=''):
+    """物流单号扫描（首次登记）时间 → 导出格式 2026/10/17 20:46:53。
+
+    batch.first_scan_at 在扫描 / 输入物流单号建子批次时写入（本地时间 YYYY-MM-DD HH:MM:SS）；
+    极旧或异常数据为空时退回 fallback（批次创建时间）。"""
+    text = str(value or '').strip() or str(fallback or '').strip()
+    if not text:
+        return ''
+    from datetime import datetime
+    for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%dT%H:%M:%S', '%Y-%m-%d %H:%M:%S.%f', '%Y-%m-%dT%H:%M:%S.%f', '%Y-%m-%d %H:%M'):
+        try:
+            return datetime.strptime(text, fmt).strftime('%Y/%m/%d %H:%M:%S')
+        except ValueError:
+            pass
+    return text.replace('-', '/').replace('T', ' ')
+
+
 def clean(value, limit=300):
     value = str(value or '').strip()
     if len(value) > limit or any(ord(c) < 32 for c in value):
@@ -399,7 +416,9 @@ class UnplannedService:
         row(['无采购单收货批次',state['session']['input_no'],'采购单',state['session']['po_id']])
         row(['批次汇总','商品编码','名称','规格','实收']+(['应收','核对结果'] if state['linked'] else []))
         for r in state['rows']: row(['',r['sku_id'],r['name'],r['spec'],r['recv']]+([r['plan'],r['reason']] if state['linked'] else []))
-        row([]);row(['物流单号','商品编码','名称','规格','实收'])
+        row([]);row(['物流单号','扫描登记时间','商品编码','名称','规格','实收'])
+        started=state['session'].get('started_at')
         for b in state['batches']:
-            for r in b['lines']: row([b['tracking_no'],r['sku_id'],r['name'],r['spec'],r['qty']])
+            at=scan_time_text(b.get('first_scan_at'),started)
+            for r in b['lines']: row([b['tracking_no'],at,r['sku_id'],r['name'],r['spec'],r['qty']])
         return ('﻿'+out.getvalue()).encode('utf-8')

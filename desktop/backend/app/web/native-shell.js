@@ -9,7 +9,7 @@
   if(blocked&&['export','library','cleanup'].includes(b.dataset.nativeAction)){alert('请先确认或取消商品数量，并保存成功后再切换。');return;}
   b.disabled=true;try{await NativeDesk.call(b.dataset.nativeAction);}catch(e){alert(e.message);}finally{b.disabled=false;}
  });
- for(const type of ['joint','unplanned']){
+ for(const type of ['joint','unplanned','express']){
   const url=sessionStorage.getItem('receiving:return:'+type);
   if(url&&new RegExp('^/'+type+'\\.html\\?sid=\\d+&bid=\\d+$').test(url))document.querySelectorAll('a[href="/'+type+'.html"]').forEach(a=>a.href=url);
  }

@@ -9,6 +9,7 @@
   #6  backup.VERSION 与应用版本同源，版本变化后会做升级前备份
   #9  远程页日期筛选：起止条件作用于同一活动时间（AND）
   #13 session/del 必须带 sid；batch/del 校验子批次归属
+  改单号：正在录像的物流单改号后不停录，发 renamed tracking 同步新单号（界面询问是否按新单号重录）；改无关单不打断
   硬约束：已结单的旧轮次仍可改数量、删子批次（不加只读限制）
 """
 import json
@@ -308,6 +309,58 @@ class DeleteTests(unittest.TestCase):
         st.pause_session(sid5)
         m = mark(st)
         r = f.call('/api/session/del', {'sid': sid5})
+        self.assertTrue(r['ok'], r)
+        self.assertEqual([k for k, _ in events_after(st, m)], ['stop'])
+
+    def test_rename_recording_batch_restarts_under_new_tracking(self):
+        """改单号：录像正绑定在被改的物流单上 → 不再停录，发带新单号的 tracking（renamed），电脑端只同步单号，
+        由界面询问是否按新单号重新录制；改别的物流单不打断录像；已停录时不发事件
+        （旧版一律发 stop，改单号后录像停止且不按新单号恢复）。"""
+        import native_bridge
+        f, st = self.f, self.st
+        sid2 = self._new('PO-REN')
+        r = f.call('/api/tracking/scan', {'sid': sid2, 'tracking_no': 'OLD-1'})
+        self.assertTrue(r['ok'], r)
+        bid = r['batch']['id']
+        m = mark(st)
+        r = f.call('/api/batch/rename', {'batch_id': bid, 'tracking_no': 'NEW-1'})
+        self.assertTrue(r['ok'], r)
+        ev = events_after(st, m)
+        self.assertEqual([k for k, _ in ev], ['tracking'], '改正在录像的物流单号必须按新单号重新关联，不能只停录')
+        p = ev[0][1]
+        self.assertEqual((p['source'], p['session_id'], p['id'], p['tracking_no']), ('普通', sid2, bid, 'NEW-1'))
+        self.assertTrue(p['renamed'])
+        self.assertEqual(p['context']['tracking'], 'NEW-1')
+        # 改同一单下另一张（未在录像的）物流单：不打断当前录像
+        other, _ = st.ensure_batch(sid2, 'OTHER-1')
+        m = mark(st)
+        r = f.call('/api/batch/rename', {'batch_id': other['id'], 'tracking_no': 'OTHER-2'})
+        self.assertTrue(r['ok'], r)
+        self.assertEqual(events_after(st, m), [], '改无关物流单号不应停录或切段')
+        # 改名失败（空单号）不发任何录像事件
+        m = mark(st)
+        self.assertFalse(f.call('/api/batch/rename', {'batch_id': bid, 'tracking_no': ''})['ok'])
+        self.assertEqual(events_after(st, m), [])
+        # 联合 / 无采购单：同一判定按 (来源, sid, bid) 比对；不匹配不发事件
+        m = mark(st)
+        native_bridge.on_rename(self.s, '/api/unplanned/action', {'action': 'rename', 'sid': sid2, 'batch_id': bid})
+        self.assertEqual(events_after(st, m), [], '来源不同（无采购单 vs 普通）不能误认作当前录像单')
+        # 关联记录损坏无法确认 → 保守停录
+        st.db.execute("INSERT INTO native_event(at,kind,payload) VALUES('x','tracking','{broken')"); st.db.commit()
+        m = mark(st)
+        r = f.call('/api/batch/rename', {'batch_id': bid, 'tracking_no': 'NEW-2'})
+        self.assertTrue(r['ok'], r)
+        self.assertEqual([k for k, _ in events_after(st, m)], ['stop'])
+        # 已停录（最后一条是 stop）：改单号不开录
+        m = mark(st)
+        r = f.call('/api/batch/rename', {'batch_id': bid, 'tracking_no': 'NEW-3'})
+        self.assertTrue(r['ok'], r)
+        self.assertEqual(events_after(st, m), [], '已停录时改单号不应擅自开始录像')
+        # 删除物流单仍停录（行为不变）
+        r = f.call('/api/tracking/scan', {'sid': sid2, 'tracking_no': 'NEW-3'})
+        self.assertTrue(r['ok'], r)
+        m = mark(st)
+        r = f.call('/api/batch/del', {'batch_id': other['id'], 'sid': sid2})
         self.assertTrue(r['ok'], r)
         self.assertEqual([k for k, _ in events_after(st, m)], ['stop'])
 

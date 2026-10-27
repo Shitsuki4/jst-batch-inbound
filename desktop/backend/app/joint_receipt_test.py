@@ -124,6 +124,19 @@ class JointTest(unittest.TestCase):
     def test_no_receipt_clone_export_and_duplicate_purchase(self):
         self.receive();self.plan();self.assertEqual(self.s.state(self.sid)['total'],18)
         self.assertIn('123-2',self.s.export(self.sid).decode('utf-8-sig'))
+    def test_export_has_tracking_scan_time(self):
+        import csv,io,re
+        self.receive();self.plan()
+        b=self.s.state(self.sid)['batches'][0]
+        self.s.store.db.execute('UPDATE batch SET first_scan_at=? WHERE id=?',('2026-10-17 20:46:53',b['id']));self.s.store.db.commit()
+        rows=list(csv.reader(io.StringIO(self.s.export(self.sid).decode('utf-8-sig'))))
+        i=rows.index(['物流单','扫描登记时间','编码','实收','已占用','未分配'])
+        mine=[r for r in rows[i+1:] if r and r[0]==b['tracking_no']]
+        self.assertTrue(mine);self.assertTrue(all(r[1]=='2026/10/17 20:46:53' for r in mine))
+        self.s.store.db.execute("UPDATE batch SET first_scan_at='' WHERE id=?",(b['id'],));self.s.store.db.commit()
+        rows=list(csv.reader(io.StringIO(self.s.export(self.sid).decode('utf-8-sig'))))
+        mine=[r for r in rows[i+1:] if r and r[0]==b['tracking_no']]
+        self.assertTrue(all(re.fullmatch(r'\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}',r[1]) or r[1]=='' for r in mine))
         self.assertEqual(len(self.s.new(dict(purchase_nos=['1','1'],mother='DEDUP',confirmed=True))['purchases']),1)
 
 if __name__=='__main__':unittest.main()

@@ -1,12 +1,13 @@
 /* Keep each receiving mode inside the same application shell and retain its work. */
 (function () {
   'use strict';
-  const modes = ['joint', 'unplanned'];
+  const modes = ['joint', 'unplanned', 'express'];
   const summaries = {}, requested = {};
-  const labels = {joint: '多采购单合并收货', unplanned: '无采购单收货'};
+  const labels = {joint: '多采购单合并收货', unplanned: '无采购单收货', express: '快递单登记'};
   const frames = () => [...document.querySelectorAll('iframe[data-receiving-frame]')];
   function updateStatus(name, state) {
-    summaries[name] = labels[name] + (state ? ' · ' + state.session.input_no + ' · ' + state.batches.length + ' 个物流单 / 实收 ' + state.total + ' 件' : ' · 尚未创建批次');
+    // 顶部面包屑（#crumb）已显示模式名称，这里不再重复，只显示批次进度。
+    summaries[name] = state ? '批次 ' + state.session.input_no + ' · ' + state.batches.length + ' 个物流单 / 实收 ' + state.total + ' 件' : '尚未创建批次';
     if (document.querySelector('.view.active')?.dataset.view === name) document.getElementById('receiving-mode-status').textContent = summaries[name];
   }
   function busy() {
@@ -17,7 +18,7 @@
     if (document.getElementById('app').hidden) return;
     document.getElementById('status-box').hidden = modes.includes(name);
     document.getElementById('receiving-mode-status').hidden = !modes.includes(name);
-    document.getElementById('receiving-mode-status').textContent = summaries[name] || labels[name] || '';
+    document.getElementById('receiving-mode-status').textContent = summaries[name] || (modes.includes(name) ? '尚未创建批次' : '');
     if (!modes.includes(name)) return;
     const f = document.getElementById(name + '-frame');
     if (!f.hasAttribute('src')) {

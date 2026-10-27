@@ -169,6 +169,7 @@ def main():
     # 新功能自身使用独立临时库和 FakeJst，不接触真实聚水潭会话。
     for name, script in [("review-fixes", "review_fixes_test.py"),
                          ("unplanned-unit", "unplanned_test.py"),
+                         ("express-unit", "express_test.py"),
                          ("inventory-unit", "inventory_test.py"),
                          ("inventory-http", "inventory_http_test.py"),
                          ("catalog", "catalog_test.py"),

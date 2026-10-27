@@ -13,9 +13,9 @@ public sealed partial class MainWindow {
   data["enabled"]=enabled.IsChecked==true;data["active"]=rec.Active;data["ready"]=rec.Ready;data["tracking"]=rec.Current?.Tracking??"";
   data["test"]=rec.Current?.BatchKey.StartsWith("TEST-",StringComparison.Ordinal)==true;data["status"]=rec.Status;data["warning"]=rec.Warning;
   data["diskConfigured"]=settings.DiskConfigured;data["hotkeysRegistered"]=hotkeys?.Registered==true;data["hotkeyStatus"]=hotkeys?.Status??"窗口准备中，全局快捷键尚未注册";
-  data["effectiveMode"]=rec.Current?.EffectiveMode??"";data["archiveHint"]=archiveHint;data["settingsWarning"]=settingsLoadWarning;data["cleanupHint"]=cleanupHint;return data;
+  data["effectiveMode"]=rec.Current?.EffectiveMode??"";data["archiveHint"]=archiveHint;data["settingsWarning"]=settingsLoadWarning;data["cleanupHint"]=cleanupHint;data["segmentLimit"]=Recorder.LimitText(rec.MaxSegmentBytes,rec.MaxSegmentSeconds);data["segmentRollovers"]=rec.Rollovers;return data;
  }
- bool CommandSourceAllowed(string value)=>Uri.TryCreate(value,UriKind.Absolute,out var uri)&&Uri.TryCreate(backend.Url,UriKind.Absolute,out var local)&&uri.Scheme==local.Scheme&&uri.Authority==local.Authority&&uri.AbsolutePath is "/" or "/index.html" or "/joint.html" or "/unplanned.html";
+ bool CommandSourceAllowed(string value)=>Uri.TryCreate(value,UriKind.Absolute,out var uri)&&Uri.TryCreate(backend.Url,UriKind.Absolute,out var local)&&uri.Scheme==local.Scheme&&uri.Authority==local.Authority&&uri.AbsolutePath is "/" or "/index.html" or "/joint.html" or "/unplanned.html" or "/express.html";
  async void ReceiveCommand(object? sender,CoreWebView2WebMessageReceivedEventArgs e){
   if(!CommandSourceAllowed(e.Source))return;string id="";bool entered=false;
   try{using var doc=JsonDocument.Parse(e.WebMessageAsJson);var m=doc.RootElement;if(!m.TryGetProperty("kind",out var kind)||kind.GetString()!="receiving-command")return;

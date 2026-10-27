@@ -13,18 +13,30 @@
       const result=await response.json();if(!result.ok)throw Error(result.msg||'录像事件失败');if(detail.kind==='tracking')linkFailed=false;
     }).catch(err=>{linkFailed=true;if(window.__nativeVideo)window.__nativeVideo.ready=false;alert('录像联动失败：'+err.message+'。请重新确认物流单，核实录像状态。');});
   });
-  window.NativeReceiptLink={idle:()=>uiQueue,failed:()=>linkFailed};
+  // 改单号：只有“正在录像的就是这张物流单”时才询问。是 → 发普通 tracking，电脑端保存当前片段并按新单号开新片段；
+  // 否 → 当前录像原样继续（不停录、不切段，文件仍按原单号）。后端改号本身不再停录。
+  const renameNeedsConfirm=(video,key)=>!!(video&&video.enabled&&video.active&&!video.test&&key&&video.key===key);
+  const renameQuestion=(from,to)=>'当前正在录像的物流单号已修改：\n'+from+' → '+to+'\n\n是否按新单号重新录制？\n· 是：保存当前片段，按新单号开始新片段\n· 否：当前录像继续，不中断（文件仍按原单号）';
+  async function afterRename(info,ask){
+    const to=String(info?.to||'').trim(),from=String(info?.from||'');
+    if(!to||to===from||!renameNeedsConfirm(window.__nativeVideo,info?.key))return 'none';
+    const yes=await (ask||(text=>window.confirm(text)))(renameQuestion(from,to));
+    if(!yes)return 'continue';
+    window.dispatchEvent(new CustomEvent('native-receipt',{detail:{kind:'tracking',tracking_no:to,key:info.key}}));
+    return 'restart';
+  }
+  window.NativeReceiptLink={idle:()=>uiQueue,failed:()=>linkFailed,renameNeedsConfirm,renameQuestion,afterRename};
   window.fetch=async function(url,opts){
     let commitKey=null,scanAt=null,trackingSubmit=false;
     if(opts&&opts.body&&typeof opts.body==='string'){
       let b;try{b=JSON.parse(opts.body);}catch{}
       if(b){
         const path=new URL(String(url),location.href).pathname,code=b.code||b.sku_code;
-        trackingSubmit=path==='/api/tracking/scan'||(['/api/unplanned/action','/api/joint/action'].includes(path)&&['new','tracking'].includes(b.action)&&!!b.tracking_no);
+        trackingSubmit=path==='/api/tracking/scan'||(['/api/unplanned/action','/api/joint/action','/api/express/action'].includes(path)&&['new','tracking'].includes(b.action)&&!!b.tracking_no);
         if(trackingSubmit&&window.NativeDesk?.available)await NativeDesk.call('validateTracking',{tracking:b.tracking_no});
         const scan=/\/api\/item\/(scan|resolve|choose)(?:[?#]|$)/.test(path)||['scan','resolve'].includes(b.action);
         const resolve=/\/api\/item\/resolve(?:[?#]|$)/.test(path)||b.action==='resolve'||b.peek||b.qty===0;
-        const source=path.includes('/unplanned/')?'无采购单':path.includes('/joint/')?'联合':'普通';
+        const source=path.includes('/unplanned/')?'无采购单':path.includes('/joint/')?'联合':path.includes('/express/')?'快递单':'普通';
         if(code&&scan){
           const key=source+':'+b.sid+':'+b.batch_id+':'+code;
           // Resolve is a fresh scan, even after cancellation. Confirmation/retry

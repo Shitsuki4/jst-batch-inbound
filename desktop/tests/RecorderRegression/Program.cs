@@ -74,6 +74,17 @@ try{
   await using(var r=New("stalled")){await r.StartAsync("TEST-STALL","isolated");await Pump(r,10);Check(!r.Active&&r.Current!.State=="interrupted"&&r.Status.Contains("8秒"),"超过8秒无帧仍触发保护且标记中断",r.Status);}
   await using(var r=New("disk-stalled")){await r.StartAsync("TEST-DISK","isolated");await Pump(r,17);Check(!r.Active&&r.Current!.State=="interrupted"&&r.Status.Contains("15秒"),"超过15秒文件不增长仍触发保护且标记中断",r.Status);}
   await using(var r=New("startup-error")){bool failed=false;try{await r.StartAsync("TEST-BUSY","isolated");}catch{failed=true;}Check(failed&&!r.Active,"启动失败可见且释放进程");}
+  await using(var r=New("segment-limit")){
+   // 单段大小上限（测试用字节数）：到达后上一段按正常结束收尾写索引，同一物流单自动续录新段，不停录。
+   r.MaxSegmentBytes=3000;await r.StartAsync("TEST-LIMIT","isolated");var first=r.Current!;await Pump(r,8);
+   Check(r.Active&&r.Ready&&r.Current!.Id!=first.Id&&r.Current.Tracking=="TEST-LIMIT"&&r.Current.BatchKey=="isolated"&&r.Rollovers>=1,"达到单段大小上限自动收尾并为同一物流续录新段",new{r.Status,r.Rollovers});
+   var saved=ArchiveLayout.Read(r.DirectoryPath,first.File+".json");
+   Check(saved.State=="saved"&&saved.Reason.Contains("大小上限"),"上限分段的上一段与手动结束同样正常收尾并写入索引",new{saved.State,saved.Reason});
+   Check(r.Diagnostics.Contains("本单自动分段"),"诊断显示单段上限与自动分段次数");
+   await r.StopAsync();Check(!r.Active&&r.Current!.State=="saved","上限续录段可正常结束");
+   r.MaxSegmentBytes=0;await r.StartAsync("TEST-NOLIMIT","isolated");var only=r.Current!.Id;await Pump(r,4);
+   Check(r.Active&&r.Current!.Id==only&&r.Rollovers==0,"上限为0时不自动分段");await r.StopAsync();
+  }
  }
  await File.WriteAllTextAsync(Path.Combine(dir,"result.json"),JsonSerializer.Serialize(new{ok=true,baseline,checks},Recorder.JsonOptions));Console.WriteLine(JsonSerializer.Serialize(new{ok=true,baseline,checks},Recorder.JsonOptions));return 0;
 }catch(Exception ex){await File.WriteAllTextAsync(Path.Combine(dir,"result.json"),JsonSerializer.Serialize(new{ok=false,baseline,checks,error=ex.ToString()},Recorder.JsonOptions));Console.Error.WriteLine(ex);return 1;}

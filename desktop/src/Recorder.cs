@@ -14,6 +14,9 @@ public sealed class Recorder : IAsyncDisposable {
  public string DirectoryPath{get;set;}="";public string Resolution{get;set;}="1280x720";public double FrameRate{get;set;}=30;public string CaptureFormat{get;set;}="auto";
  public bool RequireDiskConfiguration{get;set;}=true;
  public long MinFreeBytes{get;set;} public long WarningFreeBytes{get;set;}
+ // 单段上限（0=不限）：达到后正常收尾当前段（与手动结束同样验证、写索引），并为同一物流单自动续录新段。
+ public long MaxSegmentBytes{get;set;} public double MaxSegmentSeconds{get;set;}
+ public int Rollovers{get;private set;} public string LastRollover{get;private set;}="";
  public Func<string,long> FreeSpace{get;set;}=p=>new DriveInfo(Path.GetPathRoot(Path.GetFullPath(p))!).AvailableFreeSpace;
  public string Warning{get;private set;}="";public string Status{get;private set;}="未录制";
  public VideoSegment? Current=>segment;public bool Active=>proc!=null;
@@ -28,8 +31,9 @@ public sealed class Recorder : IAsyncDisposable {
   DirectoryPath=settings.Directory;Engine=settings.Engine;
   MinFreeBytes=settings.StopGb==null?0:(long)decimal.Ceiling(settings.StopGb.Value*1024*1024*1024);
   WarningFreeBytes=settings.WarningGb==null?0:(long)decimal.Ceiling(settings.WarningGb.Value*1024*1024*1024);Warning="";
+  var limits=settings.Copy();limits.NormalizeLegacySegmentSize();MaxSegmentBytes=UserSettings.SegmentBytes(limits.MaxSegmentGb);MaxSegmentSeconds=settings.MaxSegmentMinutes*60.0;
  }
- public string Diagnostics {get {string tail;lock(errorLock)tail=string.Join(Environment.NewLine,recentErrors);return $"版本：4.1.1\n状态：{Status}\n提醒：{Warning}\n相机：{Camera}\n请求：{Resolution} / {FrameRate}fps / {CaptureFormat}\n实际：{segment?.EffectiveMode}\n磁盘阈值：{options.WarningGb?.ToString()??"未配置"} GB 预警 / {options.StopGb?.ToString()??"未配置"} GB 停止\n退出码：{segment?.ExitCode?.ToString()??"未退出/未知"}\n原因：{segment?.Reason}\n录像：{segment?.File}\n日志：{(segment==null?"尚未开始":segment.File+".log")}\n\n录像进程最近输出：\n{(string.IsNullOrWhiteSpace(tail)?"（无错误输出）":tail)}";}}
+ public string Diagnostics {get {string tail;lock(errorLock)tail=string.Join(Environment.NewLine,recentErrors);return $"版本：4.1.1\n状态：{Status}\n提醒：{Warning}\n相机：{Camera}\n请求：{Resolution} / {FrameRate}fps / {CaptureFormat}\n实际：{segment?.EffectiveMode}\n磁盘阈值：{options.WarningGb?.ToString()??"未配置"} GB 预警 / {options.StopGb?.ToString()??"未配置"} GB 停止\n单段上限：{LimitText(MaxSegmentBytes,MaxSegmentSeconds)}；本单自动分段 {Rollovers} 次{(LastRollover==""?"":"（最近："+LastRollover+"）")}\n退出码：{segment?.ExitCode?.ToString()??"未退出/未知"}\n原因：{segment?.Reason}\n录像：{segment?.File}\n日志：{(segment==null?"尚未开始":segment.File+".log")}\n\n录像进程最近输出：\n{(string.IsNullOrWhiteSpace(tail)?"（无错误输出）":tail)}";}}
  string ErrorTail(){lock(errorLock)return string.Join(Environment.NewLine,recentErrors);}
  public static ProcessStartInfo StartInfo(string exe,IEnumerable<string> args,string? dir=null){var s=new ProcessStartInfo(exe){UseShellExecute=false,CreateNoWindow=true,RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true,StandardErrorEncoding=Encoding.UTF8};foreach(var a in args)s.ArgumentList.Add(a);if(dir!=null)s.WorkingDirectory=dir;return s;}
  public static async Task<(int Code,string Out,string Err)> Run(string exe,IEnumerable<string> args,int seconds=20){using var p=Process.Start(StartInfo(exe,args))??throw new Exception("进程启动失败");var o=p.StandardOutput.ReadToEndAsync();var e=p.StandardError.ReadToEndAsync();try{await p.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(seconds));}catch{if(!p.HasExited)p.Kill(true);throw;}return(p.ExitCode,await o,await e);}
@@ -41,7 +45,11 @@ public sealed class Recorder : IAsyncDisposable {
  public Task StartAsync(string tracking,string key)=>StartAsync(tracking,key,null);
  public async Task StartAsync(string tracking,string key,VideoContext? context){await gate.WaitAsync();try{
   if(proc!=null&&segment?.BatchKey==key&&segment.Tracking==tracking&&!proc.HasExited){Sound("duplicate");return;}
-  await StopCore("换物流单");options.ValidateTracking(tracking);
+  Rollovers=0;LastRollover="";await StartCore(tracking,key,context,"换物流单");
+ }finally{gate.Release();}}
+ // Caller holds the gate. Shared by StartAsync and the segment-limit rollover in HealthAsync.
+ async Task StartCore(string tracking,string key,VideoContext? context,string stopReason){try{
+  await StopCore(stopReason);options.ValidateTracking(tracking);
   if(!DiskConfigured)throw new InvalidOperationException("请先在设置 → 视频举证中填写磁盘预警和停止GB，满足预警 > 停止 > 0");
   Directory.CreateDirectory(ArchiveLayout.Checked(DirectoryPath,DirectoryPath,true));
   var available=FreeSpace(DirectoryPath);if(available<=MinFreeBytes)throw new IOException("磁盘剩余空间已达到停止阈值，未开始录像；请在设置中核对阈值或手动清理");
@@ -82,7 +90,24 @@ public sealed class Recorder : IAsyncDisposable {
   if(proc!=null)await StopCore("启动失败："+ex.Message,true);
   else if(segment?.State=="starting"){segment.State="interrupted";segment.Reason="启动失败："+ex.Message;segment.EndAt=DateTimeOffset.Now;Persist();}
   Notify("未就绪："+ex.Message);Sound("error");CleanupOverlay();throw;
- }finally{gate.Release();}}
+ }}
+ public static string LimitText(long maxBytes,double maxSeconds)=>maxBytes<=0&&maxSeconds<=0?"不限":string.Join(" / ",new[]{maxSeconds>0?$"{maxSeconds/60:0.##} 分钟":"",maxBytes>0?SizeText(maxBytes):""}.Where(x=>x!=""))+"（先到先分段）";
+ // 单段大小统一按 GB 显示（1 GB = 1024 MB）；不足 0.01 GB 的旧 MB 配置保留更多位小数，避免显示成 0 GB。
+ public static string SizeText(long bytes){var gb=bytes/1073741824m;return (gb>=0.01m?decimal.Round(gb,2):decimal.Round(gb,6)).ToString("0.######",System.Globalization.CultureInfo.InvariantCulture)+" GB";}
+ // Pure decision used by HealthAsync; "" means keep recording. 0 or less disables a limit.
+ public static string SegmentLimitReason(long maxBytes,double maxSeconds,long bytes,double seconds){
+  if(maxSeconds>0&&seconds>=maxSeconds)return $"时长上限 {maxSeconds/60:0.##} 分钟";
+  if(maxBytes>0&&bytes>=maxBytes)return $"大小上限 {SizeText(maxBytes)}";
+  return "";
+ }
+ // Caller holds the gate: finalize the current segment exactly like a normal stop, then start the next one for the same tracking/key.
+ async Task RolloverCore(string limit){
+  var previous=segment!;var tracking=previous.Tracking;var key=previous.BatchKey;var context=liveContext.Copy();
+  try{await StartCore(tracking,key,context,"达到单段"+limit+"，已正常收尾并自动续录新段");}
+  catch(Exception ex){LastRollover=$"{DateTimeOffset.Now:HH:mm:ss} {limit}，续录失败";Notify("已达单段"+limit+"："+(previous.State=="saved"?"上一段已保存":"上一段异常，请核对文件")+"，但自动续录新段失败："+ex.Message+"；请重新确认物流单或点“继续本单新一段”");return;}
+  Rollovers++;LastRollover=$"{DateTimeOffset.Now:HH:mm:ss} {limit}";
+  Notify($"正在录制 · 已达单段{limit}，自动续录第 {Rollovers+1} 段（上一段{(previous.State=="saved"?"已保存":"异常，请核对文件")}） · {segment?.EffectiveMode}");
+ }
  public async Task UpdateContextAsync(VideoContext context){await gate.WaitAsync();try{if(segment!=null&&segment.BatchKey==context.Key&&File.Exists(ArchiveLayout.Checked(DirectoryPath,segment.File))){liveContext=context.Copy();segment.Context=liveContext.Copy();if(Active){try{await UpdateOverlayAsync();}catch(Exception ex){await StopCore("业务叠字更新失败："+ex.Message,true);Notify("录像已停：叠字更新失败，请复制录像诊断");throw;}}Persist();}}finally{gate.Release();}}
  public async Task RefreshMetadataAsync(string path){await gate.WaitAsync();try{
   if(Active)throw new InvalidOperationException("请先结束录像再刷新文件元数据");
@@ -118,7 +143,7 @@ public sealed class Recorder : IAsyncDisposable {
   void Add(string label,string value){var text=label+Clean(value);if(text.Length>150)text=text[..150]+"…（完整信息见索引）";for(var start=0;start<text.Length;start+=60)lines.Add(text.Substring(start,Math.Min(60,text.Length-start)));}
   if(settings.OverlayTime)Add("时间：",time.ToString("yyyy-MM-dd HH:mm:ss zzz"));
   if(settings.OverlayTracking)Add("物流：",context.Tracking);
-  if(settings.OverlayPurchase)Add("采购：",context.Purchases.Count==0?"无采购单":string.Join(" / ",context.Purchases.Select(p=>p.Po)));
+  if(settings.OverlayPurchase)Add("采购：",context.Source=="快递单"?"快递单登记（不关联采购单）":context.Purchases.Count==0?"无采购单":string.Join(" / ",context.Purchases.Select(p=>p.Po)));
   if(settings.OverlayOuter)Add("外部：",context.Purchases.Count==0?"未关联":string.Join(" / ",context.Purchases.Select(p=>string.IsNullOrWhiteSpace(p.Outer)?"无外部单号":p.Outer)));
   if(settings.OverlaySku)Add("最近商品：",string.IsNullOrEmpty(context.LastSku)?"尚未确认":context.LastSku);
   if(settings.OverlayQuantity)Add("确认数量：",context.ConfirmedQuantity?.ToString("0.########",System.Globalization.CultureInfo.InvariantCulture)??"尚未确认");
@@ -141,6 +166,8 @@ public sealed class Recorder : IAsyncDisposable {
    try{available=FreeSpace(DirectoryPath);}catch(Exception ex){await StopCore("无法检查磁盘剩余空间："+ex.Message,true);Notify("录像已停：磁盘状态不可用，请检查目录");return;}
    if(available<=MinFreeBytes){await StopCore("磁盘剩余达到自定义停止阈值");Notify("已达到磁盘停止阈值；"+(segment.State=="saved"?"本段已保存，停止新录像":"本段异常，请核对文件"));Sound("error");return;}
    UpdateDiskWarning(available);
+   var limit=SegmentLimitReason(MaxSegmentBytes,MaxSegmentSeconds,size,segment.FirstFrameAt is DateTimeOffset first?(DateTimeOffset.Now-first).TotalSeconds:0);
+   if(limit!=""){await RolloverCore(limit);return;}
    if(lastOverlay==0||Stopwatch.GetElapsedTime(lastOverlay).TotalSeconds>=1){try{await UpdateOverlayAsync();}catch(Exception ex){await StopCore("业务叠字更新失败："+ex.Message,true);Notify("录像已停：叠字更新失败，请复制录像诊断");}}
   }finally{gate.Release();}
  }

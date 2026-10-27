@@ -85,6 +85,7 @@ from catalog import CatalogDB, CatalogSync, scope_key
 from login_memory import LoginMemory
 from inbound import InboundService, InboundError  # noqa: E402
 from unplanned import UnplannedService
+from express import ExpressService
 import unplanned_hint
 from joint_receipt import JointService
 from codes import enabled_scan_candidates
@@ -968,6 +969,17 @@ class _UnplannedLazy:
 
 UNPLANNED = _UnplannedLazy()
 
+
+class _ExpressLazy:
+    # 快递单登记：独立 express.db，按需创建；不关联采购单（ExpressService 屏蔽全部采购接口）。
+    def __init__(self): self.instance = None
+    def __getattr__(self, name):
+        if self.instance is None:
+            self.instance = ExpressService(os.path.join(DATA, "express.db"), JST, lookup_item_by_code, scan_filter=scan_enabled_candidates, learned=learned_resolve)
+        return getattr(self.instance, name)
+
+EXPRESS = _ExpressLazy()
+
 def unplanned_tracking_hint(session, tracking_no):
     """普通收货扫物流单号时，只读查询「无采购单收货」是否已登记同一单号。
 
@@ -1404,6 +1416,8 @@ class Handler(BaseHTTPRequestHandler):
                     text=q.get('q','');rows=[]
                     if getattr(UNPLANNED,'instance',UNPLANNED) is not None or os.path.exists(os.path.join(DATA,'unplanned.db')):
                         for r in UNPLANNED.history(text):rows.append(dict(source='unplanned',id=r['id'],label=r['input_no'],description='无采购单登记 · '+str(r.get('po_id') or '未补采购单')))
+                    if EXPRESS.instance is not None or os.path.exists(os.path.join(DATA,'express.db')):
+                        for r in EXPRESS.history(text):rows.append(dict(source='express',id=r['id'],label=r['input_no'],description='快递单登记 · '+str(r.get('tracking_count') or 0)+' 个物流单'))
                     if JOINT.instance is not None or os.path.exists(os.path.join(DATA,'joint_receipts.db')):
                         for r in JOINT.history(text):rows.append(dict(source='joint',id=r['id'],label=r['input_no'],description='联合收货 · 母单 '+r['mother']+' · '+','.join(r['po_ids'])))
                     return self._ok(rows=rows)
@@ -1420,6 +1434,17 @@ class Handler(BaseHTTPRequestHandler):
                     if path=='/api/joint/export':return self._send(200,JOINT.export(sid),'text/csv; charset=utf-8',{'Content-Disposition':'attachment; filename=joint-receipt.csv'})
                     return self._fail('接口不存在',code=404)
             except Exception as e:return self._fail(str(e))
+
+        if path.startswith('/api/express/'):
+            try:
+                with state_lock:
+                    sid = int(q.get('sid') or 0)
+                    if path == '/api/express/history': return self._ok(rows=EXPRESS.history(q.get('q',''),q.get('kind','all')))
+                    if path == '/api/express/state': return self._ok(**EXPRESS.state(sid))
+                    if path == '/api/express/export': return self._send(200, EXPRESS.export(sid), 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', {'Content-Disposition':"attachment; filename=express-receipt.xlsx; filename*=UTF-8''"+urllib.parse.quote(EXPRESS.export_name(sid))})
+                    return self._fail('接口不存在', code=404)
+            except Exception as e:
+                return self._fail(str(e))
 
         if path.startswith('/api/unplanned/'):
             try:
@@ -1886,6 +1911,22 @@ class Handler(BaseHTTPRequestHandler):
             b = self._body()
             n = LEARNED.delete(learned_company(), b.get("ids") or [])
             return self._ok(deleted=n, msg="已删除 %d 条学习条码" % n)
+        except Exception as e:
+            return self._fail(str(e))
+
+    def _post_api_express_action(self):
+        try:
+            b = self._body()
+            action = b.get('action')
+            if action == 'new':
+                b.setdefault('owner_co_id', STORE.get_kv('pick_owner', '') or str(JST.coid))
+                b.setdefault('auth_co_id', STORE.get_kv('pick_auth', '') or str(JST.coid))
+            result = EXPRESS.mutate(action, b)
+            if action in ('new', 'context'):
+                CATALOG_SYNC.event.set()
+            if action == 'resolve' and not result.get('candidates'):
+                result['hint'] = '当前货主 / 分仓商品库未匹配到此编码。请核对货主、分仓和条码；在设置中同步该货主商品库，或明确开启缺码实时查询。未登记任何数量。'
+            return self._ok(**result)
         except Exception as e:
             return self._fail(str(e))
 

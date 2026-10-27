@@ -114,6 +114,7 @@
       <button class="tab active i-inbox" data-tab="home" data-group="收货作业">有采购单收货</button>
       <button class="tab i-layers" data-tab="joint" data-group="收货作业">多采购单合并收货</button>
       <button class="tab i-box" data-tab="unplanned" data-group="收货作业">无采购单收货</button>
+      <button class="tab i-box" data-tab="express" data-group="收货作业">快递单登记</button>
       <div class="side-group">单据</div>
       <button class="tab purchase-entry i-clip" data-tab="purchase" data-group="单据"><span class="tab-label">采购单</span> <span class="purchase-badge yellow" hidden></span><span class="purchase-badge red" hidden></span></button>
       <button class="tab i-search" data-tab="query" data-group="单据">记录查询</button>
@@ -144,6 +145,7 @@
   <main id="main">
     <section class="view" data-view="joint"><iframe id="joint-frame" class="receiving-frame" data-receiving-frame title="多采购单合并收货"></iframe></section>
     <section class="view" data-view="unplanned"><iframe id="unplanned-frame" class="receiving-frame" data-receiving-frame title="无采购单收货"></iframe></section>
+    <section class="view" data-view="express"><iframe id="express-frame" class="receiving-frame" data-receiving-frame title="快递单登记"></iframe></section>
     <section class="view" data-view="purchase"><iframe id="purchase-frame" class="embed-frame" title="采购单跟踪工作台"></iframe></section>
     <!-- ---------- 收货 ---------- -->
     <section class="view active" data-view="home">

@@ -742,7 +742,7 @@ public sealed partial class MainWindow : IVideoLibraryHost {
  Task<CoreWebView2Environment> IVideoLibraryHost.WebEnvironment() => webEnvironment.Task;
  async Task<int> IVideoLibraryHost.RefreshAssociations(IReadOnlyList<LibraryItem> items) {
   if (!backend.Alive) return 0;
-  var keys = items.Select(i => i.Segment.Context).Where(c => c.SessionId > 0 && c.BatchId > 0 && c.Source is "普通" or "无采购单" or "联合").Select(c => c.Key).Distinct().ToArray();
+  var keys = items.Select(i => i.Segment.Context).Where(c => c.SessionId > 0 && c.BatchId > 0 && c.Source is "普通" or "无采购单" or "联合" or "快递单").Select(c => c.Key).Distinct().ToArray();
   var contexts = new List<VideoContext>();
   foreach (var batch in keys.Chunk(100)) {
    using var response = await backend.Get("/api/native/contexts?keys=" + Uri.EscapeDataString(string.Join('|', batch)));

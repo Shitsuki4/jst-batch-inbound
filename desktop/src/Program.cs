@@ -64,27 +64,33 @@ public sealed partial class MainWindow:Window {
   timer.Start();if(UiTest.Active)_=UiTest.HttpOnly?AcceptanceHttpUi():UiTest.SettingsOnly?AcceptanceSettingsUi():AcceptanceUi();await PublishVideo();status.Text=settingsLoadFailed?settingsLoadWarning:!settings.DiskConfigured?"自动录像设置已恢复；请先在视频设置保存磁盘预警和停止GB，未配置不能开始录像。":enabled.IsChecked==true?"自动录像已启用，等待确认物流单号。":"自动录像已关闭，已保留本机设置。";
  }
  async Task PublishVideo(){if(web.CoreWebView2==null)return;var payload=JsonSerializer.Serialize(new{enabled=enabled.IsChecked==true,ready=rec.Ready,active=rec.Active,key=rec.Current?.BatchKey??"",tracking=rec.Current?.Tracking??"",test=rec.Current?.BatchKey.StartsWith("TEST-",StringComparison.Ordinal)==true,status=rec.Status,warning=rec.Warning,diskConfigured=settings.DiskConfigured,archiveHint,cleanupHint,settingsWarning=settingsLoadWarning,effectiveMode=rec.Current?.EffectiveMode??"",hotkeyStatus=hotkeys?.Status??"未注册"});await web.CoreWebView2.ExecuteScriptAsync("window.__nativeVideo="+payload+";window.dispatchEvent(new CustomEvent('native:video',{detail:window.__nativeVideo}));");}
+ // 改单号后选“否”继续原片段：商品/数量叠字照常更新，但片段的物流单号（文件名、叠字、索引）保持原单号。
+ VideoContext KeepSegmentTracking(VideoContext context){if(rec.Current==null||rec.Current.Tracking==context.Tracking)return context;var kept=context.Copy();kept.Tracking=rec.Current.Tracking;return kept;}
  async Task Poll(){if(!backend.Alive){if(rec.Active)await rec.StopAsync("业务服务退出");return;}await eventsGate.WaitAsync();try{
   using var d=await backend.Get("/api/native/events?after="+backend.Cursor);failed=0;
   foreach(var e in d.RootElement.GetProperty("events").EnumerateArray()){
    backend.Cursor=e.GetProperty("id").GetInt64();var kind=e.GetProperty("kind").GetString();using var p=JsonDocument.Parse(e.GetProperty("payload").GetString()!);
    if(kind=="stop"){currentTracking="";currentKey="";await rec.StopAsync("结单/退出批次/切换模块");}
    else if(kind=="tracking"){
-    currentTracking=p.RootElement.GetProperty("tracking_no").GetString()!;currentKey=p.RootElement.GetProperty("source").GetString()+":"+p.RootElement.GetProperty("session_id")+":"+p.RootElement.GetProperty("id");
+    var eventTracking=p.RootElement.GetProperty("tracking_no").GetString()!;var eventKey=p.RootElement.GetProperty("source").GetString()+":"+p.RootElement.GetProperty("session_id")+":"+p.RootElement.GetProperty("id");
+    // 改单号（renamed）：只同步当前单号与录像关联索引，不停录、不切段；是否按新单号重新录制由业务界面弹窗询问，选“是”时界面再发普通 tracking 事件切段。
+    var renamed=p.RootElement.TryGetProperty("renamed",out var renamedFlag)&&renamedFlag.ValueKind==JsonValueKind.True;
+    if(!renamed){currentTracking=eventTracking;currentKey=eventKey;}else if(currentKey==eventKey)currentTracking=eventTracking;
     VideoContext context;
     if(p.RootElement.TryGetProperty("context",out var c))context=c.Deserialize<VideoContext>(ArchiveLayout.Json)!;
-    else{using var lookup=await backend.Get("/api/native/context?key="+Uri.EscapeDataString(currentKey));context=lookup.RootElement.GetProperty("context").Deserialize<VideoContext>(ArchiveLayout.Json)!;}
+    else{using var lookup=await backend.Get("/api/native/context?key="+Uri.EscapeDataString(eventKey));context=lookup.RootElement.GetProperty("context").Deserialize<VideoContext>(ArchiveLayout.Json)!;}
     Library.Associate(context);
+    if(renamed)continue;
     if(enabled.IsChecked==true){if(UiTest.SettingsOnly)throw new InvalidOperationException("Settings-only acceptance forbids camera access");if(DateTimeOffset.Now-DateTimeOffset.Parse(e.GetProperty("at").GetString()!)>TimeSpan.FromSeconds(30)){await rec.StopAsync("物流事件过期，请重新扫描确认");status.Text="物流事件延迟超过30秒，未补录过去画面，请重新扫描确认";continue;}await rec.StartAsync(currentTracking,currentKey,context);}
    }
    else if(kind=="item"){
     var context=p.RootElement.GetProperty("context").Deserialize<VideoContext>(ArchiveLayout.Json)!;
-    if(rec.Current?.BatchKey==context.Key){await rec.UpdateContextAsync(context);preview.ProductConfirmed();}
+    if(rec.Current?.BatchKey==context.Key){await rec.UpdateContextAsync(KeepSegmentTracking(context));preview.ProductConfirmed();}
    }
    else if(kind=="association"){
     foreach(var c in p.RootElement.GetProperty("contexts").EnumerateArray()){
      var context=c.Deserialize<VideoContext>(ArchiveLayout.Json)!;Library.Associate(context);
-     if(rec.Current?.BatchKey==context.Key)await rec.UpdateContextAsync(context);
+     if(rec.Current?.BatchKey==context.Key)await rec.UpdateContextAsync(KeepSegmentTracking(context));
     }
     archiveHint="后补采购关联已更新；旧录像原位保留，请停录后在录像索引预览并确认归档。";
    }

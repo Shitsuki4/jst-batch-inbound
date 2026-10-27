@@ -72,6 +72,9 @@ public static class CoreChecks {
   overlay.OverlaySku=false;overlay.OverlayQuantity=false;Check(!Recorder.OverlayText(overlay,context,at).Contains("SKU-A")&&!Recorder.OverlayText(overlay,context,at).Contains("数量"),"独立关闭商品/数量叠字");
   Check(text!=Recorder.OverlayText(new UserSettings{OverlayPurchase=true,OverlayOuter=true,OverlaySku=true,OverlayQuantity=true},context,at.AddSeconds(1)),"叠字时间可逐秒更新");
   var unplanned=new VideoContext{Source="无采购单",SessionId=77,BatchId=78,Tracking="NOPO1"};
+  var expressCtx=new VideoContext{Source="快递单",SessionId=88,BatchId=89,Tracking="KD-EXPRESS-1"};
+  Check(ArchiveLayout.Folder(root,expressCtx,at).Contains("快递单_登记88")&&!ArchiveLayout.Folder(root,expressCtx,at).Contains("无采购单"),"快递单登记录像按独立分组归档（快递单_登记+批次号）");
+  Check(Recorder.OverlayText(new UserSettings{OverlayPurchase=true},expressCtx,at).Contains("快递单登记"),"快递单登记叠字不显示为无采购单");
   var old=ArchiveLayout.Reserve(root,unplanned,unplanned.Key,at.AddDays(-200));File.WriteAllBytes(old.File,new byte[]{1,2,3,4});old.State="saved";old.EndAt=at.AddDays(-199);ArchiveLayout.Write(root,old);
   var library=new VideoLibrary(root);Check(!library.List().Single(x=>x.Id==old.Id).PendingArchive,"无采购录像先在原目录保存");
   var linked=unplanned.Copy();linked.Purchases=new(){new("BACKPO","BACKEXT")};library.Associate(linked);
@@ -115,6 +118,39 @@ public static class CoreChecks {
    Check(File.ReadAllText(index)==invalid,"拒绝无效嵌套关联后原索引原样保留");
    library.List();Check(library.Warnings.Any(w=>w.StartsWith("关联索引读取失败")),"无效关联可见告警，不让空引用中断录像列表");
   }
+  // 单段录像上限：默认0不限制、旧配置兼容、非负校验、保存回读、判定边界。大小按 GB（可两位小数），旧 MB 配置读入后大小不变。
+  var limitConfig=Path.Combine(root,"segment-limit-settings.json");
+  File.WriteAllText(limitConfig,"{\"SchemaVersion\":3,\"WarningGb\":6,\"StopGb\":2}");
+  var noLimit=UserSettings.Read(limitConfig);
+  Check(noLimit.MaxSegmentMinutes==0&&noLimit.MaxSegmentGb==0&&new UserSettings().MaxSegmentMinutes==0&&new UserSettings().MaxSegmentGb==0,"旧配置缺失单段上限时默认0（不限制），行为不变");
+  foreach(var (minutes,gb) in new[]{(-1,0m),(0,-1m),(1441,0m),(0,0.001m),(0,1024.01m)}){var bad=new UserSettings{MaxSegmentMinutes=minutes,MaxSegmentGb=gb};Reject(()=>bad.Validate(false,false),"拒绝无效单段上限 "+minutes+"分钟/"+gb+"GB");}
+  foreach(var mb in new[]{-1,5,1048577}){var bad=new UserSettings{MaxSegmentMb=mb};Reject(()=>bad.Validate(false,false),"拒绝无效旧版MB单段上限 "+mb+"MB");}
+  var limited=new UserSettings{WarningGb=6,StopGb=2,MaxSegmentMinutes=30,MaxSegmentGb=1.5m};limited.Validate(false);limited.Write(limitConfig);
+  Check(!File.ReadAllText(limitConfig).Contains("MaxSegmentMb"),"新配置只写 GB，不再写旧 MB 字段");
+  var limitedBack=UserSettings.Read(limitConfig);
+  Check(limitedBack.MaxSegmentMinutes==30&&limitedBack.MaxSegmentGb==1.5m,"单段时长/大小(GB)上限保存后重读保留");
+  using(var scope=new RecorderScope(Path.Combine(root,"limit-recorder"))){scope.Value.Configure(limitedBack,false);Check(scope.Value.MaxSegmentSeconds==1800&&scope.Value.MaxSegmentBytes==1536L*1024*1024&&scope.Value.Diagnostics.Contains("单段上限：30 分钟 / 1.5 GB"),"录像器按GB设置换算单段上限并写入诊断");}
+  // 旧版（PR 测试版）按 MB 保存的配置：读入后换算成 GB，字节数完全一致。
+  foreach(var (mb,gb) in new[]{(2048,2m),(512,0.5m),(10,10m/1024m),(1000,1000m/1024m)}){
+   File.WriteAllText(limitConfig,"{\"SchemaVersion\":3,\"WarningGb\":6,\"StopGb\":2,\"MaxSegmentMinutes\":0,\"MaxSegmentMb\":"+mb+"}");
+   var prior=UserSettings.Read(limitConfig);
+   Check(prior.MaxSegmentGb==gb&&prior.MaxSegmentMb==0&&UserSettings.SegmentBytes(prior.MaxSegmentGb)==mb*1024L*1024L,"旧配置 "+mb+" MB 换算为 GB 后大小不变");
+   using var priorScope=new RecorderScope(Path.Combine(root,"limit-legacy-"+mb));priorScope.Value.Configure(prior,false);
+   Check(priorScope.Value.MaxSegmentBytes==mb*1024L*1024L,"旧配置 "+mb+" MB 录像器字节上限不变");
+   prior.Write(limitConfig);var rewritten=UserSettings.Read(limitConfig);
+   Check(rewritten.MaxSegmentGb==gb&&!File.ReadAllText(limitConfig).Contains("MaxSegmentMb"),"旧 MB 配置重新保存后改为 GB 字段且大小不变");
+  }
+  var legacyUnsaved=new UserSettings{WarningGb=6,StopGb=2,MaxSegmentMb=3072};
+  using(var scope=new RecorderScope(Path.Combine(root,"limit-legacy-direct"))){scope.Value.Configure(legacyUnsaved,false);Check(scope.Value.MaxSegmentBytes==3072L*1024*1024,"未经读取的旧 MB 设置直接配置录像器时仍按原大小");}
+  File.WriteAllText(limitConfig,"{\"SchemaVersion\":3,\"WarningGb\":6,\"StopGb\":2,\"MaxSegmentMb\":4096,\"MaxSegmentGb\":1.25}");
+  Check(UserSettings.Read(limitConfig).MaxSegmentGb==1.25m,"同时存在新旧字段时以 GB 为准");
+  using(var draft=JsonDocument.Parse("{\"maxSegmentMinutes\":15,\"maxSegmentGb\":0}"))Check(UserSettings.FromWeb(webSettings,draft.RootElement).MaxSegmentMinutes==15,"网页可修改单段时长上限");
+  foreach(var (raw,gb) in new[]{("0.5",0.5m),("1.5",1.5m),("2",2m),("0.25",0.25m),("\"0.75\"",0.75m),("0",0m)}){using var draft=JsonDocument.Parse("{\"maxSegmentGb\":"+raw+"}");Check(UserSettings.FromWeb(webSettings,draft.RootElement).MaxSegmentGb==gb,"网页单段大小可填 "+raw+" GB");}
+  foreach(var bad in new[]{"{\"maxSegmentMinutes\":1.5}","{\"maxSegmentGb\":-1}","{\"maxSegmentGb\":0.125}","{\"maxSegmentGb\":0.001}","{\"maxSegmentGb\":1025}","{\"maxSegmentGb\":\"abc\"}","{\"maxSegmentMinutes\":null}","{\"maxSegmentMb\":2048}"}){using var draft=JsonDocument.Parse(bad);Reject(()=>UserSettings.FromWeb(webSettings,draft.RootElement),"网页单段上限非法值被拒绝："+bad);}
+  Check(Recorder.SegmentLimitReason(0,0,long.MaxValue,1e9)==""&&Recorder.LimitText(0,0)=="不限","上限填0不限制");
+  Check(Recorder.SegmentLimitReason(0,1800,long.MaxValue,1799.9)==""&&Recorder.SegmentLimitReason(0,1800,1,1800).Contains("时长上限 30 分钟"),"达到时长上限才分段");
+  Check(Recorder.SegmentLimitReason(2048L*1024*1024,0,2048L*1024*1024-1,1e9)==""&&Recorder.SegmentLimitReason(2048L*1024*1024,0,2048L*1024*1024,1).Contains("大小上限 2 GB"),"达到大小上限才分段（按GB显示）");
+  Check(Recorder.LimitText(UserSettings.SegmentBytes(0.5m),0)=="0.5 GB（先到先分段）"&&Recorder.SizeText(10L*1024*1024)=="0.009766 GB","上限文字按GB显示");
   return passed;
  }
  sealed class RecorderScope : IDisposable {

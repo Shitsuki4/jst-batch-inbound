@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>快递单登记 · 扫码入库</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/purchase-pairs.css">
+<link rel="stylesheet" href="/receiving-workspace.css">
+<link rel="stylesheet" href="/barcode-learn.css">
+<link rel="stylesheet" href="/ui-tokens.css">
+<link rel="stylesheet" href="/desk.css">
+<link rel="stylesheet" href="/desk-ui.css">
+<link rel="icon" href="/app-icon.svg">
+<script src="/barcode-learn.js"></script>
+<script src="/receiving-embed.js">
+</script>
+<script src="/native-receipt.js">
+</script>
+</head>
+<body data-desk="express">
+<header class="desk-brand">
+<div>
+<img src="/app-icon.svg" alt="">
+<div>
+<strong>扫码入库</strong>
+<small>聚水潭收货助手</small>
+</div>
+</div>
+<div>
+<button class="btn btn-sm btn-ghost i-video" data-native-action="preview">监控预览</button>
+<a href="/?view=settings&amp;section=video">视频设置</a>
+<a href="/">账号 / 普通收货</a>
+</div>
+</header>
+<nav class="desk-nav" aria-label="主模块">
+<a class="desk-tab" href="/?view=home">有采购单收货</a>
+<a class="desk-tab" href="/joint.html">多采购单合并收货</a>
+<a class="desk-tab" href="/unplanned.html">无采购单收货</a>
+<a class="desk-tab active" href="/express.html">快递单登记</a>
+<a class="desk-tab" href="/?view=purchase">采购单</a>
+<a class="desk-tab" href="/?view=query">记录查询</a>
+<a class="desk-tab" href="/?view=export">明细导出</a>
+<a class="desk-tab" href="/?view=inventory">库存盘点</a>
+<a class="desk-tab" href="/?view=operations">异常与记录</a>
+<a class="desk-tab" href="/?view=settings">设置</a>
+</nav>
+<div id="message" role="status" aria-live="polite"></div>
+<main>
+<section class="card desk-start" id="start">
+<h2>创建快递单登记批次</h2>
+<p class="muted">不绑定采购单。输入首个物流单号建批次，再扫描商品；每个物流单号的商品明细单独记录，导出时一个物流单号一行（单号 | 扫描时间 | 明细）。</p>
+<div class="bar">
+<input id="first-tracking" class="desk-scan-input" placeholder="请扫描 / 输入第一个物流单号" autocomplete="off" aria-label="首个物流单号">
+<input id="new-note" placeholder="批次备注（可选）">
+<button id="new" class="btn btn-primary">创建登记批次</button>
+</div>
+<div class="desk-context">
+<label>商家 / 货主 <select id="desk-owner" aria-label="收货货主">
+</select>
+</label>
+<label>分仓 <select id="desk-auth" aria-label="收货分仓">
+</select>
+</label>
+<button id="desk-refresh-context" class="btn btn-sm btn-ghost i-refresh" type="button">刷新清单</button>
+<span class="hint" id="desk-context-hint">商品条码、国标码、辅助码与商品编码使用同一扫码栏，按此货主 / 分仓商品库识别。</span>
+</div>
+</section>
+<section class="card desk-history">
+<div class="bar">
+<input id="query" placeholder="批次号 / 备注 / 物流单号" aria-label="按批次查询">
+<button id="search" class="btn">按批次查询</button>
+<input id="tracking-query" placeholder="物流单号（支持模糊查询）" aria-label="按物流单号查询">
+<button id="search-tracking" class="btn">按物流查询</button>
+<button id="close-history" class="btn btn-ghost">关闭结果</button>
+</div>
+<div id="history">
+</div>
+</section>
+<section id="work" hidden>
+<section class="card desk-status">
+<div>
+<h2 id="title">
+</h2>
+<div id="meta">
+</div>
+<p id="lifecycle-status" class="hint"></p>
+<div id="desk-active-context" class="hint">
+</div>
+<button id="desk-repair-context" class="btn btn-sm" type="button">更正空批次货主 / 分仓</button>
+</div>
+<div class="bar">
+<button id="reload" class="btn btn-ghost i-refresh">刷新批次</button>
+<button id="pause-report" class="btn btn-secondary i-pause">暂存并查看本批次汇总</button>
+<button id="close-session" class="btn btn-secondary i-flag">结单并查看汇总</button>
+<button id="delete-session" class="btn btn-danger i-trash">删除整批</button>
+<button id="exit-work" class="btn btn-ghost i-exit">退出批次</button>
+<a id="export" class="button btn btn-sm btn-ghost i-download">导出 Excel（单号 | 扫描时间 | 明细）</a>
+</div>
+<div class="bar">
+<input id="note" data-edit placeholder="批次备注（可选）">
+<button id="save-note" class="btn btn-sm" data-edit>保存备注</button>
+</div>
+</section>
+<section class="card desk-scanner">
+<div class="desk-modes">
+<button type="button" id="desk-mode-tracking" class="active">物流单号 <kbd>F1</kbd>
+</button>
+<button type="button" id="desk-mode-item">商品条码 <kbd>F2</kbd>
+</button>
+<span>先确认物流，再扫商品；数量默认 1，回车确认</span>
+</div>
+<div class="desk-scan-row">
+<input id="tracking" data-edit class="desk-scan-input" placeholder="请扫描物流单号，支持子母件 / 独立单号" autocomplete="off" aria-label="扫描物流单号">
+<input id="code" data-edit class="desk-scan-input" placeholder="请扫描商品 69 码 / 辅助条码 / 商品编码" autocomplete="off" aria-label="扫描商品条码" hidden>
+<button id="scan-tracking" class="btn btn-secondary" data-edit>确认物流</button>
+<button id="scan" class="btn btn-secondary" data-edit hidden>识别商品</button>
+</div>
+<div id="candidates">
+</div>
+<div id="pending" class="desk-pending" hidden>
+<strong id="pending-name">
+</strong>
+<span>本次数量</span>
+<input id="step" data-edit type="number" min="1" max="1000000000" step="1" inputmode="numeric" pattern="[0-9]*" value="1" aria-label="本次数量（整数）">
+<button id="confirm-qty" class="btn btn-primary" data-edit>确认数量并登记 ↵</button>
+<button id="cancel-qty" class="btn btn-ghost">取消 Esc</button>
+</div>
+</section>
+<div class="desk-work-grid">
+<section class="card desk-summary">
+<h2>批次商品汇总 · 全部物流实收</h2>
+<p class="muted">快递单登记不关联采购单，只汇总本批次全部物流单的实收商品和数量。</p>
+<div id="desk-receipt-total" class="desk-current-label">
+</div>
+<div class="bar">
+<label>
+<input id="details" type="checkbox"> 包含各物流单明细</label>
+</div>
+<div id="report" class="scroll">
+</div>
+<div class="bar">
+<button id="copy-text" class="btn btn-sm btn-secondary i-copy">复制本单明细文字</button>
+<button id="copy-all-text" class="btn btn-sm i-copy">复制全部明细文字</button>
+</div>
+<p class="hint">复制和导出的明细里，商品名称中的空格（含全角空格）已去掉，便于 Excel 按空格分列。</p>
+<div id="fallback">
+</div>
+</section>
+<div class="desk-right">
+<section class="card desk-logistics">
+<div class="desk-card-head">
+<h2 id="desk-batches-title">本批次物流单号（0）</h2>
+<span id="desk-package-count">
+</span>
+</div>
+<p class="muted">最新扫描的在最上面；点击已登记物流继续补扫。</p>
+<input id="desk-batch-search" type="search" class="desk-batch-search" placeholder="输入单号筛选 / 定位，回车选中第一条" autocomplete="off" aria-label="搜索本批次物流单号">
+<select id="batches" aria-label="当前物流单" hidden>
+</select>
+<div id="desk-batches" role="list">
+</div>
+<div class="bar">
+<button id="rename" class="btn btn-sm" data-edit>修改单号</button>
+<button id="copy-previous" class="btn btn-sm i-copy" data-edit>复制上一单商品</button>
+<button id="delete-batch" class="btn btn-sm btn-danger i-trash" data-edit>删除此物流单</button>
+</div>
+</section>
+<section class="card desk-current">
+<div class="desk-card-head">
+<h2>当前物流商品</h2>
+<button id="manual" class="btn btn-sm btn-secondary i-plus" data-edit>手动登记商品</button>
+</div>
+<p id="desk-current-tracking" class="desk-current-label">
+</p>
+<p class="muted">双击实收数量修改；已提交数量受原有编辑锁保护。</p>
+<div id="lines" class="scroll">
+</div>
+</section>
+</div>
+</div>
+</section>
+</main>
+<dialog id="editor">
+<form id="edit-form">
+<h2 id="editor-title">编辑商品</h2>
+<label>SKU / 商品编码<input name="sku_id" required maxlength="200">
+</label>
+<label>商品名称<input name="name" required maxlength="300">
+</label>
+<label>条码<input name="sku_code" maxlength="200">
+</label>
+<label>规格<input name="spec" maxlength="300">
+</label>
+<label>实收数量（整数）<input name="qty" type="number" min="0" max="1000000000" step="1" inputmode="numeric" pattern="[0-9]*" required>
+</label>
+<div class="bar">
+<button type="submit" class="btn btn-primary">保存</button>
+<button type="button" id="cancel-edit" class="btn btn-ghost">取消</button>
+</div>
+</form>
+</dialog>
+<dialog id="saved-report-dialog">
+<div class="dialog-head">
+<h2 id="saved-report-heading">实收已暂存 · 继续对单</h2>
+<button id="saved-report-close" class="btn btn-ghost">关闭，稍后对单</button>
+</div>
+<p id="saved-report-note">暂存不结单、不自动建采购单、不确认库存；仅展示已保存的本批次全部实收。</p>
+<div id="saved-report-content" class="scroll">
+</div>
+<button id="saved-report-continue" class="btn btn-primary">继续收货</button>
+</dialog>
+<dialog id="context-editor">
+<form id="context-form">
+<h2>更正空批次商品库范围</h2>
+<p>仅未登记商品、未关联采购单的空批次可以更改。</p>
+<div class="desk-context">
+<label>商家 / 货主 <select id="context-owner" required>
+</select>
+</label>
+<label>分仓 <select id="context-auth" required>
+</select>
+</label>
+</div>
+<div class="bar">
+<button type="submit" class="btn btn-primary">保存范围</button>
+<button id="context-cancel" class="btn btn-ghost" type="button">取消</button>
+</div>
+</form>
+</dialog>
+<script src="/native-shell.js">
+</script>
+<script src="/purchase-pairs.js">
+</script>
+<script src="/unplanned-report.js">
+</script>
+<script src="/product-picker.js">
+</script>
+<script src="/receipt-copy.js"></script><script src="/receipt-lifecycle.js"></script><script src="/receiving-desk.js">
+</script>
+<script src="/desk-ui.js"></script>
+<script src="/unplanned.js">
+</script>
+</body>
+</html>
