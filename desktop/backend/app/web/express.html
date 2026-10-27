@@ -94,7 +94,7 @@
 <button id="close-session" class="btn btn-secondary i-flag">结单并查看汇总</button>
 <button id="delete-session" class="btn btn-danger i-trash">删除整批</button>
 <button id="exit-work" class="btn btn-ghost i-exit">退出批次</button>
-<a id="export" class="button btn btn-sm btn-ghost i-download">导出 CSV（单号 | 扫描时间 | 明细）</a>
+<a id="export" class="button btn btn-sm btn-ghost i-download">导出 Excel（单号 | 扫描时间 | 明细）</a>
 </div>
 <div class="bar">
 <input id="note" data-edit placeholder="批次备注（可选）">
@@ -128,26 +128,33 @@
 </section>
 <div class="desk-work-grid">
 <section class="card desk-summary">
-<h2>当前物流单号收货明细</h2>
-<p class="muted">只显示正在扫描的这张物流单的商品。导出时每个物流单号一行，明细与「复制本单明细文字」相同。</p>
+<h2>批次商品汇总 · 全部物流实收</h2>
+<p class="muted">快递单登记不关联采购单，只汇总本批次全部物流单的实收商品和数量。</p>
 <div id="desk-receipt-total" class="desk-current-label">
+</div>
+<div class="bar">
+<label>
+<input id="details" type="checkbox"> 包含各物流单明细</label>
 </div>
 <div id="report" class="scroll">
 </div>
 <div class="bar">
 <button id="copy-text" class="btn btn-sm btn-secondary i-copy">复制本单明细文字</button>
+<button id="copy-all-text" class="btn btn-sm i-copy">复制全部明细文字</button>
 </div>
+<p class="hint">复制和导出的明细里，商品名称中的空格（含全角空格）已去掉，便于 Excel 按空格分列。</p>
 <div id="fallback">
 </div>
 </section>
 <div class="desk-right">
 <section class="card desk-logistics">
 <div class="desk-card-head">
-<h2>本批次物流单号</h2>
+<h2 id="desk-batches-title">本批次物流单号（0）</h2>
 <span id="desk-package-count">
 </span>
 </div>
-<p class="muted">点击已登记物流继续补扫；不预先分配每包应收商品。</p>
+<p class="muted">最新扫描的在最上面；点击已登记物流继续补扫。</p>
+<input id="desk-batch-search" type="search" class="desk-batch-search" placeholder="输入单号筛选 / 定位，回车选中第一条" autocomplete="off" aria-label="搜索本批次物流单号">
 <select id="batches" aria-label="当前物流单" hidden>
 </select>
 <div id="desk-batches" role="list">

@@ -1441,7 +1441,7 @@ class Handler(BaseHTTPRequestHandler):
                     sid = int(q.get('sid') or 0)
                     if path == '/api/express/history': return self._ok(rows=EXPRESS.history(q.get('q',''),q.get('kind','all')))
                     if path == '/api/express/state': return self._ok(**EXPRESS.state(sid))
-                    if path == '/api/express/export': return self._send(200, EXPRESS.export(sid), 'text/csv; charset=utf-8', {'Content-Disposition':'attachment; filename=express-receipt.csv'})
+                    if path == '/api/express/export': return self._send(200, EXPRESS.export(sid), 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', {'Content-Disposition':"attachment; filename=express-receipt.xlsx; filename*=UTF-8''"+urllib.parse.quote(EXPRESS.export_name(sid))})
                     return self._fail('接口不存在', code=404)
             except Exception as e:
                 return self._fail(str(e))
