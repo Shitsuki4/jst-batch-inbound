@@ -27,6 +27,27 @@ class UnplannedTest(unittest.TestCase):
         self.assertFalse(s['linked']);self.assertEqual(s['total'],20);self.assertEqual(len(s['batches']),2)
         self.assertTrue(all(r['plan'] is None and r['kind']=='neutral' for r in s['rows']))
         self.assertFalse(s['can_create']);self.assertIn('SF001',self.s.export(self.sid).decode('utf-8-sig'))
+    def test_export_has_tracking_scan_time_column(self):
+        import csv, io
+        from unplanned import scan_time_text
+        self.receive()
+        db=self.s.store.db
+        db.execute("UPDATE batch SET first_scan_at='2026-10-17 20:46:53' WHERE tracking_no='SF001'")
+        db.execute("UPDATE batch SET first_scan_at='' WHERE tracking_no='SF002'")  # 旧数据缺扫描时间：退回批次创建时间
+        db.execute("UPDATE session SET started_at='2026-10-16 08:00:01' WHERE id=?",(self.sid,));db.commit()
+        rows=list(csv.reader(io.StringIO(self.s.export(self.sid).decode('utf-8-sig'))))
+        head=rows.index(['物流单号','扫描登记时间','商品编码','名称','规格','实收'])
+        detail=rows[head+1:]
+        self.assertEqual([r[:3] for r in detail],[['SF001','2026/10/17 20:46:53','A'],['SF001','2026/10/17 20:46:53','B'],['SF002','2026/10/16 08:00:01','A']])
+        self.assertEqual(scan_time_text('2026-10-17 20:46:53'),'2026/10/17 20:46:53')
+        self.assertEqual(scan_time_text('','2026-01-02 03:04:05'),'2026/01/02 03:04:05')
+    def test_tracking_scan_time_is_persisted_when_scanned(self):
+        import re
+        bid=self.batch('SCAN-TIME-1')
+        at=self.s.store.db.execute('SELECT first_scan_at FROM batch WHERE id=?',(bid,)).fetchone()[0]
+        self.assertRegex(at,r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$')
+        self.change('rename',tracking_no='SCAN-TIME-2')  # 改单号不改扫描时间
+        self.assertEqual(self.s.store.db.execute('SELECT first_scan_at FROM batch WHERE id=?',(bid,)).fetchone()[0],at)
     def test_repeated_tracking_and_sku_accumulate(self):
         self.batch('T');self.add('A',2);self.add('A',3);self.batch('T')
         s=self.s.state(self.sid);self.assertEqual(len(s['batches']),1);self.assertEqual(s['total'],5)

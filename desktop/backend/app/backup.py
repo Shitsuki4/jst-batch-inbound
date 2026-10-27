@@ -56,7 +56,7 @@ class BackupManager:
             self._create_lock.release()
 
     def _create(self, reason):
-        paths = [self.data / n for n in ("jst.db", "catalog.db", "unplanned.db", "purchase_watch.db", "joint_receipts.db", "learned_codes.db", "operation_log.db") if (self.data / n).is_file()]
+        paths = [self.data / n for n in ("jst.db", "catalog.db", "unplanned.db", "express.db", "purchase_watch.db", "joint_receipts.db", "learned_codes.db", "operation_log.db") if (self.data / n).is_file()]
         if not paths:
             return None
         dest = self.root / (datetime.now().strftime("%Y%m%d-%H%M%S-%f") + "-" + reason)

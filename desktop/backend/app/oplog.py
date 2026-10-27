@@ -63,6 +63,7 @@ CREATE INDEX IF NOT EXISTS ix_op_log_tracking ON op_log(tracking_no);
 MODULES = {
     "receipt": "有采购单收货",
     "unplanned": "无采购单收货",
+    "express": "快递单登记",
     "joint": "联合收货",
     "purchase_watch": "采购单跟踪",
     "inbound": "生成入库单",

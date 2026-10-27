@@ -23,8 +23,10 @@ def migrate(store):
 def emit(s,kind,payload):
  s.STORE.db.execute('INSERT INTO native_event(at,kind,payload) VALUES(?,?,?)',(now(),kind,json.dumps(payload,ensure_ascii=False)));s.STORE.db.commit()
 
+# 特殊收货模块：业务接口 → 录像来源（与 native-receipt.js 的 source 保持一致）。
+DESK_SOURCES={'/api/unplanned/action':'无采购单','/api/joint/action':'联合','/api/express/action':'快递单'}
 def video_store(s,source):
- return {'普通':s.STORE,'无采购单':s.UNPLANNED.store,'联合':s.JOINT.store}[source]
+ return {'普通':s.STORE,'无采购单':s.UNPLANNED.store,'联合':s.JOINT.store,'快递单':s.EXPRESS.store}[source]
 def video_context(s,source,sid,bid):
  """Authoritative local context; no caller-supplied path, purchase or quantity."""
  store=video_store(s,source);d=store.db;sid=int(sid);bid=int(bid)
@@ -72,7 +74,7 @@ def renamed_batch(s,p,b):
    row=s.STORE.db.execute('SELECT session_id FROM batch WHERE id=?',(bid,)).fetchone()
    return ('普通',int(row['session_id']),bid) if row else None
   sid=int(b.get('sid') or 0)
-  return ('联合' if p=='/api/joint/action' else '无采购单',sid,bid) if sid and bid else None
+  return (DESK_SOURCES.get(p,'无采购单'),sid,bid) if sid and bid else None
  except (TypeError,ValueError):return None
 
 def on_rename(s,p,b):
@@ -135,7 +137,11 @@ def export_store(store,q):
  return {'columns':cols,'rows':rows,'count':len(rows),'note':'时间范围按流水确认/修改时间；汇总数量为当前累计，并非范围内增量。旧版6列仍在原导出页。'}
 def export_data(s,q):
  out=None
- for label,store in [('普通',s.STORE),('无采购单',s.UNPLANNED.store),('联合',s.JOINT.store)]:
+ stores=[('普通',s.STORE),('无采购单',s.UNPLANNED.store),('联合',s.JOINT.store)]
+ # 快递单登记：只在已使用过（库已存在）时纳入，避免导出时凭空创建 express.db。
+ ex=getattr(s,'EXPRESS',None)
+ if ex is not None and (getattr(ex,'instance',None) is not None or os.path.exists(os.path.join(getattr(s,'DATA',''),'express.db'))):stores.append(('快递单',ex.store))
+ for label,store in stores:
   r=export_store(store,q)
   if out is None:out={'columns':r['columns']+['收货来源'],'rows':[],'note':r['note']}
   for row in r['rows']:out['rows'].append(row+[label])
@@ -171,25 +177,25 @@ def install(s):
     # confirm_required (无采购单提示待确认) 未建子批次：不发录像事件。
     if p=='/api/tracking/scan' and kw.get('batch'):
      batch=kw['batch'];emit_tracking(s,'普通',batch['session_id'],batch['id'],not kw.get('created',True))
-    if p in ('/api/unplanned/action','/api/joint/action') and a in ('new','tracking') and kw.get('current_batch'):
-     emit_tracking(s,'联合' if p=='/api/joint/action' else '无采购单',kw['session']['id'],kw['current_batch'])
+    if p in DESK_SOURCES and a in ('new','tracking') and kw.get('current_batch'):
+     emit_tracking(s,DESK_SOURCES[p],kw['session']['id'],kw['current_batch'])
     if p=='/api/unplanned/action' and a in ('match','refresh') and kw.get('session'):
      sid=kw['session']['id']
      contexts=[video_context(s,'无采购单',sid,row['id']) for row in kw.get('batches',[])]
      emit(s,'association',{'contexts':contexts})
     marker=getattr(h,'_video_audit',None)
-    item_action=p.startswith('/api/item/') or p in ('/api/line/set','/api/line/del','/api/line/edit') or (p in ('/api/batch/copy','/api/unplanned/action','/api/joint/action') and a in ('copy_previous','scan','manual','edit','delete_line'))
+    item_action=p.startswith('/api/item/') or p in ('/api/line/set','/api/line/del','/api/line/edit') or ((p=='/api/batch/copy' or p in DESK_SOURCES) and a in ('copy_previous','scan','manual','edit','delete_line'))
     if marker and item_action and not kw.get('selection_required'):
      source,before=marker;d=video_store(s,source).db
      lock=getattr(s,'STATE_LOCK',None);excl,params=lock.audit_exclusion(d) if lock is not None else ('',[])
      # 远程调用期间锁被临时释放：别的请求写入的流水不驱动本请求的录像 item 事件。
      rows=d.execute('SELECT sid,bid,MAX(id) last_id FROM scan_audit WHERE id>?'+excl+' GROUP BY sid,bid ORDER BY last_id',[before]+params).fetchall()
      for row in rows:emit(s,'item',{'context':video_context(s,source,row['sid'],row['bid'])})
-    if p=='/api/batch/rename' or (p in ('/api/unplanned/action','/api/joint/action') and a=='rename'):on_rename(s,p,b)
-    if p=='/api/batch/del' or (p in ('/api/unplanned/action','/api/joint/action') and a=='delete_batch'):emit(s,'stop',{'reason':'物流记录修改，请重新确认物流'})
+    if p=='/api/batch/rename' or (p in DESK_SOURCES and a=='rename'):on_rename(s,p,b)
+    if p=='/api/batch/del' or (p in DESK_SOURCES and a=='delete_batch'):emit(s,'stop',{'reason':'物流记录修改，请重新确认物流'})
     if p in ('/api/session/pause','/api/session/pause-report','/api/session/close','/api/logout'):emit(s,'stop',{'reason':p})
     if p=='/api/session/del' and recording_session(s,getattr(h,'_deleted_session',None)):emit(s,'stop',{'reason':'本地收货批次已删除'})
-    if p in ('/api/unplanned/action','/api/joint/action') and a in ('close_session','delete_session'):emit(s,'stop',{'reason':'本地收货批次已结单 / 删除'})
+    if p in DESK_SOURCES and a in ('close_session','delete_session'):emit(s,'stop',{'reason':'本地收货批次已结单 / 删除'})
    except Exception as e:
     # A committed business write must not be reported as failed (a retry could double-count).
     kw['native_warning']='收货结果已保留，但录像关联失败，请先停录并核对：'+str(e)
@@ -231,7 +237,7 @@ def install(s):
      if b.get('kind')=='stop':emit(s,'stop',{'reason':'退出/切换批次'})
      elif b.get('kind')=='tracking':
       source,sid,bid=str(b.get('key','')).split(':');sid=int(sid);bid=int(bid)
-      store={'普通':s.STORE,'无采购单':s.UNPLANNED.store,'联合':s.JOINT.store}[source]
+      store=video_store(s,source)
       row=store.db.execute('SELECT id,session_id,tracking_no FROM batch WHERE id=? AND session_id=?',(bid,sid)).fetchone()
       if not row:raise ValueError('所选物流不存在')
       emit_tracking(s,source,sid,bid)
@@ -248,11 +254,11 @@ def install(s):
   return oldpost(h)
  H._body=body;H._ok=ok;H.do_GET=get;H.do_POST=post
 
- for route in ('item_scan','item_choose','item_resolve','line_set','line_del','line_edit','batch_copy','unplanned_action','joint_action'):
+ for route in ('item_scan','item_choose','item_resolve','line_set','line_del','line_edit','batch_copy','unplanned_action','joint_action','express_action'):
   name='_post_api_'+route;original=getattr(H,name,None)
   if original is None:continue
   def tracked(h,_original=original,_route=route):
-   source='无采购单' if _route=='unplanned_action' else '联合' if _route=='joint_action' else '普通'
+   source={'unplanned_action':'无采购单','joint_action':'联合','express_action':'快递单'}.get(_route,'普通')
    store=video_store(s,source)
    h._video_audit=(source,store.db.execute('SELECT COALESCE(MAX(id),0) FROM scan_audit').fetchone()[0])
    try:return _original(h)

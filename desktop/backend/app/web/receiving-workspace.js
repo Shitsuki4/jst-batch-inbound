@@ -1,9 +1,9 @@
 /* Keep each receiving mode inside the same application shell and retain its work. */
 (function () {
   'use strict';
-  const modes = ['joint', 'unplanned'];
+  const modes = ['joint', 'unplanned', 'express'];
   const summaries = {}, requested = {};
-  const labels = {joint: '多采购单合并收货', unplanned: '无采购单收货'};
+  const labels = {joint: '多采购单合并收货', unplanned: '无采购单收货', express: '快递单登记'};
   const frames = () => [...document.querySelectorAll('iframe[data-receiving-frame]')];
   function updateStatus(name, state) {
     summaries[name] = labels[name] + (state ? ' · ' + state.session.input_no + ' · ' + state.batches.length + ' 个物流单 / 实收 ' + state.total + ' 件' : ' · 尚未创建批次');

@@ -1570,7 +1570,7 @@
         }).join('') + '</tr>'; }).join('') + '</tbody></table></details>';
   }
 
-  function extraHistoryHTML(rows){return (rows||[]).map(function(r){return '<div class="q-block"><strong>'+esc(r.label)+'</strong><p>'+esc(r.description)+'</p><a class="btn btn-primary" href="/'+(r.source==='joint'?'joint':'unplanned')+'.html?sid='+Number(r.id)+'">查看明细 / 继续收货'+(r.source==='joint'?' / 汇总对单':'')+'</a></div>';}).join('');}
+  function extraHistoryHTML(rows){return (rows||[]).map(function(r){return '<div class="q-block"><strong>'+esc(r.label)+'</strong><p>'+esc(r.description)+'</p><a class="btn btn-primary" href="/'+(r.source==='joint'?'joint':r.source==='express'?'express':'unplanned')+'.html?sid='+Number(r.id)+'">查看明细 / 继续收货'+(r.source==='joint'?' / 汇总对单':'')+'</a></div>';}).join('');}
   function runPoQuery() {
     if(document.querySelector('.qty-saving,.qty-save-error,.qty-unsaved'))return toast('请先保存当前数量，失败时可按Enter重试','warn');
     lastQ = 'po';

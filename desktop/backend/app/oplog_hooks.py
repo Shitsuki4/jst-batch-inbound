@@ -57,6 +57,8 @@ def source_of(app, path):
         return "unplanned", app.UNPLANNED.store
     if path == "/api/joint/action":
         return "joint", app.JOINT.store
+    if path == "/api/express/action":
+        return "express", app.EXPRESS.store
     if path in RECEIPT_PATHS:
         return "receipt", app.STORE
     return None, None
@@ -502,9 +504,10 @@ def build(app, path, body, resp, ctx):
         st = resp.get("stat") if isinstance(resp.get("stat"), dict) else {}
         recs.append(_base(ctx, module, "session_delete", summary="删除收货单" + (
             "（%s 个子批次 / %s 条明细）" % (st.get("batches"), st.get("lines")) if st else "")))
-    elif path in ("/api/unplanned/action", "/api/joint/action"):
+    elif path in ("/api/unplanned/action", "/api/joint/action", "/api/express/action"):
         if action == "new":
-            label = "新建无采购单收货批次" if source == "unplanned" else "新建联合收货批次（母单 %s）" % str(b.get("mother") or "")[:60]
+            label = ("新建无采购单收货批次" if source == "unplanned" else "新建快递单登记批次" if source == "express"
+                     else "新建联合收货批次（母单 %s）" % str(b.get("mother") or "")[:60])
             recs.append(_base(ctx, module, "session_create", tracking_no=str(b.get("tracking_no") or ""), summary=label))
             if b.get("tracking_no"):
                 recs.append(tracking_rec(True))

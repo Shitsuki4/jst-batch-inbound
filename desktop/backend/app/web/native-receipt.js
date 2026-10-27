@@ -32,11 +32,11 @@
       let b;try{b=JSON.parse(opts.body);}catch{}
       if(b){
         const path=new URL(String(url),location.href).pathname,code=b.code||b.sku_code;
-        trackingSubmit=path==='/api/tracking/scan'||(['/api/unplanned/action','/api/joint/action'].includes(path)&&['new','tracking'].includes(b.action)&&!!b.tracking_no);
+        trackingSubmit=path==='/api/tracking/scan'||(['/api/unplanned/action','/api/joint/action','/api/express/action'].includes(path)&&['new','tracking'].includes(b.action)&&!!b.tracking_no);
         if(trackingSubmit&&window.NativeDesk?.available)await NativeDesk.call('validateTracking',{tracking:b.tracking_no});
         const scan=/\/api\/item\/(scan|resolve|choose)(?:[?#]|$)/.test(path)||['scan','resolve'].includes(b.action);
         const resolve=/\/api\/item\/resolve(?:[?#]|$)/.test(path)||b.action==='resolve'||b.peek||b.qty===0;
-        const source=path.includes('/unplanned/')?'无采购单':path.includes('/joint/')?'联合':'普通';
+        const source=path.includes('/unplanned/')?'无采购单':path.includes('/joint/')?'联合':path.includes('/express/')?'快递单':'普通';
         if(code&&scan){
           const key=source+':'+b.sid+':'+b.batch_id+':'+code;
           // Resolve is a fresh scan, even after cancellation. Confirmation/retry

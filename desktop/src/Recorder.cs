@@ -31,7 +31,7 @@ public sealed class Recorder : IAsyncDisposable {
   DirectoryPath=settings.Directory;Engine=settings.Engine;
   MinFreeBytes=settings.StopGb==null?0:(long)decimal.Ceiling(settings.StopGb.Value*1024*1024*1024);
   WarningFreeBytes=settings.WarningGb==null?0:(long)decimal.Ceiling(settings.WarningGb.Value*1024*1024*1024);Warning="";
-  MaxSegmentBytes=settings.MaxSegmentMb*1024L*1024L;MaxSegmentSeconds=settings.MaxSegmentMinutes*60.0;
+  var limits=settings.Copy();limits.NormalizeLegacySegmentSize();MaxSegmentBytes=UserSettings.SegmentBytes(limits.MaxSegmentGb);MaxSegmentSeconds=settings.MaxSegmentMinutes*60.0;
  }
  public string Diagnostics {get {string tail;lock(errorLock)tail=string.Join(Environment.NewLine,recentErrors);return $"版本：4.1.1\n状态：{Status}\n提醒：{Warning}\n相机：{Camera}\n请求：{Resolution} / {FrameRate}fps / {CaptureFormat}\n实际：{segment?.EffectiveMode}\n磁盘阈值：{options.WarningGb?.ToString()??"未配置"} GB 预警 / {options.StopGb?.ToString()??"未配置"} GB 停止\n单段上限：{LimitText(MaxSegmentBytes,MaxSegmentSeconds)}；本单自动分段 {Rollovers} 次{(LastRollover==""?"":"（最近："+LastRollover+"）")}\n退出码：{segment?.ExitCode?.ToString()??"未退出/未知"}\n原因：{segment?.Reason}\n录像：{segment?.File}\n日志：{(segment==null?"尚未开始":segment.File+".log")}\n\n录像进程最近输出：\n{(string.IsNullOrWhiteSpace(tail)?"（无错误输出）":tail)}";}}
  string ErrorTail(){lock(errorLock)return string.Join(Environment.NewLine,recentErrors);}
@@ -91,11 +91,13 @@ public sealed class Recorder : IAsyncDisposable {
   else if(segment?.State=="starting"){segment.State="interrupted";segment.Reason="启动失败："+ex.Message;segment.EndAt=DateTimeOffset.Now;Persist();}
   Notify("未就绪："+ex.Message);Sound("error");CleanupOverlay();throw;
  }}
- public static string LimitText(long maxBytes,double maxSeconds)=>maxBytes<=0&&maxSeconds<=0?"不限":string.Join(" / ",new[]{maxSeconds>0?$"{maxSeconds/60:0.##} 分钟":"",maxBytes>0?$"{maxBytes/1024d/1024d:0.##} MB":""}.Where(x=>x!=""))+"（先到先分段）";
+ public static string LimitText(long maxBytes,double maxSeconds)=>maxBytes<=0&&maxSeconds<=0?"不限":string.Join(" / ",new[]{maxSeconds>0?$"{maxSeconds/60:0.##} 分钟":"",maxBytes>0?SizeText(maxBytes):""}.Where(x=>x!=""))+"（先到先分段）";
+ // 单段大小统一按 GB 显示（1 GB = 1024 MB）；不足 0.01 GB 的旧 MB 配置保留更多位小数，避免显示成 0 GB。
+ public static string SizeText(long bytes){var gb=bytes/1073741824m;return (gb>=0.01m?decimal.Round(gb,2):decimal.Round(gb,6)).ToString("0.######",System.Globalization.CultureInfo.InvariantCulture)+" GB";}
  // Pure decision used by HealthAsync; "" means keep recording. 0 or less disables a limit.
  public static string SegmentLimitReason(long maxBytes,double maxSeconds,long bytes,double seconds){
   if(maxSeconds>0&&seconds>=maxSeconds)return $"时长上限 {maxSeconds/60:0.##} 分钟";
-  if(maxBytes>0&&bytes>=maxBytes)return $"大小上限 {maxBytes/1024d/1024d:0.##} MB";
+  if(maxBytes>0&&bytes>=maxBytes)return $"大小上限 {SizeText(maxBytes)}";
   return "";
  }
  // Caller holds the gate: finalize the current segment exactly like a normal stop, then start the next one for the same tracking/key.
@@ -141,7 +143,7 @@ public sealed class Recorder : IAsyncDisposable {
   void Add(string label,string value){var text=label+Clean(value);if(text.Length>150)text=text[..150]+"…（完整信息见索引）";for(var start=0;start<text.Length;start+=60)lines.Add(text.Substring(start,Math.Min(60,text.Length-start)));}
   if(settings.OverlayTime)Add("时间：",time.ToString("yyyy-MM-dd HH:mm:ss zzz"));
   if(settings.OverlayTracking)Add("物流：",context.Tracking);
-  if(settings.OverlayPurchase)Add("采购：",context.Purchases.Count==0?"无采购单":string.Join(" / ",context.Purchases.Select(p=>p.Po)));
+  if(settings.OverlayPurchase)Add("采购：",context.Source=="快递单"?"快递单登记（不关联采购单）":context.Purchases.Count==0?"无采购单":string.Join(" / ",context.Purchases.Select(p=>p.Po)));
   if(settings.OverlayOuter)Add("外部：",context.Purchases.Count==0?"未关联":string.Join(" / ",context.Purchases.Select(p=>string.IsNullOrWhiteSpace(p.Outer)?"无外部单号":p.Outer)));
   if(settings.OverlaySku)Add("最近商品：",string.IsNullOrEmpty(context.LastSku)?"尚未确认":context.LastSku);
   if(settings.OverlayQuantity)Add("确认数量：",context.ConfirmedQuantity?.ToString("0.########",System.Globalization.CultureInfo.InvariantCulture)??"尚未确认");

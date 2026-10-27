@@ -85,6 +85,7 @@ public static class ArchiveLayout {
   var pairs = context.Purchases.Where(p => !string.IsNullOrWhiteSpace(p.Po)).OrderBy(p => p.Po,StringComparer.Ordinal).ThenBy(p => p.Outer,StringComparer.Ordinal).Distinct().ToArray();
   string group;
   if (context.Source == "测试") group = "测试录像";
+  else if (context.Source == "快递单") group = "快递单_登记" + context.SessionId;
   else if (pairs.Length == 0) group = "无采购单_登记" + context.SessionId;
   else group = string.Join("__", pairs.Select(p => Component(p.Po + "-" + (string.IsNullOrWhiteSpace(p.Outer) ? "无外部单号" : p.Outer), 120)));
   // Reserve room for continuation suffix, sidecars and atomic-write suffix.

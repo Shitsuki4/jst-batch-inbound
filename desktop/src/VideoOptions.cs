@@ -40,6 +40,10 @@ public sealed class UserSettings {
  public decimal? StopGb { get; set; }
  // 单段录像上限：0 = 不限制（默认，旧配置缺失时即为0）。达到任一上限即正常收尾并为同一物流单自动续录新段。
  public int MaxSegmentMinutes { get; set; }
+ // 单段大小上限按 GB 保存（可填 0.5、1.5 等，最多两位小数；0 = 不限制）。
+ public decimal MaxSegmentGb { get; set; }
+ // 旧字段（4.1.1 测试版按 MB 保存）：仅用于读取旧配置，读入后换算到 MaxSegmentGb 并清零；新配置不再写出。
+ [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
  public int MaxSegmentMb { get; set; }
  public bool HotkeysEnabled { get; set; }
  public string HotkeyPreview { get; set; } = "";
@@ -76,6 +80,16 @@ public sealed class UserSettings {
  public static bool ValidSize(int w,int h) => w>=2 && h>=2 && w<=16384 && h<=16384 && w%2==0 && h%2==0;
  public static bool ValidCaptureFormat(string f) => f is "mjpeg" or "yuyv422" or "nv12" or "yuv420p" or "rgb24" or "bgr24" or "uyvy422" or "gray";
  public const int MaxSegmentMinutesLimit = 1440, MinSegmentMb = 10, MaxSegmentMbLimit = 1048576;
+ // GB 上限：最多 1024 GB；最小 0.01 GB（网页输入）。旧 MB 配置换算后的精确值（如 10 MB = 0.009765625 GB）也接受。
+ public const decimal MaxSegmentGbLimit = 1024m, MinSegmentGb = 0.01m, LegacyMinSegmentGb = MinSegmentMb / 1024m;
+ public static long SegmentBytes(decimal gb) => gb <= 0 ? 0 : (long)decimal.Round(gb * 1073741824m, MidpointRounding.AwayFromZero);
+ public static int DecimalPlaces(decimal value) { value = Math.Abs(value); var n = 0; while (value != decimal.Truncate(value) && n < 28 && value < 1e20m) { value *= 10; n++; } return n; }
+ // 旧 MB 字段 → GB（精确换算，大小不变）；两者都有时以新的 GB 为准。
+ public void NormalizeLegacySegmentSize() {
+  if (MaxSegmentMb < 0 || MaxSegmentMb > MaxSegmentMbLimit || (MaxSegmentMb > 0 && MaxSegmentMb < MinSegmentMb)) throw new ArgumentException($"单段大小上限（旧版 MB 配置）无效：须为0或{MinSegmentMb}到{MaxSegmentMbLimit} MB");
+  if (MaxSegmentMb > 0 && MaxSegmentGb == 0) MaxSegmentGb = MaxSegmentMb / 1024m;
+  MaxSegmentMb = 0;
+ }
  public bool DiskConfigured => WarningGb is > 0 && StopGb is > 0 && WarningGb > StopGb;
  public void Validate(bool paths = true, bool requireDisk = true) {
   foreach(var p in typeof(UserSettings).GetProperties().Where(p=>p.PropertyType==typeof(string)))if(p.GetValue(this)==null)throw new ArgumentException("配置项不能为空："+p.Name);
@@ -91,7 +105,8 @@ public sealed class UserSettings {
    if (!DiskConfigured || WarningGb > 1000000) throw new ArgumentException("请在软件中填写磁盘阈值：预警 GB > 停止 GB > 0（最多1000000 GB）");
   }
   if (MaxSegmentMinutes < 0 || MaxSegmentMinutes > MaxSegmentMinutesLimit) throw new ArgumentException($"单段时长上限须为0到{MaxSegmentMinutesLimit}的整数分钟，0表示不限制");
-  if (MaxSegmentMb < 0 || MaxSegmentMb > MaxSegmentMbLimit || (MaxSegmentMb > 0 && MaxSegmentMb < MinSegmentMb)) throw new ArgumentException($"单段大小上限须为0或{MinSegmentMb}到{MaxSegmentMbLimit}的整数MB，0表示不限制");
+  NormalizeLegacySegmentSize();
+  if (MaxSegmentGb < 0 || MaxSegmentGb > MaxSegmentGbLimit || (MaxSegmentGb > 0 && MaxSegmentGb < LegacyMinSegmentGb)) throw new ArgumentException($"单段大小上限须为0或{MinSegmentGb}到{MaxSegmentGbLimit} GB（可带两位小数，如0.5），0表示不限制");
   if (SoundVolume < 0 || SoundVolume > 100) throw new ArgumentException("提示音音量须为0到100");
   foreach (var name in new[] { HotkeyPreview, HotkeyStop, HotkeyContinue }) if (!string.IsNullOrEmpty(name)) HotkeySpec.Parse(name);
   HotkeyPreview = HotkeySpec.Normalize(HotkeyPreview); HotkeyStop = HotkeySpec.Normalize(HotkeyStop); HotkeyContinue = HotkeySpec.Normalize(HotkeyContinue);
@@ -115,14 +130,15 @@ public sealed class UserSettings {
  public static UserSettings FromWeb(UserSettings current, JsonElement args) {
   if (args.ValueKind != JsonValueKind.Object) throw new ArgumentException("视频设置参数无效");
   var node = JsonSerializer.SerializeToNode(current, WebJson)!.AsObject();
-  var editable = new HashSet<string>(new[] { "showPreviewOnStartup","camera","resolution","frameRate","captureFormat","rotation","mirror","quality","directory","engine","overlayTime","overlayTracking","overlayPurchase","overlayOuter","overlaySku","overlayQuantity","photoEnabled","notesEnabled","protectionEnabled","zoomEnabled","soundStart","soundStop","soundSaved","soundDuplicate","soundError","soundVolume","cleanupDays","warningGb","stopGb","maxSegmentMinutes","maxSegmentMb","hotkeysEnabled","hotkeyPreview","hotkeyStop","hotkeyContinue","trackingRuleEnabled","trackingPrefixes","trackingMinLength","trackingMaxLength" }, StringComparer.Ordinal);
+  var editable = new HashSet<string>(new[] { "showPreviewOnStartup","camera","resolution","frameRate","captureFormat","rotation","mirror","quality","directory","engine","overlayTime","overlayTracking","overlayPurchase","overlayOuter","overlaySku","overlayQuantity","photoEnabled","notesEnabled","protectionEnabled","zoomEnabled","soundStart","soundStop","soundSaved","soundDuplicate","soundError","soundVolume","cleanupDays","warningGb","stopGb","maxSegmentMinutes","maxSegmentGb","hotkeysEnabled","hotkeyPreview","hotkeyStop","hotkeyContinue","trackingRuleEnabled","trackingPrefixes","trackingMinLength","trackingMaxLength" }, StringComparer.Ordinal);
   foreach (var p in args.EnumerateObject()) {
    if (!editable.Contains(p.Name)) throw new ArgumentException("不可修改的视频设置项：" + p.Name);
    if (p.Value.ValueKind == JsonValueKind.String && (p.Value.GetString()!.Length > 2000 || p.Value.GetString()!.Contains('\0'))) throw new ArgumentException("无效参数：" + p.Name);
    node[p.Name] = JsonNode.Parse(p.Value.GetRawText());
   }
   UserSettings result;
-  try { result = node.Deserialize<UserSettings>(WebJson)!; } catch (JsonException) { throw new ArgumentException("视频设置格式无效；GB请填写数字，单段上限请填写0或正整数，开关请选择勾选状态"); }
+  try { result = node.Deserialize<UserSettings>(WebJson)!; } catch (JsonException) { throw new ArgumentException("视频设置格式无效；GB请填写数字，单段时长请填写0或正整数分钟，单段大小请填写0或最多两位小数的GB，开关请选择勾选状态"); }
+  if (args.TryGetProperty("maxSegmentGb", out var gbValue) && (result.MaxSegmentGb < 0 || DecimalPlaces(result.MaxSegmentGb) > 2 || (result.MaxSegmentGb > 0 && result.MaxSegmentGb < MinSegmentGb))) throw new ArgumentException($"单段大小上限须为0或{MinSegmentGb}到{MaxSegmentGbLimit} GB，最多两位小数（如0.5、1.5），0表示不限制");
   // Explicit nulls must not bypass validation or erase a non-null field.
   foreach (var p in typeof(UserSettings).GetProperties().Where(p => p.PropertyType == typeof(string))) if (p.GetValue(result) == null) throw new ArgumentException("参数不能为空：" + p.Name);
   result.Validate(); return result;
