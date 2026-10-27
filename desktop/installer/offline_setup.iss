@@ -15,7 +15,7 @@
   #define OutputDir "..\dist\installer"
 #endif
 #ifndef AppVersion
-  #define AppVersion "4.1.1"
+  #define AppVersion "4.1.2"
 #endif
 #ifndef OutputBaseFilename
   #define OutputBaseFilename "收货小助手-" + AppVersion + "-离线完整安装程序"

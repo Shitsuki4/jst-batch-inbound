@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       publish_release_tag:
-        description: "Attach the built assets to this existing release tag, e.g. desktop-v4.1.1 (optional; main only; version must match the csproj)."
+        description: "Attach the built assets to this existing release tag, e.g. desktop-v4.1.2 (optional; main only; version must match the csproj)."
         required: false
         type: string
   push:

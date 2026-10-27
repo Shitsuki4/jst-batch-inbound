@@ -65,7 +65,7 @@ powershell -ExecutionPolicy Bypass -File desktop/build-windows.ps1 -SkipTests -R
 
 - `desktop/dist/portable/Receiving.Native.exe`
 - `desktop/dist/portable/backend/Receiving.Service.exe`
-- `desktop/dist/jst-batch-inbound-desktop-4.1.1-win-x64.zip`
+- `desktop/dist/jst-batch-inbound-desktop-4.1.2-win-x64.zip`
 - `desktop/dist/SHA256SUMS.txt`
 
 便携 ZIP（约 86 MiB）不内置 FFmpeg/WebView2 payload，适合已联网或已装好依赖的机器。
@@ -115,7 +115,7 @@ powershell -ExecutionPolicy Bypass -File desktop/build-deps-windows.ps1 `
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File desktop/verify-deps-installer.ps1 `
-  -Installer desktop/dist/deps-installer/收货小助手-4.1.1-运行依赖安装程序.exe `
+  -Installer desktop/dist/deps-installer/收货小助手-4.1.2-运行依赖安装程序.exe `
   -PayloadRoot desktop/dist/deps-payload `
   -PortableRoot desktop/dist/portable
 ```
@@ -140,7 +140,7 @@ powershell -ExecutionPolicy Bypass -File desktop/build-offline-windows.ps1 `
 已在本机解压好 FFmpeg 时，可改用 `-FfmpegBuildDir <含 bin\ffmpeg.exe 的目录>`，跳过压缩包解压。
 
 安装程序默认沿用中文文件名。GitHub Release 上传会丢弃文件名里的非 ASCII 字符，因此
-工作流额外传 `-InstallerName ReceivingAssistant-4.1.1-Offline-Setup`，让发布产物使用 ASCII
+工作流额外传 `-InstallerName ReceivingAssistant-4.1.2-Offline-Setup`，让发布产物使用 ASCII
 文件名，再通过 Release 的 asset label 显示中文名。本机构建不传该参数即保持中文文件名。
 
 离线安装程序会把 `.NET 自包含宿主 + Python 后端 + FFmpeg/ffprobe + WebView2 固定运行时`
@@ -205,7 +205,7 @@ WebView2 AppContainer ACL、重装保留用户数据并重新授权、开始菜�
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File desktop/verify-offline-installer.ps1 `
-  -Installer desktop/dist/installer/收货小助手-4.1.1-离线完整安装程序.exe `
+  -Installer desktop/dist/installer/收货小助手-4.1.2-离线完整安装程序.exe `
   -PayloadRoot desktop/dist/offline-payload
 ```
 
@@ -261,12 +261,12 @@ IPv6 地址会因重新拨号 / 隐私地址轮换而变化，打不开时回设
 SHA256，然后依次构建便携 ZIP、编译完整离线安装程序并跑安装级验收、编译运行依赖安装程序并跑验收，
 最后把便携 ZIP、离线安装程序与运行依赖安装程序一起作为产物上传；标签构建会把它们发布到 Release。
 
-要把产物补传到已存在的 Release（例如 `desktop-v4.1.1`），在手动触发时填写
+要把产物补传到已存在的 Release（例如 `desktop-v4.1.2`），在手动触发时填写
 `publish_release_tag` 输入框即可。
 
 发布示例：
 
 ```powershell
-git tag desktop-v4.1.1
-git push origin desktop-v4.1.1
+git tag desktop-v4.1.2
+git push origin desktop-v4.1.2
 ```
