@@ -1252,6 +1252,23 @@
       });
   }
 
+  /* 改的是正在录像的物流单：询问是否按新单号重新录制。是 → 保存当前片段并按新单号开新片段；否 → 当前录像原样继续 */
+  function askRerecordAfterRename(bid, from, to) {
+    var link = window.NativeReceiptLink;
+    if (!link || !link.afterRename || !S.session) return;
+    link.afterRename({ key: '普通:' + S.session.id + ':' + bid, from: from, to: to }, function (text) {
+      return new Promise(function (resolve) {
+        suppressRefocus = Date.now() + 120000;
+        var done = function (yes) { closeModal(); resolve(yes); refocus(); };
+        openModal('按新单号重新录制？',
+          '<div style="white-space:pre-line;padding:4px 0">' + esc(text) + '</div>',
+          [{ text: '否，继续当前录像', cls: 'btn-ghost', fn: function () { done(false); } },
+          { text: '是，按新单号重新录制', cls: 'btn-primary', fn: function () { done(true); } }],
+          function () { done(false); });
+      });
+    }).catch(function () { });
+  }
+
   /* 编辑物流单号：该单号下明细不动，只改单号 */
   function askRenameBatch(bid, no) {
     suppressRefocus = Date.now() + 120000;
@@ -1272,6 +1289,7 @@
             if (!r.ok) { handleFail(r); return; }
             toast(r.msg || '已修改', 'ok');
             refreshAfterMutation((S.current_batch && S.current_batch !== bid) ? S.current_batch : 0);
+            askRerecordAfterRename(bid, no, v);
           }).catch(function () { closeModal(); permAlert(); });
       } }],
       function () { closeModal(); refocus(); });

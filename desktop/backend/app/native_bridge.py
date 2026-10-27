@@ -49,9 +49,42 @@ def video_context_key(s,key):
  parts=str(key).split(':')
  if len(parts)!=3:raise ValueError('录像关联键无效')
  return video_context(s,*parts)
-def emit_tracking(s,source,sid,bid,duplicate=False):
+def emit_tracking(s,source,sid,bid,duplicate=False,renamed=False):
  c=video_context(s,source,sid,bid)
- emit(s,'tracking',{'id':c['batchId'],'session_id':c['sessionId'],'tracking_no':c['tracking'],'source':source,'duplicate':bool(duplicate),'context':c})
+ payload={'id':c['batchId'],'session_id':c['sessionId'],'tracking_no':c['tracking'],'source':source,'duplicate':bool(duplicate),'context':c}
+ if renamed:payload['renamed']=True
+ emit(s,'tracking',payload)
+
+def recording_link(s):
+ """最近一次录像关联：最后一条 tracking 事件且之后没有 stop → (source,sid,bid) 字符串三元组；
+ 没有关联返回 None；payload 无法解析返回 False（调用方按“不确定”保守停录）。"""
+ row=s.STORE.db.execute("SELECT kind,payload FROM native_event WHERE kind IN ('tracking','stop') ORDER BY id DESC LIMIT 1").fetchone()
+ if not row or row['kind']!='tracking':return None
+ try:p=json.loads(row['payload'])
+ except ValueError:return False
+ return (str(p.get('source')),str(p.get('session_id')),str(p.get('id')))
+
+def renamed_batch(s,p,b):
+ """改单号请求对应的 (source,sid,bid)；无法确定返回 None。"""
+ try:
+  bid=int(b.get('batch_id') or 0)
+  if p=='/api/batch/rename':
+   row=s.STORE.db.execute('SELECT session_id FROM batch WHERE id=?',(bid,)).fetchone()
+   return ('普通',int(row['session_id']),bid) if row else None
+  sid=int(b.get('sid') or 0)
+  return ('联合' if p=='/api/joint/action' else '无采购单',sid,bid) if sid and bid else None
+ except (TypeError,ValueError):return None
+
+def on_rename(s,p,b):
+ """改物流单号（旧版这里一律发 stop，改单号后录像就停了且不会按新单号恢复）：
+ 录像正绑定在被改的这张物流单上 → 发带新单号的 tracking（renamed=True）。电脑端只同步当前单号与关联索引，
+ 不停录、不切段；业务界面弹窗询问“是否按新单号重新录制”，选“是”再发普通 tracking 由电脑端收尾旧段、
+ 按新单号开新段，选“否”当前录像原样继续。改的是别的物流单 → 不打断当前录像；
+ 关联记录损坏无法确认 → 保守停录，要求重新确认物流。"""
+ target=renamed_batch(s,p,b);link=recording_link(s)
+ if link is None:return
+ if target and link==(target[0],str(target[1]),str(target[2])):emit_tracking(s,*target,renamed=True)
+ elif link is False or not target:emit(s,'stop',{'reason':'物流记录修改，请重新确认物流'})
 
 def recording_session(s,deleted):
  """删除整张普通收货单时是否需要停录：被删的是当前收货单，或最近一次录像关联
@@ -152,7 +185,8 @@ def install(s):
      # 远程调用期间锁被临时释放：别的请求写入的流水不驱动本请求的录像 item 事件。
      rows=d.execute('SELECT sid,bid,MAX(id) last_id FROM scan_audit WHERE id>?'+excl+' GROUP BY sid,bid ORDER BY last_id',[before]+params).fetchall()
      for row in rows:emit(s,'item',{'context':video_context(s,source,row['sid'],row['bid'])})
-    if p in ('/api/batch/del','/api/batch/rename') or (p in ('/api/unplanned/action','/api/joint/action') and a in ('rename','delete_batch')):emit(s,'stop',{'reason':'物流记录修改，请重新确认物流'})
+    if p=='/api/batch/rename' or (p in ('/api/unplanned/action','/api/joint/action') and a=='rename'):on_rename(s,p,b)
+    if p=='/api/batch/del' or (p in ('/api/unplanned/action','/api/joint/action') and a=='delete_batch'):emit(s,'stop',{'reason':'物流记录修改，请重新确认物流'})
     if p in ('/api/session/pause','/api/session/pause-report','/api/session/close','/api/logout'):emit(s,'stop',{'reason':p})
     if p=='/api/session/del' and recording_session(s,getattr(h,'_deleted_session',None)):emit(s,'stop',{'reason':'本地收货批次已删除'})
     if p in ('/api/unplanned/action','/api/joint/action') and a in ('close_session','delete_session'):emit(s,'stop',{'reason':'本地收货批次已结单 / 删除'})

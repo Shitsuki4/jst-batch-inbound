@@ -115,6 +115,21 @@ public static class CoreChecks {
    Check(File.ReadAllText(index)==invalid,"拒绝无效嵌套关联后原索引原样保留");
    library.List();Check(library.Warnings.Any(w=>w.StartsWith("关联索引读取失败")),"无效关联可见告警，不让空引用中断录像列表");
   }
+  // 单段录像上限：默认0不限制、旧配置兼容、非负整数校验、保存回读、判定边界。
+  var limitConfig=Path.Combine(root,"segment-limit-settings.json");
+  File.WriteAllText(limitConfig,"{\"SchemaVersion\":3,\"WarningGb\":6,\"StopGb\":2}");
+  var noLimit=UserSettings.Read(limitConfig);
+  Check(noLimit.MaxSegmentMinutes==0&&noLimit.MaxSegmentMb==0&&new UserSettings().MaxSegmentMinutes==0&&new UserSettings().MaxSegmentMb==0,"旧配置缺失单段上限时默认0（不限制），行为不变");
+  foreach(var (minutes,mb) in new[]{(-1,0),(0,-1),(1441,0),(0,5),(0,1048577)}){var bad=new UserSettings{MaxSegmentMinutes=minutes,MaxSegmentMb=mb};Reject(()=>bad.Validate(false,false),"拒绝无效单段上限 "+minutes+"分钟/"+mb+"MB");}
+  var limited=new UserSettings{WarningGb=6,StopGb=2,MaxSegmentMinutes=30,MaxSegmentMb=2048};limited.Validate(false);limited.Write(limitConfig);
+  var limitedBack=UserSettings.Read(limitConfig);
+  Check(limitedBack.MaxSegmentMinutes==30&&limitedBack.MaxSegmentMb==2048,"单段时长/大小上限保存后重读保留");
+  using(var scope=new RecorderScope(Path.Combine(root,"limit-recorder"))){scope.Value.Configure(limitedBack,false);Check(scope.Value.MaxSegmentSeconds==1800&&scope.Value.MaxSegmentBytes==2048L*1024*1024&&scope.Value.Diagnostics.Contains("单段上限：30 分钟 / 2048 MB"),"录像器按设置换算单段上限并写入诊断");}
+  using(var draft=JsonDocument.Parse("{\"maxSegmentMinutes\":15,\"maxSegmentMb\":0}"))Check(UserSettings.FromWeb(webSettings,draft.RootElement).MaxSegmentMinutes==15,"网页可修改单段上限");
+  foreach(var bad in new[]{"{\"maxSegmentMinutes\":1.5}","{\"maxSegmentMb\":-10}","{\"maxSegmentMinutes\":null}"}){using var draft=JsonDocument.Parse(bad);Reject(()=>UserSettings.FromWeb(webSettings,draft.RootElement),"网页单段上限非法值被拒绝："+bad);}
+  Check(Recorder.SegmentLimitReason(0,0,long.MaxValue,1e9)==""&&Recorder.LimitText(0,0)=="不限","上限填0不限制");
+  Check(Recorder.SegmentLimitReason(0,1800,long.MaxValue,1799.9)==""&&Recorder.SegmentLimitReason(0,1800,1,1800).Contains("时长上限 30 分钟"),"达到时长上限才分段");
+  Check(Recorder.SegmentLimitReason(2048L*1024*1024,0,2048L*1024*1024-1,1e9)==""&&Recorder.SegmentLimitReason(2048L*1024*1024,0,2048L*1024*1024,1).Contains("大小上限 2048 MB"),"达到大小上限才分段");
   return passed;
  }
  sealed class RecorderScope : IDisposable {
