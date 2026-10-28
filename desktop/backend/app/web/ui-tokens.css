@@ -11,8 +11,8 @@
   --c-text:#1c1d2b; --c-text-2:#5d6075; --c-text-3:#737790;
   --c-side:#191a2e; --c-side-2:#26284a; --c-side-text:#b3b5d1; --c-side-muted:#6e7194;
   /* 四种收货状态：已齐绿 / 短收橙 / 超收红 / 未收灰 */
-  --c-ok:#0f9d6b; --c-ok-soft:#e5f7f0;
-  --c-warn:#d97706; --c-warn-soft:#fef4e3;
+  --c-ok:#047857; --c-ok-soft:#e5f7f0;   /* 白底 5.5:1，浅底 ≥4.6:1 */
+  --c-warn:#b45309; --c-warn-soft:#fef4e3; /* 白底 5.0:1，浅底 ≥4.6:1 */
   --c-danger:#e11d48; --c-danger-soft:#ffe9ee;
   --c-none:#737790; --c-none-soft:#f0f1f6;
   /* 圆角 / 阴影 / 尺寸 */
