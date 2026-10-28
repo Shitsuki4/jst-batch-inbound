@@ -209,6 +209,26 @@ main{padding:14px}
 .pi-done{background:var(--ok-soft) !important}
 .pi-part{background:#fbfdff}
 .pi-hit{background:#fff6d8 !important;transition:background .2s}
+.pi-hit>td{background:#fff6d8 !important}
+/* #6 商品信息两行紧凑版：一屏能多看几行 */
+.pi-compact .pi-name,#poitem-body .pi-compact .pi-name{font-weight:700;color:var(--c-text);line-height:1.45;font-size:15px}
+.pi-compact .pi-meta{margin-top:2px;color:var(--c-text-2,#5d6075);font-size:13px;line-height:1.5;font-family:var(--mono)}
+.pi-compact .pi-erp-inline{font-family:var(--font,inherit);white-space:nowrap}
+.pi-compact .pi-chip{all:unset;cursor:copy;white-space:nowrap;border-bottom:1px dashed transparent;border-radius:3px}
+.pi-compact .pi-chip:hover{border-bottom-color:currentColor;color:var(--c-primary)}
+.pi-compact .pi-chip:focus-visible{outline:2px solid var(--c-primary);outline-offset:1px}
+/* #6 工作区占满窗口剩余高度，左右两栏各自滚动（窗口够大时；窄 / 矮窗口仍按原来整页滚动） */
+@media (min-width:1181px) and (min-height:640px){
+  .app-shell #work-area:not([hidden]){display:flex;flex-direction:column;height:calc(100vh - 56px - 42px);min-height:560px}
+  .app-shell #work-area>.grid{flex:1 1 auto;min-height:320px;align-items:stretch}
+  .app-shell #work-area>.grid>.card,.app-shell #work-area>.grid>.right-col{min-height:0;display:flex;flex-direction:column;margin:0}
+  .app-shell #work-area>.grid>.card .table-wrap{flex:1 1 auto;min-height:0;max-height:none;overflow:auto}
+  .app-shell #work-area>.grid>.right-col>.card{display:flex;flex-direction:column;min-height:0;margin:0}
+  .app-shell #work-area>.grid>.right-col>.card:first-child{flex:0 1 auto;max-height:42%}
+  .app-shell #work-area>.grid>.right-col>.card:first-child>:not(.card-hd){overflow:auto;min-height:0}
+  .app-shell #work-area>.grid>.right-col>.card:last-child{flex:1 1 0;min-height:180px}
+  .app-shell #work-area>.grid>.right-col>.card:last-child .table-wrap{flex:1 1 auto;min-height:0;max-height:none;overflow:auto}
+}
 .pi-mark{font-size:11px;text-align:right;white-space:nowrap}
 .pi-ok{color:var(--ok);font-weight:600}
 .pi-over{color:var(--danger);font-weight:600}
@@ -549,9 +569,17 @@ body, .view, .card, .tbl, .tbl td, .tbl th, .pi-code, .pi-barcode, .pi-name, .sc
 .app-shell .mode-btn kbd{font:11px var(--mono);padding:0 5px;border-radius:5px;background:#fff;border:1px solid var(--line)}
 .app-shell .cur-batch{margin:0 0 0 auto;font-size:13px;color:var(--c-text-2,#5d6075);min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .app-shell .input-huge{flex:none;width:100%}
-.app-shell .input-scan.focus-tracking{border-color:var(--primary)!important}
-.app-shell .scan-card .flash{height:auto;min-height:0;margin:0;padding:8px 12px;font-size:15px;justify-content:flex-start}
-.app-shell .scan-card .flash:empty{display:none}
+.app-shell .input-scan.focus-tracking{border-color:#b45309!important;box-shadow:0 0 0 4px #fef4e3!important;background:#fffaf0}
+/* 扫码模式一眼可分：物流单 = 橙色边框 + 橙色标签 + 橙色模式按钮；商品 = 靛蓝 */
+.app-shell .scan-input-wrap{position:relative}
+.app-shell .scan-input-wrap .input-scan{padding-left:112px}
+.app-shell .scan-mode-tag{position:absolute;left:12px;top:50%;transform:translateY(-50%);z-index:1;display:inline-flex;align-items:center;height:30px;padding:0 10px;border-radius:99px;font:600 14px var(--font);letter-spacing:0;pointer-events:none;white-space:nowrap}
+.app-shell .scan-mode-tag.tracking{background:#fdecc8;color:#92400e}
+.app-shell .scan-mode-tag.item{background:var(--c-primary-soft,#eef0ff);color:var(--c-primary-hover,#4338ca)}
+.app-shell .mode-btn.active[data-mode=tracking]{background:#b45309;color:#fff}
+/* 提示区固定最小高度、空的时候只隐身不收起：每扫一件下面的内容不再跳动 */
+.app-shell .scan-card .flash{height:auto;min-height:40px;margin:0;padding:8px 12px;font-size:15px;justify-content:flex-start}
+.app-shell .scan-card .flash:empty{display:flex;visibility:hidden}
 .app-shell .pending-bar{margin:0;border:0;border-radius:var(--r-md,12px);padding:8px 8px 8px 14px;background:linear-gradient(90deg,#eef0ff,#f6f4ff);gap:10px}
 .app-shell .pb-tag{background:transparent;color:var(--primary);padding:0;font-size:12px;font-weight:700}
 .app-shell .pb-code{font-family:var(--mono)}
@@ -570,7 +598,7 @@ body, .view, .card, .tbl, .tbl td, .tbl th, .pi-code, .pi-barcode, .pi-name, .sc
 .pc-legend{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
 .pc-legend div{background:var(--c-panel-2,#f7f8fc);border-radius:var(--r-sm,8px);padding:6px 8px;font-size:12px;color:var(--c-text-2,#5d6075);min-width:0}
 .pc-legend b{display:block;font:700 16px var(--mono);font-variant-numeric:tabular-nums}
-.c-ok{color:var(--c-ok,#0f9d6b)}.c-warn{color:var(--c-warn,#d97706)}.c-danger{color:var(--c-danger,#e11d48)}.c-none{color:var(--c-none,#737790)}
+.c-ok{color:var(--c-ok,#047857)}.c-warn{color:var(--c-warn,#b45309)}.c-danger{color:var(--c-danger,#e11d48)}.c-none{color:var(--c-none,#737790)}
 
 /* 明细区：左采购单明细 / 右物流子批次 */
 .app-shell .grid{grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:14px}
@@ -597,8 +625,8 @@ body, .view, .card, .tbl, .tbl td, .tbl th, .pi-code, .pi-barcode, .pi-name, .sc
 .app-shell .round-table .pi-recv{color:var(--text);font-weight:700}
 .app-shell .round-table .pi-plan{color:var(--c-text-2,#5d6075);font-weight:500}
 .round-mark{font-weight:600;font-size:12px;padding:2px 9px}
-.round-mark.st-done{background:var(--c-ok-soft,#e5f7f0);color:var(--c-ok,#0f9d6b)}
-.round-mark.st-short{background:var(--c-warn-soft,#fef4e3);color:var(--c-warn,#d97706)}
+.round-mark.st-done{background:var(--c-ok-soft,#e5f7f0);color:var(--c-ok,#047857)}
+.round-mark.st-short{background:var(--c-warn-soft,#fef4e3);color:var(--c-warn,#b45309)}
 .round-mark.st-over{background:var(--c-danger-soft,#ffe9ee);color:var(--c-danger,#e11d48)}
 .round-mark.st-none{background:var(--c-none-soft,#f0f1f6);color:var(--c-none,#737790)}
 .app-shell .round-table .pi-code{font-size:15px}
@@ -630,3 +658,20 @@ body, .view, .card, .tbl, .tbl td, .tbl th, .pi-code, .pi-barcode, .pi-name, .sc
 .app-shell .hero #id-type{min-width:230px}
 .app-shell .hero .partner-row{margin-top:16px}
 .app-shell #paused-wrap{text-align:left}
+
+/* ===== #11 字号与点击区域：站着隔一段距离也看得清、点得准 =====
+   正文最小 13px、说明文字最小 12px；表格 / 列表里的按钮至少 32px 高，数量 − / ＋ 36px；删除与其它按钮拉开距离 */
+.app-shell .side-group{font-size:12px;color:#8f92b5}                 /* 深色侧栏上 5.6:1（原 11px、3.6:1） */
+.app-shell kbd,.app-shell .mode-btn kbd,.app-shell .bl-caret,.app-shell small{font-size:12px}
+.app-shell .bl-acts{gap:8px;flex-wrap:wrap}
+.app-shell .bl-acts .btn{height:32px;padding:0 12px;font-size:13px}
+.app-shell .bl-acts .js-bl-del{margin-left:16px}                     /* 删除不再紧挨「复制上一单商品」 */
+.app-shell .bl-meta,.app-shell .pi-spec,.app-shell .round-warning,.app-shell .card .hint{font-size:13px}
+.app-shell .table-wrap .btn-sm,.app-shell .card-hd .btn-sm{height:32px;min-height:32px;font-size:13px}
+.app-shell .qty-ctl{gap:6px}
+.app-shell .qty-ctl button{width:36px;height:36px;font-size:18px}
+.app-shell .qty-input{height:36px;font-size:15px}
+.app-shell .icon-btn{min-width:32px;min-height:32px;padding:4px 8px;border-radius:6px}
+.app-shell .icon-btn:focus-visible{outline:2px solid var(--c-primary);outline-offset:1px}
+.app-shell .icon-del{margin-left:10px}
+.app-shell .side-foot-acts .btn-sm,.app-shell .who{font-size:13px}

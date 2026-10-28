@@ -9,7 +9,7 @@
 <link rel="stylesheet" href="/difference-report.css"><link rel="stylesheet" href="/barcode-learn.css">
 <link rel="stylesheet" href="/purchase-pairs.css"><link rel="stylesheet" href="/ui-tokens.css"><script src="/purchase-pairs.js"></script><link rel="icon" type="image/svg+xml" href="/app-icon.svg">
 <link rel="icon" sizes="32x32" href="/app-icon.png">
-<script src="/native-receipt.js"></script><script src="/barcode-learn.js"></script></head>
+<script src="/native-receipt.js"></script><script src="/barcode-learn.js"></script><script src="/scan-feedback.js"></script><script src="/jst-dialog.js"></script></head>
 <body>
 
 <!-- ============ 登录 ============ -->
@@ -207,8 +207,12 @@
             <div id="cur-batch-name" class="cur-batch">物流单号：—</div>
             <button class="btn btn-ghost btn-sm i-truck" id="btn-skip-tracking">跳过物流单直接收货</button>
           </div>
-          <input id="scan-input" class="input input-huge input-scan"
-                 placeholder="请扫描物流单号" autocomplete="off" spellcheck="false">
+          <!-- 模式标签常驻在扫码框左侧：物流单 = 橙色，商品 = 靛蓝，抬眼就能分清 -->
+          <div class="scan-input-wrap">
+            <span id="scan-mode-tag" class="scan-mode-tag tracking" aria-hidden="true">物流单号</span>
+            <input id="scan-input" class="input input-huge input-scan focus-tracking"
+                   placeholder="请扫描物流单号" autocomplete="off" spellcheck="false" aria-label="扫描物流单号">
+          </div>
           <div id="scan-flash" class="flash"></div>
 
           <!-- 扫码后待确认数量：光标停在这里，默认 1 且全选；回车确认，改数字再回车用新数字 -->
@@ -267,7 +271,7 @@
             <div class="card">
               <div class="card-hd">
                 <span>当前物流单号 <span id="cur-tracking" class="pill chip-track">—</span></span>
-                <span class="card-hd-note">双击数量可直接修改</span>
+                <span class="card-hd-note">点 − / ＋ 调整，或直接改数字</span>
               </div>
               <div class="table-wrap scroll">
                 <table class="tbl">

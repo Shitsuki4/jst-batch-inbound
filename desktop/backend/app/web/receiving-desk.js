@@ -6,6 +6,8 @@
  let mode='tracking',state=null,bid=0,busy=false;
  const blocked=()=>busy||!$('pending').hidden||!!document.querySelector('dialog[open]');
  function say(text){$('message').textContent=text;}
+ // 扫码反馈与「有采购单收货」一致：扫码框下方提示条 + 同一套提示音（scan-feedback.js）
+ function feedback(text,kind){const el=$('scan-flash');if(window.ScanFeedback)ScanFeedback.show(el,text,kind);else if(el)el.textContent=text||'';}
  function setMode(next,focus=true,force=false){
   if(state?.session.state==='closed'||state?.locked){if(focus)say('此批次实收已锁定，可切换物流查看明细，不会启动录像');return false;}
   if(!force&&blocked()){say('请先确认或取消当前商品数量，等待保存完成');return false;}
@@ -81,7 +83,7 @@
  function candidates(rows,code,onChoose,hint){
   $('candidates').textContent='';
   if(rows.length===1)return onChoose(rows[0]);
-  const miss=()=>say(hint||'当前货主 / 分仓商品库未找到此码，请检查商品库同步状态或手动登记。未登记任何数量。');
+  const miss=()=>{const t=hint||'当前货主 / 分仓商品库未找到此码，请检查商品库同步状态或手动登记。未登记任何数量。';say(t);feedback('未找到此码：'+code,'warn');};
   if(!rows.length){
    // 商品资料查不到：可学习此码，学习后自动重新识别；跳过则保持原提示
    if(window.BarcodeLearn&&state?.session?.id&&!window.BarcodeLearn.isOpen()){
@@ -96,7 +98,7 @@
   }
   window.ProductPicker.open({rows,code,owner:state?.catalog_scope?.owner??state?.session.owner_co_id,auth:state?.catalog_scope?.auth??state?.session.auth_co_id,onChoose,onCancel:()=>{$('code').focus();$('code').select();}});
  }
- window.ReceivingDesk={render,clear,setBusy:v=>{busy=v;},blocked,setMode,activate,candidates};
+ window.ReceivingDesk={render,clear,setBusy:v=>{busy=v;},blocked,setMode,activate,candidates,feedback};
  if(type==='joint'){
   const value=()=>[...new Set($('purchase-nos').value.split(/[,，\s]+/).filter(Boolean))];
   function chips(nos){$('purchase-nos').value=nos.join('\n');$('desk-po-chips').innerHTML=nos.map((n,i)=>'<span class="desk-po-chip">'+esc(n)+' <button type="button" data-remove-po="'+i+'" aria-label="移除采购单 '+esc(n)+'">×</button></span>').join('');}

@@ -57,6 +57,7 @@
   var actx = null;
   function beep(freq, dur) {
     if (S.settings && S.settings.sound === '0') return;
+    if (window.ScanFeedback) { window.ScanFeedback.tone(freq, dur); return; } // 四个收货页共用同一套提示音（scan-feedback.js）
     try {
       actx = actx || new (window.AudioContext || window.webkitAudioContext)();
       var o = actx.createOscillator(), g = actx.createGain();
@@ -76,7 +77,12 @@
   }
 
   /* -------------------- 弹窗 -------------------- */
-  var modalEsc = null;
+  var modalEsc = null, modalBack = null;
+  $('#modal').setAttribute('role', 'dialog');
+  $('#modal').setAttribute('aria-modal', 'true');
+  $('#modal').setAttribute('aria-labelledby', 'modal-title');
+  $('#modal-x').setAttribute('aria-label', '关闭');
+  $('#modal-x').title = '关闭';
   function openModal(title, html, buttons, onEsc) {
     diffContext = null;
     $('#modal-title').textContent = title;
@@ -90,11 +96,30 @@
       el.onclick = function () { b.fn && b.fn(); };
       ft.appendChild(el);
     });
+    if ($('#modal').hidden) modalBack = document.activeElement;
     $('#modal').hidden = false;
     modalEsc = onEsc || null;
+    // 焦点移进弹窗：有「取消」先放在取消上（危险操作按回车不会误确认），否则放在第一个按钮上
+    var first = ft.querySelector('.btn-ghost') || ft.querySelector('button') || $('#modal-x');
+    try { first.focus(); } catch (e) { /* 忽略 */ }
   }
-  function closeModal() { if (pauseReportBusy || finishBusy) return false; if(document.querySelector('#modal .qty-saving,#modal .qty-save-error,#modal .qty-unsaved')){toast('请先保存数量（按Enter或移开焦点），失败输入已保留','warn');return false;} $('#modal').hidden = true; modalEsc = null; diffContext = null; return true; }
+  function closeModal() { if (pauseReportBusy || finishBusy) return false; if(document.querySelector('#modal .qty-saving,#modal .qty-save-error,#modal .qty-unsaved')){toast('请先保存数量（按Enter或移开焦点），失败输入已保留','warn');return false;} $('#modal').hidden = true; modalEsc = null; diffContext = null; var back = modalBack; modalBack = null; if (back && back.isConnected && !back.closest('#modal')) { try { back.focus(); } catch (e) { /* 忽略 */ } } return true; }
   $('#modal-x').onclick = closeModal;
+  // 弹窗打开时：Tab 只在弹窗内循环；Esc 在任何页面都能关（原来只在「有采购单收货」页生效）
+  document.addEventListener('keydown', function (e) {
+    if ($('#modal').hidden || window.JstDialog?.isOpen()) return;
+    if (e.key === 'Escape') {
+      if (window.ProductPicker?.isOpen()) return;
+      e.preventDefault(); e.stopImmediatePropagation();
+      if (modalEsc) modalEsc(); else closeModal();
+      return;
+    }
+    if (e.key !== 'Tab') return;
+    var f = Array.prototype.filter.call($('#modal').querySelectorAll('button,input,select,textarea,a[href],[tabindex]:not([tabindex="-1"])'), function (x) { return !x.disabled && x.offsetParent !== null; });
+    if (!f.length) return;
+    var i = f.indexOf(document.activeElement);
+    if (i < 0 || (e.shiftKey && i === 0) || (!e.shiftKey && i === f.length - 1)) { e.preventDefault(); f[e.shiftKey ? f.length - 1 : 0].focus(); }
+  }, true);
 
   function permAlert(hint) {
     var h = '<div class="perm-msg" style="text-align:center;padding:8px 0 2px">'
@@ -104,8 +129,18 @@
     openModal('操作提示', h, [{ text: '知道了', cls: 'btn-primary', fn: closeModal }], closeModal);
   }
 
+  // 请求没有结果（断网、本机服务没在运行、返回不是 JSON）：说清是连接问题，不要报成「无权限」
+  function netAlert(hint) {
+    var h = '<div class="perm-msg" style="text-align:center;padding:8px 0 2px">'
+      + '<div class="perm-title" style="font-size:17px;font-weight:700;color:#d93a3a">没连上本机收货服务</div>'
+      + '<div style="margin-top:8px;color:#5d6075;font-size:13px">' + esc(hint || '请确认程序还在运行，稍后重试') + '</div>'
+      + '</div>';
+    openModal('连接中断', h, [{ text: '知道了', cls: 'btn-primary', fn: closeModal }], closeModal);
+    beep(180, 0.3);
+  }
+
   function handleFail(r) {
-    if (!r) return permAlert();
+    if (!r) return netAlert();
     if (r.msg === '当前账号无此操作权限') { permAlert(r.hint); return true; }
     toast(r.msg || '操作失败', 'err');
     beep(180, 0.16);
@@ -588,7 +623,7 @@
         beep(880, 0.08);
         reload();
       })
-      .catch(function () { btn.disabled = false; btn.textContent = '创建收货批次'; permAlert(); });
+      .catch(function () { btn.disabled = false; btn.textContent = '创建收货批次'; netAlert('批次是否已创建未确认，请刷新页面核对后再试'); });
   }
   $('#btn-activate').onclick = activate;
   $('#po-input').addEventListener('keydown', function (e) {
@@ -617,7 +652,7 @@
       toast(r.msg || '已退出批次', 'ok');
       beep(660, 0.08);
       reload();
-    }).catch(function () { permAlert(); });
+    }).catch(function () { netAlert('是否已退出批次未确认，请刷新页面核对'); });
   }
 
   // 待确认扫码不是已保存明细；先明确确认，不能悄悄清掉或带着失败继续挂起。
@@ -679,7 +714,7 @@
       el.disabled = false;
       if (!r.ok) return handleFail(r);
       showDiff(r, r.session.state === 'closed', r.session.state === 'paused');
-    }).catch(function () { el.disabled = false; permAlert(); });
+    }).catch(function () { el.disabled = false; netAlert(); });
   });
 
   function resumeBatch(sid) {
@@ -688,7 +723,7 @@
       toast(r.msg || '已回到该批次', 'ok');
       beep(880, 0.08);
       reload();
-    }).catch(function () { permAlert(); });
+    }).catch(function () { netAlert('是否已回到该批次未确认，请刷新页面核对'); });
   }
 
   /* 点击挂起批次里的「继续收货」 */
@@ -704,6 +739,9 @@
     inp.classList.remove('focus-tracking', 'focus-item');
     if (m === 'tracking') { inp.placeholder = '请扫描物流单号，支持子母件 / 独立单号'; inp.classList.add('focus-tracking'); }
     else if (m === 'item') { inp.placeholder = '请扫描商品 69 码 / 辅助条码 / 商品编码'; inp.classList.add('focus-item'); }
+    var tag = $('#scan-mode-tag');
+    if (tag) { tag.textContent = m === 'tracking' ? '物流单号' : '商品条码'; tag.className = 'scan-mode-tag ' + (m === 'tracking' ? 'tracking' : 'item'); }
+    inp.setAttribute('aria-label', m === 'tracking' ? '扫描物流单号' : '扫描商品条码');
     $$('.mode-btn').forEach(function (b) { b.classList.toggle('active', b.dataset.mode === m); });
     if (!silent) refocus();
   }
@@ -714,7 +752,6 @@
     if (window.ProductPicker?.isOpen() || document.querySelector('.view.active')?.dataset.view !== 'home') return;
     if (e.key === 'F1') { e.preventDefault(); if (S.session) setMode('tracking'); }
     if (e.key === 'F2') { e.preventDefault(); if (S.session) setMode('item'); }
-    if (e.key === 'Escape' && !$('#modal').hidden && modalEsc) modalEsc();
   });
 
   /* -------------------- 扫码主流程 -------------------- */
@@ -818,7 +855,7 @@
         flash(nm + '  →  ' + fmtNum(q), 'ok'); beep(1318, 0.06);
       }
       refocus();
-    }).catch(function () { permAlert('网络中断，本笔是否已入账未确认，请核对明细后再补扫'); refocus(); });
+    }).catch(function () { netAlert('网络中断，本笔是否已入账未确认，请核对明细后再补扫'); refocus(); });
   }
 
   function cancelPending() {
@@ -909,7 +946,7 @@
         : '已切回 ' + code + '，继续补扫', 'ok');
       beep(1046, 0.07);
       refocus();
-    }).catch(function () { permAlert(); });
+    }).catch(function () { netAlert('物流单号是否已建好未确认，请核对右侧物流单列表后再扫'); });
   }
 
   var VIA_TAG = {
@@ -956,7 +993,7 @@
       return next();
     }, function () {
       // 结果未确认：不继续处理下一件，避免在不确定状态下继续累加
-      permAlert('网络中断，上一件是否已入账未确认，请核对明细后再扫');
+      netAlert('网络中断，上一件是否已入账未确认，请核对明细后再扫');
     });
   }
 
@@ -1012,7 +1049,7 @@
         });
       }
       showUnresolved(r, code);
-    }).catch(function () { permAlert(); });
+    }).catch(function () { netAlert(); });
   }
 
   function showUnresolved(r, code) {
@@ -1098,6 +1135,13 @@
   // 扫到的商品在左栏高亮一下，方便核对
   function flashPoItem(skuId) {
     if (!skuId) return;
+    // 右栏「本物流单收货明细」里刚扫的那行也高亮并滚到可见处，扫完不用找
+    $$('#line-body tr[data-sku]').forEach(function (tr) {
+      if (tr.dataset.sku !== String(skuId)) return;
+      tr.classList.add('pi-hit');
+      setTimeout(function () { tr.classList.remove('pi-hit'); }, 1400);
+      try { tr.scrollIntoView({ block: 'nearest' }); } catch (e) { }
+    });
     var rows = $$('#poitem-body tr');
     for (var i = 0; i < rows.length; i++) {
       var r = rows[i];
@@ -1185,7 +1229,7 @@
         html += '<tr class="line-sep"><td colspan="5">'
           + '<span class="line-sep-txt">以下为采购单里没有的商品</span></td></tr>';
       }
-      html += '<tr class="' + (bad ? 'tr-bad' : '') + '" data-id="' + l.id + '">'
+      html += '<tr class="' + (bad ? 'tr-bad' : '') + '" data-id="' + l.id + '" data-sku="' + esc(l.sku_id || '') + '">'
         + '<td>' + esc(l.name)
         + (bad ? '<span class="tag-new">采购单无此商品</span>' : '')
         + (window.BarcodeLearn ? window.BarcodeLearn.tag(l) : '')
@@ -1197,7 +1241,7 @@
         + '<input class="qty-input" data-id="' + l.id + '" value="' + fmtNum(l.qty) + '">'
         + '<button data-act="inc" data-id="' + l.id + '">＋</button>'
         + '</div></td>'
-        + '<td style="text-align:right">' + window.ReceiptEditor.button(l) + '<button class="icon-btn" data-act="del" data-id="' + l.id + '">✕</button></td>'
+        + '<td style="text-align:right">' + window.ReceiptEditor.button(l) + '<button class="icon-btn icon-del" data-act="del" data-id="' + l.id + '" title="删除这一行" aria-label="删除 ' + esc(l.name || l.sku_id || '') + '">✕</button></td>'
         + '</tr>';
     });
     tb.innerHTML = html;
@@ -1248,7 +1292,7 @@
             if (!r.ok) return handleFail(r);
             toast(r.msg || '已删除该物流单', 'ok');
             refreshAfterMutation(isCur ? 0 : S.current_batch);
-          }).catch(function () { permAlert(); });
+          }).catch(function () { netAlert('该物流单号是否已删除未确认，请刷新页面核对'); });
       });
   }
 
@@ -1290,7 +1334,7 @@
             toast(r.msg || '已修改', 'ok');
             refreshAfterMutation((S.current_batch && S.current_batch !== bid) ? S.current_batch : 0);
             askRerecordAfterRename(bid, no, v);
-          }).catch(function () { closeModal(); permAlert(); });
+          }).catch(function () { closeModal(); netAlert('单号是否已修改未确认，请刷新页面核对'); });
       } }],
       function () { closeModal(); refocus(); });
     var inp = $('#rename-input');
@@ -1305,7 +1349,12 @@
         var id = +b.dataset.id;
         var line = (S.lines || []).filter(function (l) { return l.id === id; })[0];
         if (!line) return;
-        if (b.dataset.act === 'del') { delLine(id); return; }
+        if (b.dataset.act === 'del') {
+          // 删除整行要先确认：扫码时手一偏点到 ✕，几十件就没了，而且没有撤销
+          confirmBox('删除这一行？', '<b>' + esc(line.name || line.sku_id || '') + '</b><br>当前 ' + esc(fmtNum(line.qty))
+            + ' 件，删除后要重新扫码录入。', '删除该行', function () { delLine(id); });
+          return;
+        }
         var step = Math.max(1, Math.round(num(S.settings && S.settings.scan_step)) || 1);   // 数量只能是整数
         setQty(id, Math.max(0, num(line.qty) + (b.dataset.act === 'inc' ? step : -step)));
       };
@@ -1344,7 +1393,8 @@
   function delLine(id) {
     suppressRefocus = Date.now() + 400;
     api('/api/line/del', { method: 'POST', body: { line_id: id, batch_id: S.current_batch } })
-      .then(function (r) { if (r.ok) delete qtySaveErrors[id]; afterLineChange(r); });
+      .then(function (r) { if (r.ok) delete qtySaveErrors[id]; afterLineChange(r); })
+      .catch(function () { netAlert('这一行是否已删除未确认，请核对明细'); });
   }
 
   /* -------------------- 结单 -------------------- */
@@ -1444,7 +1494,7 @@
         + '<td class="sku">' + esc(l.sku_code) + '</td>'
         + '<td style="width:104px"><input class="qty-input js-rec-qty" data-id="' + l.id + '" value="'
         + fmtNum(l.qty) + '"' + (l.inbound_job_id ? ' disabled' : '') + '></td>'
-        + '<td style="text-align:right">' + window.ReceiptEditor.button(l) + '<button class="icon-btn js-del-line" data-id="' + l.id + '">✕</button></td>'
+        + '<td style="text-align:right">' + window.ReceiptEditor.button(l) + '<button class="icon-btn icon-del js-del-line" data-id="' + l.id + '" title="删除这一行" aria-label="删除 ' + esc(l.name || l.sku_id || '') + '">✕</button></td>'
         + '</tr>';
     }).join('') : '<tr><td colspan="5"><div class="empty">无明细</div></td></tr>';
     return '<div class="table-wrap"><table class="tbl"><thead><tr>'
@@ -1459,7 +1509,7 @@
       openModal('子批次明细', linesTable(r.lines),
         [{ text: '关闭', cls: 'btn-primary', fn: function () { if(closeModal()===false)return; refocus(); refreshAfterMutation(); } }],
         function () { if(closeModal()===false)return; refocus(); refreshAfterMutation(); });
-    }).catch(function () { permAlert(); });
+    }).catch(function () { netAlert(); });
   }
 
   // 采购单查询结果里的单个「物流单号」分组小表
@@ -1471,7 +1521,7 @@
         + (l.spec ? '<div style="color:#6b7a8d;font-size:12px">' + esc(l.spec) + '</div>' : '') + '</td>'
         + '<td style="width:104px"><input class="qty-input js-rec-qty" data-id="' + l.id + '" value="'
         + fmtNum(l.qty) + '"' + (g.inbound_job_id ? ' disabled' : '') + '></td>'
-        + '<td style="text-align:right">' + window.ReceiptEditor.button(l) + '<button class="icon-btn js-del-line" data-id="' + l.id + '">✕</button></td>'
+        + '<td style="text-align:right">' + window.ReceiptEditor.button(l) + '<button class="icon-btn icon-del js-del-line" data-id="' + l.id + '" title="删除这一行" aria-label="删除 ' + esc(l.name || l.sku_id || '') + '">✕</button></td>'
         + '</tr>';
     }).join('') : '<tr><td colspan="4"><div class="empty">该物流单号暂无明细</div></td></tr>';
     return '<div class="grp">'
@@ -1611,7 +1661,7 @@
           + '</div></div>';
         return h;
       }).join('')+extra;
-    }).catch(function () { if(queryOpen.po&&request===querySeq.po)permAlert(); });
+    }).catch(function () { if(queryOpen.po&&request===querySeq.po)netAlert(); });
   }
   $('#btn-q-po').onclick = runPoQuery;
   $('#q-po').addEventListener('keydown', function (e) {
@@ -1642,7 +1692,7 @@
           + '<button class="btn btn-ghost btn-sm danger js-del-batch" data-id="' + b.id + '" data-sid="' + esc(b.session_id || '') + '">删除该子批次</button>'
           + '</div></div>';
       }).join('')+extra;
-    }).catch(function () { if(queryOpen.tk&&request===querySeq.tk)permAlert(); });
+    }).catch(function () { if(queryOpen.tk&&request===querySeq.tk)netAlert(); });
   }
   $('#btn-q-tk').onclick = runTkQuery;
   $('#q-tk').addEventListener('keydown', function (e) {
@@ -1762,7 +1812,7 @@
         + '<p class="hint record-refresh-status" role="status"></p>' + h + '</section>',
         [{ text: '关闭', cls: 'btn-primary', fn: function () { if(closeModal()===false)return; refocus(); refreshAfterMutation(); } }],
         function () { if(closeModal()===false)return; refocus(); refreshAfterMutation(); });
-    }).catch(function () { permAlert(); });
+    }).catch(function () { netAlert(); });
   }
   var recordRefreshEpoch = 0;
   function refreshOpenSessionDetail(live) {
@@ -1828,7 +1878,7 @@
       a.href = r.url; a.download = r.name;
       document.body.appendChild(a); a.click(); a.remove();
       toast('已导出 ' + r.rows + ' 行', 'ok');
-    }).catch(function () { permAlert(); });
+    }).catch(function () { netAlert(); });
   }
   function getExportValue() {
     var m = $('input[name=exp-mode]:checked').value;

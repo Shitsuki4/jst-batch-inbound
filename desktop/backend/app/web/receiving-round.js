@@ -4,7 +4,27 @@
   function num(v) { if (v == null || !isFinite(Number(v))) return '待核实'; return String(Math.round(Number(v) * 10000) / 10000); }
   function copy(code, label) { return '<span class="pi-code-token"><span>' + esc(code) + '</span> <button type="button" class="copy-code" data-copy="' + esc(code) + '" aria-label="复制' + esc(label + ' ' + code) + '">复制</button></span>'; }
   function unique(list) { return list.filter(function (s, i) { return s && list.indexOf(s) === i; }); }
-  function product(row) {
+  // 收货工作区用两行紧凑版：第一行商品名（+ 规格），第二行灰字「编码 · 条码 · 采购/入库」，点编码即复制。
+  // 差异报告（reportMode）仍用完整版，打印 / 核对时信息不省略。
+  // 紧凑版里编码本身就是复制按钮（不额外占宽度），鼠标移上去显示下划线和「点击复制」
+  function chip(code, label) { return '<button type="button" class="copy-code pi-chip" data-copy="' + esc(code) + '" title="点击复制' + esc(label) + '" aria-label="复制' + esc(label + ' ' + code) + '">' + esc(code) + '</button>'; }
+  function compact(row) {
+    var barcodes = unique(row.sku_codes || (row.sku_code ? [row.sku_code] : []));
+    var aux = unique(row.auxiliary_codes || String(row.aux_codes || '').split(/[,，;；\s]+/)).filter(function (s) { return barcodes.indexOf(s) < 0; });
+    var meta = [];
+    meta.push(row.sku_id ? chip(row.sku_id, '商品编码') : '编码未提供');
+    if (barcodes.length) meta.push(barcodes.map(function (c) { return chip(c, '条码'); }).join(' '));
+    if (aux.length) meta.push('辅助 ' + aux.map(function (c) { return chip(c, '辅助码'); }).join(' '));
+    if (!barcodes.length && !aux.length) meta.push('条码未提供');
+    // ERP 采购 / 入库数只在有值时占位；没值时放进悬停提示，不挤占第二行
+    if (row.ordered != null) meta.push('<span class="pi-erp-inline">采购 ' + num(row.ordered) + ' / 入库 ' + num(row.erp_received) + '</span>');
+    return '<div class="pi-compact" title="' + esc('采购 ' + num(row.ordered) + ' / 入库 ' + num(row.erp_received)) + '"><div class="pi-name">' + esc(row.name || '未提供商品名')
+      + (row.spec && row.spec !== row.name ? '<span class="pi-spec-inline">' + esc(row.spec) + '</span>' : '')
+      + (row.extra ? ' <span class="tag-new">本轮计划外商品</span>' : '') + '</div>'
+      + '<div class="pi-meta">' + meta.join('<span class="pi-dot" aria-hidden="true"> · </span>') + '</div></div>';
+  }
+  function product(row, reportMode) {
+    if (!reportMode) return compact(row);
     var barcodes = unique(row.sku_codes || (row.sku_code ? [row.sku_code] : []));
     var aux = unique(row.auxiliary_codes || String(row.aux_codes || '').split(/[,，;；\s]+/)).filter(function (s) { return barcodes.indexOf(s) < 0; });
     var html = '<div class="pi-code"><span class="pi-label">编码</span> ' + (row.sku_id ? copy(row.sku_id, '商品编码') : '未提供') + '</div>';
@@ -43,7 +63,7 @@
       if (reportMode) cls += ' report-row report-' + appearance(r).kind;
       return '<tr class="' + cls + '" data-poi="' + esc(r.poi_id) + '"'
         + (r.original_index != null ? ' data-idx="' + esc(r.original_index) + '"' : '') + '>'
-        + '<td class="pi-product">' + product(r) + '</td>'
+        + '<td class="pi-product">' + product(r, reportMode) + '</td>'
         + '<td class="pi-plan" data-label="本轮应收">' + num(r.plan) + '</td>'
         + '<td class="pi-recv" data-label="本轮已收">' + num(r.recv) + '</td>'
         + '<td class="pi-mark" data-label="差额"><span class="round-mark ' + (r.done ? 'done' : r.over ? 'over' : '') + ' st-' + status(r) + '">' + esc(r.reason || '待核实') + '</span></td></tr>';

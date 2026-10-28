@@ -6,8 +6,8 @@
  if(embedded)window.NativeDesk={get available(){return !!parent.NativeDesk?.available;},call:(action,args={})=>parent.NativeDesk.call(action,args)};
  document.addEventListener('click',async ev=>{const b=ev.target.closest('[data-native-action]');if(!b)return;ev.preventDefault();if(b.disabled)return;
   const blocked=window.ReceivingApp?.isBusy()||window.ReceivingDesk?.blocked()||document.querySelector('#pending-bar:not([hidden]),#pending:not([hidden]),dialog[open],.qty-saving,.qty-save-error,.qty-unsaved');
-  if(blocked&&['export','library','cleanup'].includes(b.dataset.nativeAction)){alert('请先确认或取消商品数量，并保存成功后再切换。');return;}
-  b.disabled=true;try{await NativeDesk.call(b.dataset.nativeAction);}catch(e){alert(e.message);}finally{b.disabled=false;}
+  if(blocked&&['export','library','cleanup'].includes(b.dataset.nativeAction)){JstDialog.alert('请先确认或取消商品数量，并保存成功后再切换。');return;}
+  b.disabled=true;try{await NativeDesk.call(b.dataset.nativeAction);}catch(e){JstDialog.alert(e.message);}finally{b.disabled=false;}
  });
  for(const type of ['joint','unplanned','express']){
   const url=sessionStorage.getItem('receiving:return:'+type);

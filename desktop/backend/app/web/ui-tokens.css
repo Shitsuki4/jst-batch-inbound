@@ -11,8 +11,8 @@
   --c-text:#1c1d2b; --c-text-2:#5d6075; --c-text-3:#737790;
   --c-side:#191a2e; --c-side-2:#26284a; --c-side-text:#b3b5d1; --c-side-muted:#6e7194;
   /* 四种收货状态：已齐绿 / 短收橙 / 超收红 / 未收灰 */
-  --c-ok:#0f9d6b; --c-ok-soft:#e5f7f0;
-  --c-warn:#d97706; --c-warn-soft:#fef4e3;
+  --c-ok:#047857; --c-ok-soft:#e5f7f0;   /* 白底 5.5:1，浅底 ≥4.6:1 */
+  --c-warn:#b45309; --c-warn-soft:#fef4e3; /* 白底 5.0:1，浅底 ≥4.6:1 */
   --c-danger:#e11d48; --c-danger-soft:#ffe9ee;
   --c-none:#737790; --c-none-soft:#f0f1f6;
   /* 圆角 / 阴影 / 尺寸 */
@@ -124,3 +124,17 @@ button:focus-visible,select:focus-visible,input:focus-visible,a:focus-visible{ou
 .badge-none,.st-none{background:var(--c-none-soft);color:var(--c-none)}
 .badge-live::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}
 .chip-soft{display:inline-flex;align-items:center;height:24px;padding:0 10px;border-radius:99px;background:var(--c-panel);border:1px solid var(--c-line);color:var(--c-text-2);font-size:12px;white-space:nowrap;max-width:260px;overflow:hidden;text-overflow:ellipsis}
+
+/* ===== 公用确认 / 输入 / 提示弹窗（jst-dialog.js，替代原生 confirm / prompt / alert） ===== */
+dialog.jst-dlg{width:min(440px,calc(100vw - 32px));padding:0;border:0;border-radius:var(--r-lg);background:var(--c-panel,#fff);color:var(--c-text);box-shadow:0 20px 60px rgba(23,25,60,.28);font-family:var(--font)}
+dialog.jst-dlg::backdrop{background:rgba(20,22,40,.42)}
+.jst-dlg-hd{padding:18px 20px 6px;font-size:17px;font-weight:700}
+.jst-dlg.danger .jst-dlg-hd{color:var(--c-danger)}
+.jst-dlg-bd{padding:4px 20px 12px;font-size:14px;line-height:1.7;color:var(--c-text-2);white-space:pre-wrap;word-break:break-word;max-height:50vh;overflow:auto}
+.jst-dlg-input{display:block;width:calc(100% - 40px);margin:0 20px 8px;height:var(--h-md);padding:0 12px;border:1.5px solid var(--c-line-strong);border-radius:var(--r);font:inherit;font-size:15px;box-sizing:border-box}
+.jst-dlg-input:focus{outline:none;border-color:var(--c-primary);box-shadow:0 0 0 3px var(--c-primary-soft)}
+.jst-dlg-ft{display:flex;justify-content:flex-end;gap:10px;padding:10px 20px 18px}
+.jst-dlg-ft .btn{min-width:88px}
+.jst-dlg-ft .btn:focus-visible{outline:3px solid var(--c-primary);outline-offset:2px}
+.btn-danger-solid{background:var(--c-danger);border-color:var(--c-danger);color:#fff}
+.btn-danger-solid:hover{filter:brightness(.93)}
