@@ -272,5 +272,166 @@ class DownloadTests(HostBase):
             h.start_download()
 
 
+class UpgradeInstallerTests(HostBase):
+    """安装版：本机运行组件与 Release 固定的完全一致时下载精简升级安装程序，否则下载离线完整安装程序。"""
+
+    def make_runtime(self, ffmpeg=b"ffmpeg-bin", ffprobe=b"ffprobe-bin", webview=b"webview-bin"):
+        root = os.path.join(self.dir, "runtime")
+        os.makedirs(os.path.join(root, "webview2"), exist_ok=True)
+        paths = {"ffmpeg.exe": os.path.join(root, "ffmpeg.exe"), "ffprobe.exe": os.path.join(root, "ffprobe.exe"),
+                 "msedgewebview2.exe": os.path.join(root, "webview2", "msedgewebview2.exe")}
+        for name, data in (("ffmpeg.exe", ffmpeg), ("ffprobe.exe", ffprobe), ("msedgewebview2.exe", webview)):
+            with open(paths[name], "wb") as fh:
+                fh.write(data)
+        return paths
+
+    @staticmethod
+    def marker(ffmpeg=b"ffmpeg-bin", ffprobe=b"ffprobe-bin", webview=b"webview-bin"):
+        sha = {"ffmpeg.exe": hashlib.sha256(ffmpeg).hexdigest(), "ffprobe.exe": hashlib.sha256(ffprobe).hexdigest(),
+               "msedgewebview2.exe": hashlib.sha256(webview).hexdigest()}
+        return "<!-- runtime-requirements: %s -->" % json.dumps({"webview2": "154.0.4258.62", "ffmpeg": "8.1.2", "sha256": sha})
+
+    def release(self, body, with_upgrade=True, version="3.0.4"):
+        names = asset_names(version)
+        assets = [{"name": names["installer"], "size": 500 * 1048576}, {"name": names["portable"], "size": 86 * 1048576}]
+        if with_upgrade:
+            assets.append({"name": names["upgrade"], "size": 87 * 1048576})
+        r = rel(version, assets=assets)
+        r["body"] = "notes\n\n" + body
+        return {API + "/latest": (200, {}, r)}
+
+    def upgrade_host(self, routes, runtime, mode="installed"):
+        return UpdateHost(self.dir, current_version="3.0.3", install_mode=mode, fetch=FakeFetch(routes),
+                          clock=lambda: self.now[0], sleep=self.sleeps.append, runtime=runtime)
+
+    def test_marker_parsed_and_hidden_from_notes(self):
+        r = normalize_release(dict(rel("3.0.4"), body="hello\n" + self.marker()))
+        self.assertEqual(r["notes"], "hello")
+        self.assertEqual(r["runtime"]["webview2"], "154.0.4258.62")
+        self.assertEqual(set(r["runtime"]["sha256"]), set(updater.RUNTIME_FILES))
+        self.assertIsNone(normalize_release(dict(rel("3.0.4"), body="<!-- runtime-requirements: {bad json} -->"))["runtime"])
+        broken = self.marker().replace(hashlib.sha256(b"ffmpeg-bin").hexdigest(), "xyz")
+        self.assertIsNone(updater.parse_runtime_requirements(broken))
+        self.assertIn("upgrade", asset_names("3.0.4"))
+        self.assertEqual(asset_names("3.0.4")["upgrade"], "ReceivingAssistant-3.0.4-Upgrade-Setup.exe")
+
+    def test_matching_runtime_picks_upgrade(self):
+        h = self.upgrade_host(self.release(self.marker()), self.make_runtime())
+        st = h.check_now(True)
+        self.assertEqual(st["asset"]["kind"], "upgrade")
+        self.assertEqual(st["asset"]["name"], "ReceivingAssistant-3.0.4-Upgrade-Setup.exe")
+        self.assertEqual(st["asset"]["label"], "升级安装程序")
+        self.assertEqual(st["asset"]["note"], "")
+        self.assertTrue(st["asset"]["listed"])
+        self.assertIn("upgrade", st["links"])
+
+    def test_changed_runtime_falls_back_to_full_installer(self):
+        h = self.upgrade_host(self.release(self.marker(ffmpeg=b"new-ffmpeg")), self.make_runtime())
+        st = h.check_now(True)
+        self.assertEqual(st["asset"]["kind"], "installer")
+        self.assertIn("运行组件", st["asset"]["note"])
+        self.assertIn("FFmpeg 8.1.2", st["asset"]["note"])
+
+    def test_missing_runtime_or_marker_falls_back(self):
+        paths = self.make_runtime()
+        os.remove(paths["msedgewebview2.exe"])
+        st = self.upgrade_host(self.release(self.marker()), paths).check_now(True)
+        self.assertEqual(st["asset"]["kind"], "installer")
+        self.assertIn("msedgewebview2.exe", st["asset"]["note"])
+        shutil.rmtree(os.path.join(self.dir, "runtime"))
+        os.remove(os.path.join(self.dir, "update-cache.json"))
+        st = self.upgrade_host(self.release(""), self.make_runtime()).check_now(True)
+        self.assertEqual(st["asset"]["kind"], "installer")
+        self.assertIn("没有运行组件版本信息", st["asset"]["note"])
+
+    def test_release_without_upgrade_asset_and_portable_mode(self):
+        st = self.upgrade_host(self.release(self.marker(), with_upgrade=False), self.make_runtime()).check_now(True)
+        self.assertEqual(st["asset"]["kind"], "installer")
+        self.assertEqual(st["asset"]["note"], "")
+        os.remove(os.path.join(self.dir, "update-cache.json"))
+        st = self.upgrade_host(self.release(self.marker()), self.make_runtime(), mode="portable").check_now(True)
+        self.assertEqual(st["asset"]["kind"], "portable")
+
+    def test_hash_cache_reused_and_invalidated(self):
+        paths = self.make_runtime()
+        h = self.upgrade_host(self.release(self.marker()), paths)
+        h.check_now(True)
+        calls = []
+        real = updater.sha256_file
+        updater.sha256_file = lambda p, *a, **k: calls.append(p) or real(p, *a, **k)
+        try:
+            self.assertEqual(h.status()["asset"]["kind"], "upgrade")
+            self.assertEqual(calls, [], "大文件哈希应走缓存")
+            with open(paths["ffprobe.exe"], "ab") as fh:
+                fh.write(b"tampered")
+            os.utime(paths["ffprobe.exe"], ns=(1, 1))
+            self.assertEqual(h.status()["asset"]["kind"], "installer")
+            self.assertEqual(calls, [paths["ffprobe.exe"]])
+        finally:
+            updater.sha256_file = real
+
+    def test_upgrade_download_verified_and_prepared(self):
+        v = "3.0.4"
+        routes = self.release(self.marker())
+        name = asset_names(v)["upgrade"]
+        routes[release_download_url("desktop-v" + v, "SHA256SUMS.txt")] = (200, {}, ("%s  %s\n" % (PAYLOAD_SHA, name)).encode())
+        routes[release_download_url("desktop-v" + v, name)] = (200, {}, PAYLOAD)
+        h = self.upgrade_host(routes, self.make_runtime())
+        h.check_now(True)
+        h.start_download()
+        dl = self.wait_dl(h)
+        self.assertEqual(dl["state"], "verified", dl)
+        info = h.prepare_install()
+        self.assertEqual(info["kind"], "upgrade")
+        self.assertTrue(info["path"].endswith(name))
+
+    def test_detect_runtime_reads_host_env(self):
+        keys = ("JST_RUNTIME_WEBVIEW2", "JST_RUNTIME_FFMPEG", "JST_RUNTIME_FFPROBE")
+        old = {k: os.environ.pop(k, None) for k in keys}
+        try:
+            self.assertEqual(updater.detect_runtime(), {"ffmpeg.exe": "", "ffprobe.exe": "", "msedgewebview2.exe": ""})
+            os.environ.update({"JST_RUNTIME_WEBVIEW2": "C:\\rt\\webview2", "JST_RUNTIME_FFMPEG": "C:\\rt\\ffmpeg.exe",
+                               "JST_RUNTIME_FFPROBE": "C:\\rt\\ffprobe.exe"})
+            rt = updater.detect_runtime()
+            self.assertEqual(rt["ffmpeg.exe"], "C:\\rt\\ffmpeg.exe")
+            self.assertTrue(rt["msedgewebview2.exe"].endswith("msedgewebview2.exe"))
+        finally:
+            for k, v in old.items():
+                os.environ.pop(k, None)
+                if v is not None:
+                    os.environ[k] = v
+
+
+class UpgradeInstallerWiringTests(unittest.TestCase):
+    """升级安装程序的打包约定：不删运行时、安装前核对运行组件、CI 上传 / 校验 / 中文名齐全。"""
+
+    ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+
+    def read(self, *parts):
+        with open(os.path.join(self.ROOT, *parts), encoding="utf-8-sig") as fh:
+            return fh.read()
+
+    def test_iss_keeps_runtime_and_checks_it(self):
+        iss = self.read("desktop", "installer", "offline_setup.iss")
+        delete = iss.split("[InstallDelete]", 1)[1].split("\n[", 1)[0]
+        self.assertIn("{app}\\backend\\_internal", delete)
+        self.assertIn('#ifndef UpgradeOnly\nType: filesandordirs; Name: "{app}\\runtime\\webview2"\n#endif', delete,
+                      "升级安装程序不能删除已安装的 WebView2 运行时")
+        code = iss.split("[Code]", 1)[1]
+        for needle in ("function InitializeSetup(", "RuntimeProblem(", "GetSHA256OfFile", "--import-portable",
+                       "{param:PORTABLEDATA|}", "ReceivingAssistant\\runtime"):
+            self.assertIn(needle, code)
+        self.assertIn("{80E21946-081D-4C07-A40D-60C2244D7066}_is1", code, "必须按离线完整版的 AppId 找已安装目录")
+
+    def test_workflow_ships_upgrade_installer(self):
+        wf = self.read(".github", "workflows", "build-desktop-exe.yml")
+        for needle in ("build-upgrade-windows.ps1", "verify-upgrade-installer.ps1",
+                       "release-assets/upgrade-installer/ReceivingAssistant-${{ needs.build.outputs.version }}-Upgrade-Setup.exe",
+                       "收货小助手-$APP_VERSION-升级安装程序.exe", "<!-- runtime-requirements: ${requirements} -->",
+                       "Upgrade-Setup.exe\\$\" release-assets/SHA256SUMS.txt"):
+            self.assertIn(needle, wf)
+        self.assertEqual(asset_names("9.9.9")["upgrade"], "ReceivingAssistant-9.9.9-Upgrade-Setup.exe")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

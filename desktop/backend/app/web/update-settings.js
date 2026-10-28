@@ -31,12 +31,12 @@
    last=d;const dl=d.download||{},latest=d.latest;
    $('update-channel').value=d.channel||'github';$('update-auto').checked=!!d.auto_check;
    $('update-current').textContent=(d.current_version||'未知')+' · '+(d.install_mode_label||'');
-   $('update-latest').textContent=latest?(latest.version+(latest.published_at?' · 发布于 '+latest.published_at.slice(0,10):'')+(d.asset&&d.asset.size?' · '+fmtSize(d.asset.size):'')):(d.checking?'检查中…':'尚未获取');
+   $('update-latest').textContent=latest?(latest.version+(latest.published_at?' · 发布于 '+latest.published_at.slice(0,10):'')+(d.asset&&d.asset.label?' · '+d.asset.label:'')+(d.asset&&d.asset.size?' · '+fmtSize(d.asset.size):'')):(d.checking?'检查中…':'尚未获取');
    $('update-notes-box').hidden=!(latest&&latest.notes);$('update-notes').textContent=latest&&latest.notes||'';
    let state;
    if(d.checking)state='正在检查新版本…';
    else if(d.check_error)state='检查失败：'+d.check_error+'（上次成功检查：'+fmtTime(d.last_checked)+'）';
-   else if(d.update_available)state='发现新版本 '+latest.version+'，可以下载并安装';
+   else if(d.update_available)state='发现新版本 '+latest.version+'，可以下载并安装'+(d.asset&&d.asset.note?'。'+d.asset.note:'');
    else state=latest?'已是最新版本（上次检查：'+fmtTime(d.last_checked)+'）':'尚未检查';
    if(d.install_mode!=='installed'&&d.install_mode!=='portable')state+=' · 开发 / 源码运行，不能自动安装';
    $('update-state').textContent=state;
@@ -72,6 +72,7 @@
    if(!last||!last.update_available)return;
    // 便携版最需要在点安装前知道：数据不会跟着迁移。写进确认框并给出当前数据文件夹
    let text='安装前程序会安全退出；正在录像或入库中时会被拒绝。';
+   if(last.install_mode==='installed'&&last.asset&&last.asset.label)text='将下载'+last.asset.label+(last.asset.size?'（'+fmtSize(last.asset.size)+'）':'')+'。'+(last.asset.note||'')+'\n'+text;
    if(last.install_mode==='portable')text='便携版会解压到新文件夹，旧文件夹中的数据不会自动迁移。\n当前数据文件夹：'+(last.data_dir||'（未知）')+'\n请记下这个位置，升级后需要时手动迁移。\n\n'+text;
    if(!await JstDialog.confirm(text,{title:'下载并安装 '+last.latest.version+'？',ok:'下载并安装'}))return;
    installing=true;msg('');

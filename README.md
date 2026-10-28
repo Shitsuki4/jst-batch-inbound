@@ -3,7 +3,7 @@
 面向仓库收货台的 Windows 桌面工具：扫物流单号、扫商品条码，自动对照聚水潭采购单统计实收，
 一键生成入库单；同时按物流单号自动录制开箱视频，方便售后举证。
 
-当前版本：**4.1.3**　·　[下载最新版](https://github.com/Shitsuki4/jst-batch-inbound/releases)
+当前版本：**4.1.4**　·　[下载最新版](https://github.com/Shitsuki4/jst-batch-inbound/releases)
 
 ## 功能
 
@@ -26,8 +26,14 @@
 | `ReceivingAssistant-<版本>-Offline-Setup.exe`（约 500 MiB） | 推荐。自带 .NET、Python 后端、FFmpeg、WebView2，内网或断网电脑也能装 |
 | `jst-batch-inbound-desktop-<版本>-win-x64.zip`（约 86 MiB） | 便携版，缺依赖时首次启动会通过 `winget` 安装 |
 | `ReceivingAssistant-Deps-<版本>-Setup.exe`（运行依赖安装程序） | 与便携版配套：先运行它安装 FFmpeg/ffprobe 和 WebView2 固定运行时，便携版即可在断网电脑使用，无需 `winget`。便携 ZIP + 依赖 exe = 离线完整安装包之外的另一种离线方案 |
+| `ReceivingAssistant-<版本>-Upgrade-Setup.exe`（升级安装程序，约 75 MiB） | 给已经装过离线完整安装程序或运行依赖安装程序的电脑升级用。内容和便携 ZIP 一样，不带 FFmpeg 和 WebView2，用电脑上已经装好的那一份；运行组件缺失或版本不一致时拒绝安装，请改用离线完整安装程序 |
 
 - 按当前用户安装，不需要管理员权限。
+- 升级安装程序：
+  - 装过离线完整版的电脑：原地升级到同一个安装目录，`runtime\` 和 `%LOCALAPPDATA%\ReceivingAssistant\v3` 里的数据都不动。
+  - 只装过运行依赖、一直用便携版的电脑：装成安装版，用运行依赖安装程序的共享组件。安装版数据和便携版文件夹是分开的；安装时可以在“便携版数据”页选中便携版文件夹，把它的业务数据和设置**复制**到安装版（只复制不移动，便携版文件夹不改；录像不复制，继续存在原来的位置；安装版已有数据时不导入）。静默安装用 `/PORTABLEDATA="便携版文件夹"`。
+  - 两种组件都没有，或者版本和这一版固定的不一样：安装程序直接拒绝，提示改用离线完整安装程序，不做任何改动。
+  - 安装版「设置 → 软件更新」会自动挑选：本机组件和新版本固定的完全一致就下载升级安装程序，否则下载离线完整安装程序。
 - 运行依赖安装程序把组件装到 `%LOCALAPPDATA%\ReceivingAssistant\runtime`，在“应用和功能”里显示为“收货小助手运行依赖”，可单独卸载，不碰业务数据。
 - 业务数据、设置、登录资料在 `%LOCALAPPDATA%\ReceivingAssistant\v3`，升级时保留；卸载时默认保留，也可以选择删除部分或全部数据。
 - 开始菜单有“卸载收货小助手”。卸载时可选：保留全部数据（默认）/ 自定义保留（收货数据库、录像、导出文件、设置与登录记忆、缓存日志）/ 完全卸载；小助手仍在运行时可选择强制结束后继续。静默卸载支持 `/FORCECLOSE`、`/PURGEDATA`，详见 [`desktop/README.md`](desktop/README.md#卸载)。
@@ -89,10 +95,20 @@ git tag desktop-vX.Y.Z
 git push origin desktop-vX.Y.Z
 ```
 
-CI（[`build-desktop-exe.yml`](.github/workflows/build-desktop-exe.yml)）会构建便携 ZIP、离线安装包和运行依赖安装程序，
+CI（[`build-desktop-exe.yml`](.github/workflows/build-desktop-exe.yml)）会构建便携 ZIP、离线安装包、运行依赖安装程序和升级安装程序，
 跑完回归与安装 / 覆盖升级 / 卸载验收后创建 GitHub Release。PR 修改 `desktop/**` 时也会自动构建。
 
 ## 版本记录
+
+### 4.1.4
+
+已安装 4.x 的电脑可通过「设置 → 软件更新」自动更新到本版本（也可手动下载安装包覆盖安装）。
+
+- 新增「升级安装程序」`ReceivingAssistant-<版本>-Upgrade-Setup.exe`（Release 显示名 `收货小助手-<版本>-升级安装程序.exe`，约 75 MiB）：装过离线完整安装程序或运行依赖安装程序的电脑可以直接用它升级，不用再下载约 500 MiB 的完整安装包。安装前核对电脑上的 WebView2 / FFmpeg 和这一版固定的完全一致，不一致或缺失就拒绝并提示改用离线完整安装程序。
+- 只装过运行依赖、用便携版的电脑，安装时可选择把便携版数据复制到安装版。
+- 安装版找不到自带的 `runtime\` 时，改用运行依赖安装程序的共享组件。
+- 安装版自动更新：本机组件与新版本一致时下载升级安装程序，否则下载离线完整安装程序；设置页会写明下载的是哪一种、为什么。
+- CI：actions/setup-python 升级到 7.1.0。
 
 ### 4.1.3
 

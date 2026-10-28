@@ -112,6 +112,8 @@ public sealed partial class MainWindow:Window {
 public static class Program {
  [STAThread]public static void Main(string[] args){
   if(args.Contains("--dependency-check")){var check=Dependencies.Check().GetAwaiter().GetResult();File.WriteAllText(args[Array.IndexOf(args,"--dependency-check")+1],JsonSerializer.Serialize(new{check.WebView,check.Video,check.Engine,check.Detail,check.Ready,BrowserFolder=AppPaths.BrowserFolder,AppPaths.Installed}));Environment.ExitCode=check.Ready?0:1;return;}
+  // One-time copy of a portable folder's data into the installed data root (run by the upgrade installer).
+  if(args.Contains("--import-portable")){Environment.ExitCode=PortableImport.Run(args);return;}
   // Standalone 录像查询 UI acceptance: no backend, camera or business window (run by CI).
   // Standalone 录像浮窗 V2 UI acceptance: synthetic states and frames, no camera/backend (run by CI).
   if(args.Contains("--float-ui-test")){Environment.ExitCode=FloatUiAcceptance.Run(args);return;}
@@ -131,7 +133,7 @@ public static class Program {
 // 主窗口外壳（方向 C）：白色细工具栏 + 状态行，不再重复网页侧栏的品牌标题。
 // Shared with the library acceptance so CI can screenshot the shell without a backend.
 public static class ShellChrome {
- public const string Brand="扫码入库",WindowTitle="扫码入库 · 聚水潭收货助手 4.1.3";
+ public const string Brand="扫码入库",WindowTitle="扫码入库 · 聚水潭收货助手 4.1.4";
  public static (Border Top,WrapPanel Bar) Build(TextBlock status){
   var bar=new WrapPanel{VerticalAlignment=VerticalAlignment.Center};
   status.FontWeight=FontWeights.SemiBold;status.TextWrapping=TextWrapping.Wrap;status.Foreground=Palette.Text2;status.VerticalAlignment=VerticalAlignment.Center;
