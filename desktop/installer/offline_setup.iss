@@ -26,7 +26,7 @@
   #define OutputDir "..\dist\installer"
 #endif
 #ifndef AppVersion
-  #define AppVersion "4.1.3"
+  #define AppVersion "4.1.4"
 #endif
 #ifdef UpgradeOnly
   #ifndef ReqFfmpegSha

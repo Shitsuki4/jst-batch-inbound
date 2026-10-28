@@ -10,7 +10,7 @@
 - 下载：存到 data/updates/<版本>/，``.part`` 断点续传、失败自动重试；完成后必须与
   同渠道下载的 SHA256SUMS.txt 一致（Release 接口若带 asset digest 也必须一致）才算可用。
 - 安装版有两种安装包：离线完整安装程序（自带 WebView2 / FFmpeg，约 500 MiB）和精简的升级安装程序
-  （不带这两样，约 90 MiB）。Release 说明里由 CI 写一段 ``runtime-requirements`` 注释，记下这一版
+  （不带这两样，约 75 MiB）。Release 说明里由 CI 写一段 ``runtime-requirements`` 注释，记下这一版
   固定的运行组件文件哈希；本机正在用的运行组件（宿主通过 JST_RUNTIME_* 环境变量告知）与之完全一致时
   才下载升级安装程序，否则（组件版本变了、本机缺组件、说明里没有这段）一律下载离线完整安装程序。
   升级安装程序自己安装前也会再核对一遍，不一致就拒绝安装。
