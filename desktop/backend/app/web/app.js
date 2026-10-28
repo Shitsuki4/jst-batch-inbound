@@ -104,8 +104,18 @@
     openModal('操作提示', h, [{ text: '知道了', cls: 'btn-primary', fn: closeModal }], closeModal);
   }
 
+  // 请求没有结果（断网、本机服务没在运行、返回不是 JSON）：说清是连接问题，不要报成「无权限」
+  function netAlert(hint) {
+    var h = '<div class="perm-msg" style="text-align:center;padding:8px 0 2px">'
+      + '<div class="perm-title" style="font-size:17px;font-weight:700;color:#d93a3a">没连上本机收货服务</div>'
+      + '<div style="margin-top:8px;color:#5d6075;font-size:13px">' + esc(hint || '请确认程序还在运行，稍后重试') + '</div>'
+      + '</div>';
+    openModal('连接中断', h, [{ text: '知道了', cls: 'btn-primary', fn: closeModal }], closeModal);
+    beep(180, 0.3);
+  }
+
   function handleFail(r) {
-    if (!r) return permAlert();
+    if (!r) return netAlert();
     if (r.msg === '当前账号无此操作权限') { permAlert(r.hint); return true; }
     toast(r.msg || '操作失败', 'err');
     beep(180, 0.16);
@@ -588,7 +598,7 @@
         beep(880, 0.08);
         reload();
       })
-      .catch(function () { btn.disabled = false; btn.textContent = '创建收货批次'; permAlert(); });
+      .catch(function () { btn.disabled = false; btn.textContent = '创建收货批次'; netAlert('批次是否已创建未确认，请刷新页面核对后再试'); });
   }
   $('#btn-activate').onclick = activate;
   $('#po-input').addEventListener('keydown', function (e) {
@@ -617,7 +627,7 @@
       toast(r.msg || '已退出批次', 'ok');
       beep(660, 0.08);
       reload();
-    }).catch(function () { permAlert(); });
+    }).catch(function () { netAlert('是否已退出批次未确认，请刷新页面核对'); });
   }
 
   // 待确认扫码不是已保存明细；先明确确认，不能悄悄清掉或带着失败继续挂起。
@@ -679,7 +689,7 @@
       el.disabled = false;
       if (!r.ok) return handleFail(r);
       showDiff(r, r.session.state === 'closed', r.session.state === 'paused');
-    }).catch(function () { el.disabled = false; permAlert(); });
+    }).catch(function () { el.disabled = false; netAlert(); });
   });
 
   function resumeBatch(sid) {
@@ -688,7 +698,7 @@
       toast(r.msg || '已回到该批次', 'ok');
       beep(880, 0.08);
       reload();
-    }).catch(function () { permAlert(); });
+    }).catch(function () { netAlert('是否已回到该批次未确认，请刷新页面核对'); });
   }
 
   /* 点击挂起批次里的「继续收货」 */
@@ -818,7 +828,7 @@
         flash(nm + '  →  ' + fmtNum(q), 'ok'); beep(1318, 0.06);
       }
       refocus();
-    }).catch(function () { permAlert('网络中断，本笔是否已入账未确认，请核对明细后再补扫'); refocus(); });
+    }).catch(function () { netAlert('网络中断，本笔是否已入账未确认，请核对明细后再补扫'); refocus(); });
   }
 
   function cancelPending() {
@@ -909,7 +919,7 @@
         : '已切回 ' + code + '，继续补扫', 'ok');
       beep(1046, 0.07);
       refocus();
-    }).catch(function () { permAlert(); });
+    }).catch(function () { netAlert('物流单号是否已建好未确认，请核对右侧物流单列表后再扫'); });
   }
 
   var VIA_TAG = {
@@ -956,7 +966,7 @@
       return next();
     }, function () {
       // 结果未确认：不继续处理下一件，避免在不确定状态下继续累加
-      permAlert('网络中断，上一件是否已入账未确认，请核对明细后再扫');
+      netAlert('网络中断，上一件是否已入账未确认，请核对明细后再扫');
     });
   }
 
@@ -1012,7 +1022,7 @@
         });
       }
       showUnresolved(r, code);
-    }).catch(function () { permAlert(); });
+    }).catch(function () { netAlert(); });
   }
 
   function showUnresolved(r, code) {
@@ -1248,7 +1258,7 @@
             if (!r.ok) return handleFail(r);
             toast(r.msg || '已删除该物流单', 'ok');
             refreshAfterMutation(isCur ? 0 : S.current_batch);
-          }).catch(function () { permAlert(); });
+          }).catch(function () { netAlert('该物流单号是否已删除未确认，请刷新页面核对'); });
       });
   }
 
@@ -1290,7 +1300,7 @@
             toast(r.msg || '已修改', 'ok');
             refreshAfterMutation((S.current_batch && S.current_batch !== bid) ? S.current_batch : 0);
             askRerecordAfterRename(bid, no, v);
-          }).catch(function () { closeModal(); permAlert(); });
+          }).catch(function () { closeModal(); netAlert('单号是否已修改未确认，请刷新页面核对'); });
       } }],
       function () { closeModal(); refocus(); });
     var inp = $('#rename-input');
@@ -1459,7 +1469,7 @@
       openModal('子批次明细', linesTable(r.lines),
         [{ text: '关闭', cls: 'btn-primary', fn: function () { if(closeModal()===false)return; refocus(); refreshAfterMutation(); } }],
         function () { if(closeModal()===false)return; refocus(); refreshAfterMutation(); });
-    }).catch(function () { permAlert(); });
+    }).catch(function () { netAlert(); });
   }
 
   // 采购单查询结果里的单个「物流单号」分组小表
@@ -1611,7 +1621,7 @@
           + '</div></div>';
         return h;
       }).join('')+extra;
-    }).catch(function () { if(queryOpen.po&&request===querySeq.po)permAlert(); });
+    }).catch(function () { if(queryOpen.po&&request===querySeq.po)netAlert(); });
   }
   $('#btn-q-po').onclick = runPoQuery;
   $('#q-po').addEventListener('keydown', function (e) {
@@ -1642,7 +1652,7 @@
           + '<button class="btn btn-ghost btn-sm danger js-del-batch" data-id="' + b.id + '" data-sid="' + esc(b.session_id || '') + '">删除该子批次</button>'
           + '</div></div>';
       }).join('')+extra;
-    }).catch(function () { if(queryOpen.tk&&request===querySeq.tk)permAlert(); });
+    }).catch(function () { if(queryOpen.tk&&request===querySeq.tk)netAlert(); });
   }
   $('#btn-q-tk').onclick = runTkQuery;
   $('#q-tk').addEventListener('keydown', function (e) {
@@ -1762,7 +1772,7 @@
         + '<p class="hint record-refresh-status" role="status"></p>' + h + '</section>',
         [{ text: '关闭', cls: 'btn-primary', fn: function () { if(closeModal()===false)return; refocus(); refreshAfterMutation(); } }],
         function () { if(closeModal()===false)return; refocus(); refreshAfterMutation(); });
-    }).catch(function () { permAlert(); });
+    }).catch(function () { netAlert(); });
   }
   var recordRefreshEpoch = 0;
   function refreshOpenSessionDetail(live) {
@@ -1828,7 +1838,7 @@
       a.href = r.url; a.download = r.name;
       document.body.appendChild(a); a.click(); a.remove();
       toast('已导出 ' + r.rows + ' 行', 'ok');
-    }).catch(function () { permAlert(); });
+    }).catch(function () { netAlert(); });
   }
   function getExportValue() {
     var m = $('input[name=exp-mode]:checked').value;
