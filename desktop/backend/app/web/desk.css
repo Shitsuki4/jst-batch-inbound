@@ -49,6 +49,13 @@ body[data-desk] #message{position:sticky;top:0;z-index:5;margin:0 24px;padding:0
 body[data-desk] #message:empty{display:none}
 body[data-desk] #message:not(:empty){margin-top:16px;padding:10px 14px}
 body[data-desk] #message.error{background:var(--c-danger-soft);color:var(--c-danger)}
+/* 扫码框下方提示条：与「有采购单收货」同样的位置和颜色，固定高度不推动下方内容 */
+body[data-desk] .desk-flash{display:flex;align-items:center;min-height:40px;margin:8px 0 0;padding:8px 12px;border-radius:var(--r);font-size:15px;font-weight:600;line-height:1.4}
+body[data-desk] .desk-flash:empty{visibility:hidden}
+body[data-desk] .desk-flash.ok{background:var(--c-ok-soft);color:var(--c-ok)}
+body[data-desk] .desk-flash.tracking{background:#fdecc8;color:#92400e}
+body[data-desk] .desk-flash.warn{background:var(--c-warn-soft);color:var(--c-warn)}
+body[data-desk] .desk-flash.err{background:var(--c-danger-soft);color:var(--c-danger)}
 
 /* ---------- 输入 ---------- */
 body[data-desk] input:where(:not([type=checkbox],[type=radio])),body[data-desk] select,body[data-desk] textarea{height:var(--h-md);padding:0 12px;border:1px solid var(--c-line-strong);border-radius:var(--r);background:#fff;color:var(--c-text);font:14px var(--font);min-width:0;max-width:100%;outline:none}

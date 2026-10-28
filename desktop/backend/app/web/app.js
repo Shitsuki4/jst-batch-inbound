@@ -57,6 +57,7 @@
   var actx = null;
   function beep(freq, dur) {
     if (S.settings && S.settings.sound === '0') return;
+    if (window.ScanFeedback) { window.ScanFeedback.tone(freq, dur); return; } // 四个收货页共用同一套提示音（scan-feedback.js）
     try {
       actx = actx || new (window.AudioContext || window.webkitAudioContext)();
       var o = actx.createOscillator(), g = actx.createGain();
