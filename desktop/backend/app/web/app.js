@@ -1111,6 +1111,13 @@
   // 扫到的商品在左栏高亮一下，方便核对
   function flashPoItem(skuId) {
     if (!skuId) return;
+    // 右栏「本物流单收货明细」里刚扫的那行也高亮并滚到可见处，扫完不用找
+    $$('#line-body tr[data-sku]').forEach(function (tr) {
+      if (tr.dataset.sku !== String(skuId)) return;
+      tr.classList.add('pi-hit');
+      setTimeout(function () { tr.classList.remove('pi-hit'); }, 1400);
+      try { tr.scrollIntoView({ block: 'nearest' }); } catch (e) { }
+    });
     var rows = $$('#poitem-body tr');
     for (var i = 0; i < rows.length; i++) {
       var r = rows[i];
@@ -1198,7 +1205,7 @@
         html += '<tr class="line-sep"><td colspan="5">'
           + '<span class="line-sep-txt">以下为采购单里没有的商品</span></td></tr>';
       }
-      html += '<tr class="' + (bad ? 'tr-bad' : '') + '" data-id="' + l.id + '">'
+      html += '<tr class="' + (bad ? 'tr-bad' : '') + '" data-id="' + l.id + '" data-sku="' + esc(l.sku_id || '') + '">'
         + '<td>' + esc(l.name)
         + (bad ? '<span class="tag-new">采购单无此商品</span>' : '')
         + (window.BarcodeLearn ? window.BarcodeLearn.tag(l) : '')

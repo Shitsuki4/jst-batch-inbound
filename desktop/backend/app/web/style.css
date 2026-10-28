@@ -209,6 +209,26 @@ main{padding:14px}
 .pi-done{background:var(--ok-soft) !important}
 .pi-part{background:#fbfdff}
 .pi-hit{background:#fff6d8 !important;transition:background .2s}
+.pi-hit>td{background:#fff6d8 !important}
+/* #6 商品信息两行紧凑版：一屏能多看几行 */
+.pi-compact .pi-name,#poitem-body .pi-compact .pi-name{font-weight:700;color:var(--c-text);line-height:1.45;font-size:15px}
+.pi-compact .pi-meta{margin-top:2px;color:var(--c-text-2,#5d6075);font-size:13px;line-height:1.5;font-family:var(--mono)}
+.pi-compact .pi-erp-inline{font-family:var(--font,inherit);white-space:nowrap}
+.pi-compact .pi-chip{all:unset;cursor:copy;white-space:nowrap;border-bottom:1px dashed transparent;border-radius:3px}
+.pi-compact .pi-chip:hover{border-bottom-color:currentColor;color:var(--c-primary)}
+.pi-compact .pi-chip:focus-visible{outline:2px solid var(--c-primary);outline-offset:1px}
+/* #6 工作区占满窗口剩余高度，左右两栏各自滚动（窗口够大时；窄 / 矮窗口仍按原来整页滚动） */
+@media (min-width:1181px) and (min-height:640px){
+  .app-shell #work-area:not([hidden]){display:flex;flex-direction:column;height:calc(100vh - 56px - 42px);min-height:560px}
+  .app-shell #work-area>.grid{flex:1 1 auto;min-height:320px;align-items:stretch}
+  .app-shell #work-area>.grid>.card,.app-shell #work-area>.grid>.right-col{min-height:0;display:flex;flex-direction:column;margin:0}
+  .app-shell #work-area>.grid>.card .table-wrap{flex:1 1 auto;min-height:0;max-height:none;overflow:auto}
+  .app-shell #work-area>.grid>.right-col>.card{display:flex;flex-direction:column;min-height:0;margin:0}
+  .app-shell #work-area>.grid>.right-col>.card:first-child{flex:0 1 auto;max-height:42%}
+  .app-shell #work-area>.grid>.right-col>.card:first-child>:not(.card-hd){overflow:auto;min-height:0}
+  .app-shell #work-area>.grid>.right-col>.card:last-child{flex:1 1 0;min-height:180px}
+  .app-shell #work-area>.grid>.right-col>.card:last-child .table-wrap{flex:1 1 auto;min-height:0;max-height:none;overflow:auto}
+}
 .pi-mark{font-size:11px;text-align:right;white-space:nowrap}
 .pi-ok{color:var(--ok);font-weight:600}
 .pi-over{color:var(--danger);font-weight:600}
