@@ -16,15 +16,15 @@
   pane.innerHTML=`<div class="card"><div class="card-hd">软件更新</div>
   <div id="update-state" class="video-state" role="status">正在读取更新状态…</div>
   <div class="form-row"><label for="update-channel">下载渠道</label><select class="select" id="update-channel" aria-label="下载渠道"><option value="github">GitHub 原链接</option><option value="proxy">加速站 gh-proxy.com</option></select></div>
-  <p class="hint">国内网络访问 GitHub 较慢或失败时，请切换到加速站。两个渠道下载同一个发布文件，下载后都会按 SHA256SUMS.txt 校验。</p>
+  <p class="hint">国内网络访问 GitHub 较慢或失败时，请切换到加速站。两个渠道下载同一个发布文件，下载后都会按 SHA256SUMS.txt 校验。<b>注意：</b>选加速站时校验文件也从加速站下载，不能防止加速站本身被篡改；网络允许时请优先用 GitHub 原链接。</p>
   <div class="form-row"><label>自动检查</label><label class="setting-switch"><input type="checkbox" id="update-auto"> 每天自动检查一次新版本（只检查，不自动下载）</label></div>
   <div class="form-row"><label>当前版本</label><span id="update-current">—</span></div>
   <div class="form-row"><label>最新版本</label><span id="update-latest">—</span></div>
   <details class="settings-advanced" id="update-notes-box" hidden><summary>更新说明</summary><pre id="update-notes" style="white-space:pre-wrap;font:inherit;margin:10px 0 0;max-height:320px;overflow:auto"></pre></details>
-  <div id="update-progress-box" hidden style="margin:12px 0"><div style="height:10px;background:#e3eaf0;border-radius:6px;overflow:hidden"><div id="update-progress" style="height:100%;width:0;background:#0f8a8f;transition:width .3s"></div></div><p class="hint" id="update-progress-text"></p></div>
+  <div id="update-progress-box" hidden style="margin:12px 0"><div style="height:10px;background:var(--c-primary-soft);border-radius:6px;overflow:hidden"><div id="update-progress" style="height:100%;width:0;background:var(--c-primary);transition:width .3s"></div></div><p class="hint" id="update-progress-text"></p></div>
   <div class="row"><button class="btn btn-ghost" id="update-check">检查更新</button><button class="btn btn-primary" id="update-install" disabled>下载并安装</button><button class="btn btn-ghost" id="update-cancel" hidden>取消下载</button><button class="btn btn-ghost" id="update-release">打开发布页</button></div>
   <p class="hint" id="update-message" role="status"></p>
-  <p class="hint">正在录像或入库中时不能安装；安装前会安全退出程序。便携版会解压到新文件夹，旧文件夹中的数据不会自动迁移。</p></div>`;
+  <p class="hint">正在录像或入库中时不能安装；安装前会安全退出程序。<b>便携版会解压到新文件夹，旧文件夹中的数据不会自动迁移。</b></p></div>`;
 
   const msg=(t,cls)=>{const m=$('update-message');m.textContent=t||'';m.className='hint'+(cls?' '+cls:'');};
   function paint(d){
@@ -70,7 +70,10 @@
   $('update-check').onclick=async()=>{msg('');try{paint(await post('/api/update/check'));schedule(800);}catch(e){msg(e.message,'err');}};
   $('update-install').onclick=async()=>{
    if(!last||!last.update_available)return;
-   if(!confirm('下载并安装 '+last.latest.version+'？\n安装前程序会安全退出；正在录像或入库中时会被拒绝。'))return;
+   // 便携版最需要在点安装前知道：数据不会跟着迁移。写进确认框并给出当前数据文件夹
+   let text='安装前程序会安全退出；正在录像或入库中时会被拒绝。';
+   if(last.install_mode==='portable')text='便携版会解压到新文件夹，旧文件夹中的数据不会自动迁移。\n当前数据文件夹：'+(last.data_dir||'（未知）')+'\n请记下这个位置，升级后需要时手动迁移。\n\n'+text;
+   if(!await JstDialog.confirm(text,{title:'下载并安装 '+last.latest.version+'？',ok:'下载并安装'}))return;
    installing=true;msg('');
    try{const dl=last.download||{};if(!(dl.state==='verified'&&dl.version===last.latest.version))paint(await post('/api/update/download',{channel:$('update-channel').value}));await refresh();if(installing)schedule(1000);}
    catch(e){installing=false;msg(e.message,'err');refresh();}
@@ -91,7 +94,7 @@
   if(el&&el.dataset.version===v)return;
   if(el)el.remove();
   el=document.createElement('div');el.id='update-banner';el.dataset.version=v;el.setAttribute('role','status');
-  el.style.cssText='display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;padding:9px 16px;background:#e7f5f3;color:#0b5f66;border-bottom:1px solid #c5e4e0;font-size:13px';
+  el.style.cssText='display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;padding:9px 16px;background:var(--c-primary-soft);color:var(--c-primary-hover);border-bottom:1px solid var(--c-primary-line);font-size:13px';
   el.innerHTML='<span>发现新版本 <b>'+esc(v)+'</b>（当前 '+esc(d.current_version||'未知')+'）</span><span style="display:flex;gap:8px"><button class="btn btn-primary btn-sm" data-update-open>查看更新</button><button class="btn btn-ghost btn-sm" data-update-dismiss aria-label="关闭更新提示">不再提示此版本</button></span>';
   el.querySelector('[data-update-open]').onclick=()=>{if(window.ReceivingApp&&ReceivingApp.navigate)ReceivingApp.navigate('settings');if(window.SettingsWorkspace)SettingsWorkspace.show('update');};
   el.querySelector('[data-update-dismiss]').onclick=()=>{try{localStorage.setItem(DISMISS_KEY,v);}catch{}el.remove();};

@@ -380,6 +380,8 @@ class UpdateHost:
             "current_version": self.current or "",
             "install_mode": self.mode,
             "install_mode_label": {"installed": "安装版", "portable": "便携版"}.get(self.mode, "开发 / 源码运行"),
+            # 便携版安装前要在确认框里给出当前数据所在文件夹（新版本解压到新文件夹，数据不会自动迁移）
+            "data_dir": os.path.abspath(self.data_dir),
             "channel": s["channel"], "auto_check": s["auto_check"],
             "channels": [{"id": k, "label": CHANNEL_LABELS[k]} for k in CHANNELS],
             "checking": checking,
