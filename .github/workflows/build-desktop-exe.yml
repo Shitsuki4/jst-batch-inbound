@@ -430,7 +430,8 @@ jobs:
           test -f "release-assets/deps-installer/ReceivingAssistant-Deps-$APP_VERSION-Setup.exe"
           test -f "release-assets/upgrade-installer/ReceivingAssistant-$APP_VERSION-Upgrade-Setup.exe"
           test -f "release-assets/runtime-requirements.json"
-          grep -q "  ReceivingAssistant-$APP_VERSION-Upgrade-Setup.exe\$" release-assets/SHA256SUMS.txt
+          # SHA256SUMS.txt is written on the Windows runner with CRLF line endings.
+          tr -d '\r' < release-assets/SHA256SUMS.txt | grep -qx "[0-9a-f]\{64\}  ReceivingAssistant-$APP_VERSION-Upgrade-Setup.exe"
 
       - name: Publish tagged release
         if: needs.build.outputs.release_mode == 'publish'

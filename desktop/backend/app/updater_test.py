@@ -428,7 +428,8 @@ class UpgradeInstallerWiringTests(unittest.TestCase):
         for needle in ("build-upgrade-windows.ps1", "verify-upgrade-installer.ps1",
                        "release-assets/upgrade-installer/ReceivingAssistant-${{ needs.build.outputs.version }}-Upgrade-Setup.exe",
                        "收货小助手-$APP_VERSION-升级安装程序.exe", "<!-- runtime-requirements: ${requirements} -->",
-                       "Upgrade-Setup.exe\\$\" release-assets/SHA256SUMS.txt"):
+                       "tr -d '\\r' < release-assets/SHA256SUMS.txt | grep -qx",
+                       "  ReceivingAssistant-$APP_VERSION-Upgrade-Setup.exe\""):
             self.assertIn(needle, wf)
         self.assertEqual(asset_names("9.9.9")["upgrade"], "ReceivingAssistant-9.9.9-Upgrade-Setup.exe")
 
