@@ -104,7 +104,7 @@
   async function remove() {
     var ids = selected();
     if (!ids.length || busy) return;
-    if (!confirm('删除选中的 ' + ids.length + ' 条学习条码？删除后再扫到这些码会按「商品资料查不到」处理。')) return;
+    if (!await JstDialog.confirm('删除选中的 ' + ids.length + ' 条学习条码？删除后再扫到这些码会按「商品资料查不到」处理。')) return;
     busy = true;
     try {
       var j = await api('/api/learned/delete', { ids: ids });

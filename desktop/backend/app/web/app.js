@@ -77,7 +77,12 @@
   }
 
   /* -------------------- 弹窗 -------------------- */
-  var modalEsc = null;
+  var modalEsc = null, modalBack = null;
+  $('#modal').setAttribute('role', 'dialog');
+  $('#modal').setAttribute('aria-modal', 'true');
+  $('#modal').setAttribute('aria-labelledby', 'modal-title');
+  $('#modal-x').setAttribute('aria-label', '关闭');
+  $('#modal-x').title = '关闭';
   function openModal(title, html, buttons, onEsc) {
     diffContext = null;
     $('#modal-title').textContent = title;
@@ -91,11 +96,30 @@
       el.onclick = function () { b.fn && b.fn(); };
       ft.appendChild(el);
     });
+    if ($('#modal').hidden) modalBack = document.activeElement;
     $('#modal').hidden = false;
     modalEsc = onEsc || null;
+    // 焦点移进弹窗：有「取消」先放在取消上（危险操作按回车不会误确认），否则放在第一个按钮上
+    var first = ft.querySelector('.btn-ghost') || ft.querySelector('button') || $('#modal-x');
+    try { first.focus(); } catch (e) { /* 忽略 */ }
   }
-  function closeModal() { if (pauseReportBusy || finishBusy) return false; if(document.querySelector('#modal .qty-saving,#modal .qty-save-error,#modal .qty-unsaved')){toast('请先保存数量（按Enter或移开焦点），失败输入已保留','warn');return false;} $('#modal').hidden = true; modalEsc = null; diffContext = null; return true; }
+  function closeModal() { if (pauseReportBusy || finishBusy) return false; if(document.querySelector('#modal .qty-saving,#modal .qty-save-error,#modal .qty-unsaved')){toast('请先保存数量（按Enter或移开焦点），失败输入已保留','warn');return false;} $('#modal').hidden = true; modalEsc = null; diffContext = null; var back = modalBack; modalBack = null; if (back && back.isConnected && !back.closest('#modal')) { try { back.focus(); } catch (e) { /* 忽略 */ } } return true; }
   $('#modal-x').onclick = closeModal;
+  // 弹窗打开时：Tab 只在弹窗内循环；Esc 在任何页面都能关（原来只在「有采购单收货」页生效）
+  document.addEventListener('keydown', function (e) {
+    if ($('#modal').hidden || window.JstDialog?.isOpen()) return;
+    if (e.key === 'Escape') {
+      if (window.ProductPicker?.isOpen()) return;
+      e.preventDefault(); e.stopImmediatePropagation();
+      if (modalEsc) modalEsc(); else closeModal();
+      return;
+    }
+    if (e.key !== 'Tab') return;
+    var f = Array.prototype.filter.call($('#modal').querySelectorAll('button,input,select,textarea,a[href],[tabindex]:not([tabindex="-1"])'), function (x) { return !x.disabled && x.offsetParent !== null; });
+    if (!f.length) return;
+    var i = f.indexOf(document.activeElement);
+    if (i < 0 || (e.shiftKey && i === 0) || (!e.shiftKey && i === f.length - 1)) { e.preventDefault(); f[e.shiftKey ? f.length - 1 : 0].focus(); }
+  }, true);
 
   function permAlert(hint) {
     var h = '<div class="perm-msg" style="text-align:center;padding:8px 0 2px">'
@@ -728,7 +752,6 @@
     if (window.ProductPicker?.isOpen() || document.querySelector('.view.active')?.dataset.view !== 'home') return;
     if (e.key === 'F1') { e.preventDefault(); if (S.session) setMode('tracking'); }
     if (e.key === 'F2') { e.preventDefault(); if (S.session) setMode('item'); }
-    if (e.key === 'Escape' && !$('#modal').hidden && modalEsc) modalEsc();
   });
 
   /* -------------------- 扫码主流程 -------------------- */

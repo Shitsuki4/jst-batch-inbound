@@ -46,7 +46,7 @@
  }
  async function choose(kind){if(!native()){msg('从文件恢复仅在桌面安装版中可用。',true);return;}var r=await NativeDesk.call('chooseBackup',{kind:kind});if(!r||!r.path)return;await preview({path:r.path,label:r.path});}
  async function restore(){var sel=selected;if(!sel)return;var confirmText=$('restore-confirm').value.trim();if(confirmText!=='恢复')throw Error('请输入「恢复」两字确认');
-  if(!confirm('确认用「'+sel.label+'」替换当前收货数据？\n恢复前会自动备份当前数据，失败会自动回滚。'))return;
+  if(!await JstDialog.confirm('确认用「'+sel.label+'」替换当前收货数据？\n恢复前会自动备份当前数据，失败会自动回滚。'))return;
   msg('正在做恢复前自动备份并校验所选备份，请勿关闭程序…');
   if(native()){var r=await NativeDesk.call('restoreBackup',sel.id?{id:sel.id,confirm:confirmText}:{path:sel.path,confirm:confirmText});msg(r&&r.message||'已准备恢复，程序将自动重新打开。');return;}
   var j=await api('restore/stage',sel.id?{id:sel.id,confirm:confirmText,recording:false}:{path:sel.path,confirm:confirmText,recording:false});

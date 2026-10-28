@@ -48,13 +48,13 @@
   document.addEventListener('click', async ev => {
     const b = ev.target.closest('[data-watch-source]'); if (!b) return;
     const sid = b.dataset.watchSid || window.purchaseUnplannedSid;
-    if (!sid) { alert('请先打开一个收货批次并关联采购单'); return; }
+    if (!sid) { JstDialog.alert('请先打开一个收货批次并关联采购单'); return; }
     b.disabled = true;
     try {
       const d = await (await fetch('/api/purchase-watch/action', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'register', source: b.dataset.watchSource, sid: Number(sid)})})).json();
       if (!d.ok) throw Error(d.msg);
       if (frame) { location.hash = 'purchase/' + d.record.id; entry.click(); badges(); }
       else location.href = '/#purchase/' + d.record.id;
-    } catch (e) { alert(e.message); } finally { b.disabled = false; }
+    } catch (e) { JstDialog.alert(e.message); } finally { b.disabled = false; }
   });
 })();

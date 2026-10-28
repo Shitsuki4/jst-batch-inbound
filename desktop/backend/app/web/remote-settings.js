@@ -48,8 +48,8 @@
   if(busy)return;const pass=$('remote-pass').value,pass2=$('remote-pass2').value;
   if(pass!==pass2)return msg('两次输入的密码不一致',true);
   const enabled=$('remote-enabled').checked;
-  if(enabled&&!(state&&state.enabled)&&!confirm('启用后，本机将在公网 IPv6 上开放只读管理页（HTTPS + 管理员密码）。确定启用？'))return;
-  if($('remote-download').checked&&!(state&&state.allow_download)&&!confirm('允许下载后，登录者可以把录像文件保存到自己的设备。确定允许？'))return;
+  if(enabled&&!(state&&state.enabled)&&!await JstDialog.confirm('启用后，本机将在公网 IPv6 上开放只读管理页（HTTPS + 管理员密码）。确定启用？'))return;
+  if($('remote-download').checked&&!(state&&state.allow_download)&&!await JstDialog.confirm('允许下载后，登录者可以把录像文件保存到自己的设备。确定允许？'))return;
   busy=true;$('remote-save').disabled=true;msg('正在保存…');
   try{const body={enabled,port:Number($('remote-port').value||18443),username:$('remote-user').value.trim(),allow_download:$('remote-download').checked};if(pass)body.password=pass;
    const d=await post('/api/remote/config',body);$('remote-pass').value='';$('remote-pass2').value='';paint(d);

@@ -1,17 +1,17 @@
 (()=>{
   const pendingEditor=()=>Boolean(document.querySelector('#pending-bar:not([hidden]),#pending:not([hidden]),dialog[open]'));
-  document.addEventListener('click',e=>{if(e.target.closest?.('a[href]')&&pendingEditor()){e.preventDefault();e.stopImmediatePropagation();alert('请先确认或取消当前商品，再切换模块。');}},true);
+  document.addEventListener('click',e=>{if(e.target.closest?.('a[href]')&&pendingEditor()){e.preventDefault();e.stopImmediatePropagation();(window.JstDialog?JstDialog.alert:window.alert)('请先确认或取消当前商品，再切换模块。');}},true);
   const orig=window.fetch.bind(window),pending=new Map();
   let uiQueue=Promise.resolve(),linkFailed=false;
   const shared=window.parent!==window?parent.NativeReceiptLink:null;
-  function linkWarning(message){linkFailed=true;if(window.__nativeVideo)window.__nativeVideo.ready=false;uiQueue=uiQueue.catch(()=>{}).then(()=>window.NativeDesk?.available?NativeDesk.call("stop"):undefined).catch(()=>{});alert(message+"。本次业务结果已保存，请勿重复扫码或重复确认；先核对录像，再重新确认物流。");}
+  function linkWarning(message){linkFailed=true;if(window.__nativeVideo)window.__nativeVideo.ready=false;uiQueue=uiQueue.catch(()=>{}).then(()=>window.NativeDesk?.available?NativeDesk.call("stop"):undefined).catch(()=>{});(window.JstDialog?JstDialog.alert:window.alert)(message+"。本次业务结果已保存，请勿重复扫码或重复确认；先核对录像，再重新确认物流。");}
   window.addEventListener('native-receipt',ev=>{
     const detail=ev.detail;
     if(shared){parent.dispatchEvent(new parent.CustomEvent('native-receipt',{detail}));return;}
     uiQueue=uiQueue.catch(()=>{}).then(async()=>{
       const response=await orig('/api/native/ui',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(detail)});
       const result=await response.json();if(!result.ok)throw Error(result.msg||'录像事件失败');if(detail.kind==='tracking')linkFailed=false;
-    }).catch(err=>{linkFailed=true;if(window.__nativeVideo)window.__nativeVideo.ready=false;alert('录像联动失败：'+err.message+'。请重新确认物流单，核实录像状态。');});
+    }).catch(err=>{linkFailed=true;if(window.__nativeVideo)window.__nativeVideo.ready=false;(window.JstDialog?JstDialog.alert:window.alert)('录像联动失败：'+err.message+'。请重新确认物流单，核实录像状态。');});
   });
   // 改单号：只有“正在录像的就是这张物流单”时才询问。是 → 发普通 tracking，电脑端保存当前片段并按新单号开新片段；
   // 否 → 当前录像原样继续（不停录、不切段，文件仍按原单号）。后端改号本身不再停录。
@@ -20,7 +20,7 @@
   async function afterRename(info,ask){
     const to=String(info?.to||'').trim(),from=String(info?.from||'');
     if(!to||to===from||!renameNeedsConfirm(window.__nativeVideo,info?.key))return 'none';
-    const yes=await (ask||(text=>window.confirm(text)))(renameQuestion(from,to));
+    const yes=await (ask||(text=>window.JstDialog?JstDialog.confirm(text):window.confirm(text)))(renameQuestion(from,to));
     if(!yes)return 'continue';
     window.dispatchEvent(new CustomEvent('native-receipt',{detail:{kind:'tracking',tracking_no:to,key:info.key}}));
     return 'restart';
