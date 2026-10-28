@@ -207,8 +207,12 @@
             <div id="cur-batch-name" class="cur-batch">物流单号：—</div>
             <button class="btn btn-ghost btn-sm i-truck" id="btn-skip-tracking">跳过物流单直接收货</button>
           </div>
-          <input id="scan-input" class="input input-huge input-scan"
-                 placeholder="请扫描物流单号" autocomplete="off" spellcheck="false">
+          <!-- 模式标签常驻在扫码框左侧：物流单 = 橙色，商品 = 靛蓝，抬眼就能分清 -->
+          <div class="scan-input-wrap">
+            <span id="scan-mode-tag" class="scan-mode-tag tracking" aria-hidden="true">物流单号</span>
+            <input id="scan-input" class="input input-huge input-scan focus-tracking"
+                   placeholder="请扫描物流单号" autocomplete="off" spellcheck="false" aria-label="扫描物流单号">
+          </div>
           <div id="scan-flash" class="flash"></div>
 
           <!-- 扫码后待确认数量：光标停在这里，默认 1 且全选；回车确认，改数字再回车用新数字 -->

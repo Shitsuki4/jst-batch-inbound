@@ -549,7 +549,14 @@ body, .view, .card, .tbl, .tbl td, .tbl th, .pi-code, .pi-barcode, .pi-name, .sc
 .app-shell .mode-btn kbd{font:11px var(--mono);padding:0 5px;border-radius:5px;background:#fff;border:1px solid var(--line)}
 .app-shell .cur-batch{margin:0 0 0 auto;font-size:13px;color:var(--c-text-2,#5d6075);min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .app-shell .input-huge{flex:none;width:100%}
-.app-shell .input-scan.focus-tracking{border-color:var(--primary)!important}
+.app-shell .input-scan.focus-tracking{border-color:#b45309!important;box-shadow:0 0 0 4px #fef4e3!important;background:#fffaf0}
+/* 扫码模式一眼可分：物流单 = 橙色边框 + 橙色标签 + 橙色模式按钮；商品 = 靛蓝 */
+.app-shell .scan-input-wrap{position:relative}
+.app-shell .scan-input-wrap .input-scan{padding-left:112px}
+.app-shell .scan-mode-tag{position:absolute;left:12px;top:50%;transform:translateY(-50%);z-index:1;display:inline-flex;align-items:center;height:30px;padding:0 10px;border-radius:99px;font:600 14px var(--font);letter-spacing:0;pointer-events:none;white-space:nowrap}
+.app-shell .scan-mode-tag.tracking{background:#fdecc8;color:#92400e}
+.app-shell .scan-mode-tag.item{background:var(--c-primary-soft,#eef0ff);color:var(--c-primary-hover,#4338ca)}
+.app-shell .mode-btn.active[data-mode=tracking]{background:#b45309;color:#fff}
 .app-shell .scan-card .flash{height:auto;min-height:0;margin:0;padding:8px 12px;font-size:15px;justify-content:flex-start}
 .app-shell .scan-card .flash:empty{display:none}
 .app-shell .pending-bar{margin:0;border:0;border-radius:var(--r-md,12px);padding:8px 8px 8px 14px;background:linear-gradient(90deg,#eef0ff,#f6f4ff);gap:10px}

@@ -714,6 +714,9 @@
     inp.classList.remove('focus-tracking', 'focus-item');
     if (m === 'tracking') { inp.placeholder = '请扫描物流单号，支持子母件 / 独立单号'; inp.classList.add('focus-tracking'); }
     else if (m === 'item') { inp.placeholder = '请扫描商品 69 码 / 辅助条码 / 商品编码'; inp.classList.add('focus-item'); }
+    var tag = $('#scan-mode-tag');
+    if (tag) { tag.textContent = m === 'tracking' ? '物流单号' : '商品条码'; tag.className = 'scan-mode-tag ' + (m === 'tracking' ? 'tracking' : 'item'); }
+    inp.setAttribute('aria-label', m === 'tracking' ? '扫描物流单号' : '扫描商品条码');
     $$('.mode-btn').forEach(function (b) { b.classList.toggle('active', b.dataset.mode === m); });
     if (!silent) refocus();
   }
