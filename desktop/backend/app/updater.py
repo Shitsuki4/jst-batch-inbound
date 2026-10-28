@@ -9,6 +9,11 @@
   自动检查每天最多一次，且全部在后台线程里进行，绝不阻塞启动。
 - 下载：存到 data/updates/<版本>/，``.part`` 断点续传、失败自动重试；完成后必须与
   同渠道下载的 SHA256SUMS.txt 一致（Release 接口若带 asset digest 也必须一致）才算可用。
+- 安装版有两种安装包：离线完整安装程序（自带 WebView2 / FFmpeg，约 500 MiB）和精简的升级安装程序
+  （不带这两样，约 90 MiB）。Release 说明里由 CI 写一段 ``runtime-requirements`` 注释，记下这一版
+  固定的运行组件文件哈希；本机正在用的运行组件（宿主通过 JST_RUNTIME_* 环境变量告知）与之完全一致时
+  才下载升级安装程序，否则（组件版本变了、本机缺组件、说明里没有这段）一律下载离线完整安装程序。
+  升级安装程序自己安装前也会再核对一遍，不一致就拒绝安装。
 - 真正安装（启动安装程序 / 解压便携包）由桌面宿主完成；这里只在 prepare_install()
   里复核文件哈希并拒绝“入库任务进行中”的情况，录像中由宿主拒绝。
 """
@@ -43,6 +48,9 @@ _ASSET_RE = re.compile(r"^[A-Za-z0-9._-]{1,200}$")
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 _ALLOWED_ORIGINS = ("https://github.com/", "https://api.github.com/")
 _PROXY_BLOCK = re.compile(r"<!-- gh-proxy-links:start -->.*?<!-- gh-proxy-links:end -->\s*", re.S)
+_RUNTIME_BLOCK = re.compile(r"<!-- runtime-requirements:\s*(\{.*?\})\s*-->\s*", re.S)
+# 升级安装程序要求本机已有、且与这一版固定版本完全一致的运行组件文件（文件名 -> 运行时路径来源见 detect_runtime）
+RUNTIME_FILES = ("ffmpeg.exe", "ffprobe.exe", "msedgewebview2.exe")
 
 
 # ---------------------------------------------------------------- 纯函数（有单元测试）
@@ -106,6 +114,7 @@ def asset_names(version):
         raise ValueError("版本号格式无效：%s" % version)
     return {
         "installer": "ReceivingAssistant-%s-Offline-Setup.exe" % version,
+        "upgrade": "ReceivingAssistant-%s-Upgrade-Setup.exe" % version,
         "deps": "ReceivingAssistant-Deps-%s-Setup.exe" % version,
         "portable": "jst-batch-inbound-desktop-%s-win-x64.zip" % version,
         "sums": "SHA256SUMS.txt",
@@ -113,8 +122,55 @@ def asset_names(version):
 
 
 def asset_kind_for_mode(mode):
-    """安装版 -> 离线完整安装程序；便携版 -> 便携 ZIP；其他（开发 / 未知）不提供下载。"""
+    """安装版 -> 离线完整安装程序（运行组件一致时由 UpdateHost 换成升级安装程序）；便携版 -> 便携 ZIP；
+    其他（开发 / 未知）不提供下载。"""
     return {"installed": "installer", "portable": "portable"}.get(mode)
+
+
+ASSET_LABELS = {"installer": "离线完整安装程序", "upgrade": "升级安装程序", "portable": "便携版 ZIP"}
+
+
+def parse_runtime_requirements(body):
+    """读 Release 说明里 CI 写的 ``<!-- runtime-requirements: {...} -->``；缺失或格式不对返回 None。"""
+    m = _RUNTIME_BLOCK.search(str(body or ""))
+    if not m:
+        return None
+    try:
+        d = json.loads(m.group(1))
+    except ValueError:
+        return None
+    sha = d.get("sha256") if isinstance(d, dict) else None
+    if not isinstance(sha, dict):
+        return None
+    out = {}
+    for name in RUNTIME_FILES:
+        v = str(sha.get(name) or "").strip().lower()
+        if not _HEX64.match(v):
+            return None
+        out[name] = v
+    return {"sha256": out, "webview2": str(d.get("webview2") or "")[:40], "ffmpeg": str(d.get("ffmpeg") or "")[:40]}
+
+
+def detect_runtime():
+    """安装版宿主告知的、本机正在用的运行组件文件（安装目录 runtime\\ 或运行依赖安装程序的共享目录）。"""
+    webview = os.environ.get("JST_RUNTIME_WEBVIEW2") or ""
+    return {"ffmpeg.exe": os.environ.get("JST_RUNTIME_FFMPEG") or "",
+            "ffprobe.exe": os.environ.get("JST_RUNTIME_FFPROBE") or "",
+            "msedgewebview2.exe": os.path.join(webview, "msedgewebview2.exe") if webview else ""}
+
+
+def runtime_mismatch(required, actual):
+    """比较 Release 要求的运行组件哈希与本机实际哈希（None 表示文件缺失）。一致返回空字符串，否则返回原因。"""
+    if not required:
+        return "这一版的发布说明里没有运行组件版本信息"
+    missing = [n for n in RUNTIME_FILES if not (actual or {}).get(n)]
+    if missing:
+        return "本机没有找到运行组件（%s）" % "、".join(missing)
+    if any(actual[n] != required["sha256"][n] for n in RUNTIME_FILES):
+        want = "、".join(x for x in ("WebView2 " + required.get("webview2", "") if required.get("webview2") else "",
+                                      "FFmpeg " + required.get("ffmpeg", "") if required.get("ffmpeg") else "") if x)
+        return "这一版的运行组件%s和本机的不一样" % ("（%s）" % want if want else "")
+    return ""
 
 
 def parse_sha256sums(text):
@@ -176,10 +232,12 @@ def normalize_release(rel):
         name = str((a or {}).get("name") or "")
         if _ASSET_RE.match(name):
             assets[name] = {"size": int(a.get("size") or 0), "digest": _digest(a)}
-    notes = _PROXY_BLOCK.sub("", str(rel.get("body") or "")).strip()
+    body = str(rel.get("body") or "")
+    notes = _RUNTIME_BLOCK.sub("", _PROXY_BLOCK.sub("", body)).strip()
     return {"version": version, "tag": tag, "name": str(rel.get("name") or tag)[:200],
             "notes": notes[:MAX_NOTES], "published_at": str(rel.get("published_at") or ""),
-            "html_url": release_page_url(tag), "assets": assets}
+            "html_url": release_page_url(tag), "assets": assets,
+            "runtime": parse_runtime_requirements(body)}
 
 
 def pick_release(releases):
@@ -282,7 +340,7 @@ def _short_error(e):
 
 class UpdateHost:
     def __init__(self, data_dir, current_version=None, install_mode=None, fetch=None,
-                 busy=None, clock=time.time, sleep=time.sleep):
+                 busy=None, clock=time.time, sleep=time.sleep, runtime=None):
         """fetch(url, timeout, headers, follow_redirects=True) -> (status, headers, response)，默认 http_open。"""
         self.data_dir = data_dir
         self.dir = os.path.join(data_dir, "updates")
@@ -300,6 +358,8 @@ class UpdateHost:
         self.stop_event = threading.Event()
         self.dl = {"state": "idle"}
         self._dl_thread = None
+        self.runtime = runtime if runtime is not None else detect_runtime()
+        self._runtime_hash_cache = {}
 
     # ---------- 持久化
     def _read(self, path, default):
@@ -350,21 +410,62 @@ class UpdateHost:
         latest = self.latest()
         return bool(latest and parse_version(self.current) and is_newer(latest["version"], self.current))
 
+    def _runtime_hashes(self):
+        """本机运行组件文件的 SHA256（按路径 + 大小 + 修改时间缓存，FFmpeg 很大，不重复计算）。缺失为 None。"""
+        out = {}
+        for name in RUNTIME_FILES:
+            path = str(self.runtime.get(name) or "")
+            try:
+                st = os.stat(path) if path else None
+            except OSError:
+                st = None
+            if st is None or not os.path.isfile(path):
+                out[name] = None
+                continue
+            key = (os.path.abspath(path), st.st_size, st.st_mtime_ns)
+            with self.lock:
+                cached = self._runtime_hash_cache.get(name)
+            if cached and cached[0] == key:
+                out[name] = cached[1]
+                continue
+            try:
+                digest = sha256_file(path)
+            except OSError:
+                out[name] = None
+                continue
+            with self.lock:
+                self._runtime_hash_cache[name] = (key, digest)
+            out[name] = digest
+        return out
+
+    def upgrade_mismatch(self, latest):
+        """升级安装程序能不能用：空字符串 = 可以；否则是要改用离线完整安装程序的原因。"""
+        return runtime_mismatch((latest or {}).get("runtime"), self._runtime_hashes())
+
     def _asset_info(self, latest):
         kind = asset_kind_for_mode(self.mode)
         if not latest or not kind:
             return None
         names = asset_names(latest["version"])
+        assets = latest.get("assets", {})
+        note = ""
+        if kind == "installer" and names["upgrade"] in assets:
+            reason = self.upgrade_mismatch(latest)
+            if not reason:
+                kind = "upgrade"
+            else:
+                note = reason + "，所以下载离线完整安装程序（自带运行组件）。"
         name = names[kind]
-        meta = latest.get("assets", {}).get(name)
-        return {"kind": kind, "name": name, "size": (meta or {}).get("size", 0), "listed": meta is not None}
+        meta = assets.get(name)
+        return {"kind": kind, "name": name, "label": ASSET_LABELS[kind], "note": note,
+                "size": (meta or {}).get("size", 0), "listed": meta is not None}
 
     def _links(self, latest):
         if not latest:
             return {}
         names = asset_names(latest["version"])
         out = {"release": {c: channel_url(c, latest["html_url"]) for c in CHANNELS}}
-        for kind in ("installer", "portable", "deps"):
+        for kind in ("installer", "upgrade", "portable", "deps"):
             url = release_download_url(latest["tag"], names[kind])
             out[kind] = {c: channel_url(c, url) for c in CHANNELS}
         return out
@@ -466,6 +567,11 @@ class UpdateHost:
             c["attempted_at"] = now
             if rel is not None:
                 c.update({"checked_at": now, "latest": rel, "source": source, "error": ""})
+                if self.mode == "installed" and rel.get("runtime"):
+                    try:
+                        self._runtime_hashes()      # 在后台线程里先算好，status() 直接用缓存
+                    except Exception:
+                        pass
             else:
                 c["error"] = "检查更新失败（" + "；".join(errors) + "）"
             with self.lock:

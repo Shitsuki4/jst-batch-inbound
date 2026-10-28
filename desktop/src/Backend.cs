@@ -24,6 +24,9 @@ public sealed class Backend : IAsyncDisposable {
    var port=PickFreePort();Url=$"http://127.0.0.1:{port}";
    var p=new ProcessStartInfo(exe){UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true,WorkingDirectory=Path.GetDirectoryName(exe)!};
    p.Environment["JST_DB_DIR"]=data;p.Environment["JST_NO_BROWSER"]="1";p.Environment["JST_NATIVE_PORT"]=port.ToString();p.Environment["JST_NATIVE_TOKEN"]=Token;p.Environment["JST_APP_VERSION"]=AppUpdate.AppVersion;p.Environment["JST_INSTALL_MODE"]=AppUpdate.InstallMode;
+   // The runtime the installed app really uses (bundled runtime\ or the deps installer's shared one); the updater compares it with the
+   // next release's pinned runtime to decide between the slim upgrade installer and the full offline installer.
+   if(AppPaths.Installed){p.Environment["JST_RUNTIME_WEBVIEW2"]=AppPaths.BrowserFolder??"";p.Environment["JST_RUNTIME_FFMPEG"]=Dependencies.Resolve("ffmpeg.exe");p.Environment["JST_RUNTIME_FFPROBE"]=Dependencies.Resolve("ffprobe.exe");}
    proc=Process.Start(p)??throw new Exception("业务服务未启动");proc.OutputDataReceived+=(_,_)=>{};proc.ErrorDataReceived+=(_,_)=>{};proc.BeginOutputReadLine();proc.BeginErrorReadLine();
    var portBusy=false;
    for(int i=0;i<100;i++){

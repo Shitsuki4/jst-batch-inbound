@@ -10,8 +10,9 @@ public record DependencyState(bool WebView, bool Video, string Engine, string De
 public static class Dependencies {
  public static string Resolve(string name, string preferred="") {
   var bundled=Path.Combine(AppContext.BaseDirectory,"runtime","ffmpeg",name);if(File.Exists(bundled))return bundled;
-  if(AppPaths.Installed)return bundled;
   var shared=Path.Combine(AppPaths.SharedFfmpegFolder,name);if(File.Exists(shared))return shared;
+  // Installed mode never looks at PATH/winget: its runtime is the bundled one or the deps installer's.
+  if(AppPaths.Installed)return bundled;
   if(File.Exists(preferred))return Path.GetFullPath(preferred);
   var dirs=new List<string>{Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Microsoft","WinGet","Links")};
   foreach(var target in new[]{EnvironmentVariableTarget.Process,EnvironmentVariableTarget.User,EnvironmentVariableTarget.Machine})
@@ -21,7 +22,7 @@ public static class Dependencies {
  }
  public static async Task<DependencyState> Check() {
   bool web=false;string detail="";try{web=!string.IsNullOrWhiteSpace(CoreWebView2Environment.GetAvailableBrowserVersionString(AppPaths.BrowserFolder));}catch(Exception e){detail="WebView2："+e.Message+"\n";}
-  if(AppPaths.Installed&&AppPaths.BrowserFolder==null){web=false;detail+="内置WebView2目录缺失，请重新运行完整安装包修复。\n";}
+  if(AppPaths.Installed&&AppPaths.BrowserFolder==null){web=false;detail+="没有找到WebView2运行时（安装目录 runtime\\webview2 或运行依赖安装程序的共享目录都没有），请重新运行离线完整安装程序修复。\n";}
   string preferred="";try{var p=Path.Combine(AppPaths.DataRoot,"native-settings.json");if(File.Exists(p))preferred=JsonSerializer.Deserialize<UserSettings>(File.ReadAllText(p))?.Engine??"";}catch{}
   string engine=Resolve("ffmpeg.exe",preferred),probe=Resolve("ffprobe.exe",Path.Combine(Path.GetDirectoryName(engine)??"","ffprobe.exe"));bool video=false;
   try{
@@ -50,7 +51,7 @@ public sealed class DependencyWindow:Window {
  public DependencyWindow(){Title="扫码入库 · 环境就绪检查";Theme.Dialog(this);Width=750;Height=560;WindowStartupLocation=WindowStartupLocation.CenterScreen;
   var panel=new StackPanel();Content=new Border{Margin=new Thickness(18),Child=Theme.Card(panel,22)};
   panel.Children.Add(new TextBlock{Text="自动检查 WebView2 与录像组件",FontSize=22,FontWeight=FontWeights.Bold,Foreground=Palette.Text});
-  panel.Children.Add(new TextBlock{Text=AppPaths.Installed?"离线完整版：检查软件自带的浏览器与录像组件，无需下载或系统安装。若组件损坏，请重新运行完整安装包修复。业务数据与录像保留在独立目录。":"仅在缺失或不可用时安装，不修改收货数据库。断网电脑可先运行「运行依赖安装程序」（收货小助手-版本-运行依赖安装程序.exe），装好后点重新检查即可，无需联网。一键安装需要联网，可能显示Windows权限确认。点击一键安装即同意由Windows包管理器下载安装所缺组件及其许可条款（Microsoft WebView2 / Gyan FFmpeg）。",TextWrapping=TextWrapping.Wrap,Foreground=Palette.Text2,Margin=new Thickness(0,12,0,0)});
+  panel.Children.Add(new TextBlock{Text=AppPaths.Installed?"安装版：检查安装目录自带的（或运行依赖安装程序装好的）浏览器与录像组件，无需下载或系统安装。若组件损坏，请重新运行离线完整安装程序修复。业务数据与录像保留在独立目录。":"仅在缺失或不可用时安装，不修改收货数据库。断网电脑可先运行「运行依赖安装程序」（收货小助手-版本-运行依赖安装程序.exe），装好后点重新检查即可，无需联网。一键安装需要联网，可能显示Windows权限确认。点击一键安装即同意由Windows包管理器下载安装所缺组件及其许可条款（Microsoft WebView2 / Gyan FFmpeg）。",TextWrapping=TextWrapping.Wrap,Foreground=Palette.Text2,Margin=new Thickness(0,12,0,0)});
   panel.Children.Add(state);panel.Children.Add(output);var buttons=new WrapPanel{Margin=new Thickness(0,12,0,0)};panel.Children.Add(buttons);buttons.Children.Add(install);buttons.Children.Add(retry);buttons.Children.Add(enter);
   var store=new Button{Content="缺少winget？打开微软应用安装程序",Margin=new Thickness(0,0,8,0)}.Level(Theme.Ghost);if(!AppPaths.Installed)buttons.Children.Add(store);else install.Visibility=Visibility.Collapsed;store.Click+=(_,_)=>{try{Process.Start(new ProcessStartInfo("ms-windows-store://pdp/?ProductId=9NBLGGH4NNS1"){UseShellExecute=true});}catch(Exception ex){Log(ex.Message+"；请在Microsoft Store搜索‘应用安装程序’。");}};
   install.Click+=async(_,_)=>await Run(true);retry.Click+=async(_,_)=>await Run(false);enter.Click+=(_,_)=>{Accepted=true;Close();};Loaded+=async(_,_)=>await Run(false);
@@ -59,7 +60,7 @@ public sealed class DependencyWindow:Window {
  void Log(string value){Dispatcher.Invoke(()=>{output.AppendText(value+Environment.NewLine);output.ScrollToEnd();});}
  async Task Run(bool performInstall){if(busy)return;busy=true;install.IsEnabled=retry.IsEnabled=enter.IsEnabled=false;
   try{state.Text="正在检查，请稍候……";result=await Dependencies.Check();
-   if(performInstall&&AppPaths.Installed)throw new IOException("离线完整版的内置组件缺失或损坏，请重新运行完整安装包修复，不需要联网安装系统依赖。");
+   if(performInstall&&AppPaths.Installed)throw new IOException("安装版的运行组件缺失或损坏，请重新运行离线完整安装程序修复，不需要联网安装系统依赖。");
    if(performInstall&&!result.Ready){
     foreach(var id in new[]{result.WebView?null:"Microsoft.EdgeWebView2Runtime",result.Video?null:"Gyan.FFmpeg"})if(id!=null){Log("开始安装："+id);int code=await Dependencies.Install(id,Log);Log("安装进程退出码："+code+"；最终以复检结果为准。");}
     result=await Dependencies.Check();

@@ -7,6 +7,17 @@
 ;   /PURGEDATA   静默卸载时删除全部业务数据（默认保留全部数据）；交互卸载时预选“完全卸载”。
 ; 无论哪种方式，都只会删除 %LOCALAPPDATA%\ReceivingAssistant\v3 与安装目录内的数据，
 ; 绝不触碰独立的“运行依赖”目录 %LOCALAPPDATA%\ReceivingAssistant\runtime。
+;
+; 同一份脚本加 /DUpgradeOnly 编译出“升级安装程序”（desktop/build-upgrade-windows.ps1）：
+;   载荷和便携版 ZIP 一样，不带 runtime\（WebView2 固定运行时、FFmpeg/ffprobe），AppId 相同，
+;   装到同一个安装目录，是对离线完整版的原地升级；数据仍在 %LOCALAPPDATA%\ReceivingAssistant\v3。
+;   安装前核对这台电脑上程序将要用的运行组件（安装目录 runtime\ 优先，否则运行依赖安装程序的
+;   共享目录，与 AppPaths.cs / Dependencies.cs 的查找顺序一致）与本版本固定版本的 SHA256 完全一致，
+;   缺失或不一致就拒绝安装，并提示改用离线完整安装程序。必需定义：
+;   /DReqFfmpegSha=... /DReqFfprobeSha=... /DReqWebView2Sha=...（小写 SHA256）
+;   /DReqWebView2Version=... /DReqFfmpegVersion=...（只用于提示文字）
+;   安装程序命令行开关：/PORTABLEDATA="便携版文件夹"  静默安装时把便携版数据复制到安装版
+;   （只复制、不移动，安装版已有数据时不导入；交互安装时在“便携版数据”页面选择）。
 
 #ifndef PayloadDir
   #define PayloadDir "..\dist\offline-payload"
@@ -17,15 +28,40 @@
 #ifndef AppVersion
   #define AppVersion "4.1.3"
 #endif
+#ifdef UpgradeOnly
+  #ifndef ReqFfmpegSha
+    #error 升级安装程序需要 /DReqFfmpegSha
+  #endif
+  #ifndef ReqFfprobeSha
+    #error 升级安装程序需要 /DReqFfprobeSha
+  #endif
+  #ifndef ReqWebView2Sha
+    #error 升级安装程序需要 /DReqWebView2Sha
+  #endif
+  #ifndef ReqWebView2Version
+    #define ReqWebView2Version ""
+  #endif
+  #ifndef ReqFfmpegVersion
+    #define ReqFfmpegVersion ""
+  #endif
+#endif
 #ifndef OutputBaseFilename
-  #define OutputBaseFilename "收货小助手-" + AppVersion + "-离线完整安装程序"
+  #ifdef UpgradeOnly
+    #define OutputBaseFilename "收货小助手-" + AppVersion + "-升级安装程序"
+  #else
+    #define OutputBaseFilename "收货小助手-" + AppVersion + "-离线完整安装程序"
+  #endif
 #endif
 
 [Setup]
 AppId={{80E21946-081D-4C07-A40D-60C2244D7066}
 AppName=收货小助手
 AppVersion={#AppVersion}
+#ifdef UpgradeOnly
+AppVerName=收货小助手 {#AppVersion}（升级安装）
+#else
 AppVerName=收货小助手 {#AppVersion} 离线完整版
+#endif
 DefaultDirName={localappdata}\Programs\ReceivingAssistant
 DefaultGroupName=收货小助手
 PrivilegesRequired=lowest
@@ -69,8 +105,11 @@ Name: desktopicon; Description: "创建桌面快捷方式"; Flags: checkedonce
 ; Upgrades must not leave stale PyInstaller modules or an older WebView2 fixed runtime behind.
 ; Both directories are program files only: user data, settings, WebView2 profile and recordings
 ; live under %LOCALAPPDATA%\ReceivingAssistant\v3 (AppPaths.DataRoot in installed mode).
+; The upgrade installer (/DUpgradeOnly) brings no runtime\, so it must keep the installed one.
 Type: filesandordirs; Name: "{app}\backend\_internal"
+#ifndef UpgradeOnly
 Type: filesandordirs; Name: "{app}\runtime\webview2"
+#endif
 
 [Files]
 Source: "{#PayloadDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -85,17 +124,310 @@ Name: "{autoprograms}\卸载收货小助手"; Filename: "{uninstallexe}"; Commen
 ; WebView2 固定版本在 Windows 10 上以 AppContainer 运行渲染进程，必须给运行时目录授予
 ; 读取/执行权限，否则业务界面启动即闪退（Microsoft “Distribute your app and the WebView2 Runtime” 第 6 步）。
 ; 升级时 [InstallDelete] 会删除并重建 runtime\webview2，所以每次安装后都要重新授权。
+; 升级安装程序不动运行时目录（完整版或运行依赖安装程序装的时候已经授过权），不需要这一步。
+#ifndef UpgradeOnly
 Filename: "{sys}\icacls.exe"; Parameters: """{app}\runtime\webview2"" /grant *S-1-15-2-2:(OI)(CI)(RX) /C /Q"; Flags: runhidden waituntilterminated; StatusMsg: "正在配置 WebView2 运行时权限……"
 Filename: "{sys}\icacls.exe"; Parameters: """{app}\runtime\webview2"" /grant *S-1-15-2-1:(OI)(CI)(RX) /C /Q"; Flags: runhidden waituntilterminated; StatusMsg: "正在配置 WebView2 运行时权限……"
+#endif
 Filename: "{app}\Receiving.Native.exe"; Description: "启动收货小助手"; Flags: nowait postinstall skipifsilent
 
 [Code]
+#ifdef UpgradeOnly
+{ ------------------------------------------------------------------------------------------
+  Upgrade installer only: runtime prerequisite check and optional portable data import
+  ------------------------------------------------------------------------------------------ }
+const
+  ReqFfmpegSha = '{#ReqFfmpegSha}';
+  ReqFfprobeSha = '{#ReqFfprobeSha}';
+  ReqWebView2Sha = '{#ReqWebView2Sha}';
+  ReqWebView2Version = '{#ReqWebView2Version}';
+  ReqFfmpegVersion = '{#ReqFfmpegVersion}';
+  FullInstallerName = '收货小助手-{#AppVersion}-离线完整安装程序.exe';
+  UninstallKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{80E21946-081D-4C07-A40D-60C2244D7066}_is1';
+
+var
+  ImportPage: TWizardPage;
+  ImportCheck: TNewCheckBox;
+  ImportEdit: TNewEdit;
+  ImportBrowse: TNewButton;
+  ImportSource: String;
+
+function SharedRuntimeDir(): String;
+begin
+  Result := ExpandConstant('{localappdata}\ReceivingAssistant\runtime');
+end;
+
+function InstalledDataRoot(): String;
+begin
+  Result := ExpandConstant('{localappdata}\ReceivingAssistant\v3');
+end;
+
+{ Install directory of an existing install with this AppId (offline full or an earlier upgrade), '' if none. }
+function PreviousAppDir(): String;
+begin
+  Result := '';
+  if not RegQueryStringValue(HKCU, UninstallKey, 'Inno Setup: App Path', Result) then
+    Result := '';
+  Result := RemoveBackslashUnlessRoot(Result);
+end;
+
+{ The runtime files the installed app will really use from AppDir (AppPaths.BrowserFolder and
+  Dependencies.Resolve in installed mode): the install's own runtime\ first, then the shared one. }
+function RuntimeWebView2Exe(const Dir: String): String;
+begin
+  if DirExists(Dir + '\runtime\webview2') then
+    Result := Dir + '\runtime\webview2\msedgewebview2.exe'
+  else
+    Result := SharedRuntimeDir() + '\webview2\msedgewebview2.exe';
+end;
+
+function RuntimeFfmpegFile(const Dir, Name: String): String;
+begin
+  Result := Dir + '\runtime\ffmpeg\' + Name;
+  if not FileExists(Result) then
+    Result := SharedRuntimeDir() + '\ffmpeg\' + Name;
+end;
+
+{ 0 = matches, 1 = missing, 2 = present but a different build. }
+function RuntimeFileState(const Path, Sha: String): Integer;
+var
+  Actual: String;
+begin
+  Result := 1;
+  if not FileExists(Path) then
+    exit;
+  try
+    Actual := Lowercase(GetSHA256OfFile(Path));
+  except
+    Log('Hashing ' + Path + ' failed: ' + GetExceptionMessage);
+    exit;
+  end;
+  if Actual = Sha then
+    Result := 0
+  else
+  begin
+    Result := 2;
+    Log('Runtime file differs: ' + Path + ' sha256=' + Actual + ' expected=' + Sha);
+  end;
+end;
+
+{ '' when the runtime the app will use from AppDir is complete and exactly the pinned build. }
+function RuntimeProblem(const Dir: String): String;
+var
+  Files, Shas: array[0..2] of String;
+  I, State, Missing, Different: Integer;
+  Names: String;
+begin
+  Files[0] := RuntimeWebView2Exe(Dir);
+  Files[1] := RuntimeFfmpegFile(Dir, 'ffmpeg.exe');
+  Files[2] := RuntimeFfmpegFile(Dir, 'ffprobe.exe');
+  Shas[0] := ReqWebView2Sha;
+  Shas[1] := ReqFfmpegSha;
+  Shas[2] := ReqFfprobeSha;
+  Missing := 0;
+  Different := 0;
+  Names := '';
+  for I := 0 to 2 do
+  begin
+    State := RuntimeFileState(Files[I], Shas[I]);
+    Log('Runtime check: ' + Files[I] + ' state=' + IntToStr(State));
+    if State = 1 then
+      Missing := Missing + 1
+    else if State = 2 then
+      Different := Different + 1;
+    if State <> 0 then
+    begin
+      if Names <> '' then
+        Names := Names + '、';
+      Names := Names + ExtractFileName(Files[I]);
+    end;
+  end;
+  Result := '';
+  if Missing = 3 then
+    Result :=
+      '这台电脑上没有找到收货小助手的运行组件（WebView2 固定运行时和 FFmpeg/ffprobe）。' + #13#10 + #13#10 +
+      '升级安装程序只能用在已经装过“离线完整安装程序”或“运行依赖安装程序”的电脑上，它本身不带这些组件。' + #13#10 + #13#10 +
+      '请改用 ' + FullInstallerName + '（自带全部组件）。本次没有做任何改动。'
+  else if (Missing > 0) or (Different > 0) then
+    Result :=
+      '这台电脑上的运行组件和 {#AppVersion} 要求的版本不一致或不完整（' + Names + '）。' + #13#10 +
+      '本版本需要 WebView2 ' + ReqWebView2Version + '、FFmpeg ' + ReqFfmpegVersion + '。' + #13#10 + #13#10 +
+      '请改用 ' + FullInstallerName + '（自带全部组件，会一并更新运行组件）。本次没有做任何改动。';
+end;
+
+function DefaultAppDir(): String;
+begin
+  Result := PreviousAppDir();
+  if Result = '' then
+    Result := ExpandConstant('{localappdata}\Programs\ReceivingAssistant');
+end;
+
+function InitializeSetup(): Boolean;
+var
+  Problem: String;
+begin
+  Result := True;
+  Problem := RuntimeProblem(DefaultAppDir());
+  if Problem <> '' then
+  begin
+    Log('Upgrade installer refused: ' + Problem);
+    SuppressibleMsgBox(Problem, mbCriticalError, MB_OK, IDOK);
+    Result := False;
+  end;
+end;
+
+function DirHasEntries(const Dir: String): Boolean;
+var
+  F: TFindRec;
+begin
+  Result := False;
+  if FindFirst(Dir + '\*', F) then
+  try
+    repeat
+      if (F.Name <> '.') and (F.Name <> '..') then
+      begin
+        Result := True;
+        exit;
+      end;
+    until not FindNext(F);
+  finally
+    FindClose(F);
+  end;
+end;
+
+{ Same rule as PortableImport.cs: never import over existing installed-mode data. }
+function InstalledDataPresent(): Boolean;
+begin
+  Result := FileExists(InstalledDataRoot() + '\native-settings.json') or DirHasEntries(InstalledDataRoot() + '\data');
+end;
+
+function LooksLikePortableWithData(const Dir: String): Boolean;
+begin
+  Result := FileExists(Dir + '\Receiving.Native.exe') and not FileExists(Dir + '\installed-mode.txt') and
+    (FileExists(Dir + '\data\jst.db') or FileExists(Dir + '\data\catalog.db') or FileExists(Dir + '\data\unplanned.db') or
+     FileExists(Dir + '\data\express.db') or FileExists(Dir + '\data\purchase_watch.db') or
+     FileExists(Dir + '\data\joint_receipts.db') or FileExists(Dir + '\data\learned_codes.db') or
+     FileExists(Dir + '\data\operation_log.db'));
+end;
+
+function CleanDir(const Dir: String): String;
+begin
+  Result := Trim(Dir);
+  StringChangeEx(Result, '"', '', True);
+  Result := RemoveBackslashUnlessRoot(Result);
+end;
+
+procedure ImportControlsUpdate(Sender: TObject);
+begin
+  ImportEdit.Enabled := ImportCheck.Checked;
+  ImportBrowse.Enabled := ImportCheck.Checked;
+end;
+
+procedure ImportBrowseClick(Sender: TObject);
+var
+  Dir: String;
+begin
+  Dir := ImportEdit.Text;
+  if BrowseForFolder('选择便携版所在的文件夹（里面有 Receiving.Native.exe 和 data 文件夹）', Dir, False) then
+    ImportEdit.Text := Dir;
+end;
+
+procedure CreateImportPage();
+var
+  Info: TNewStaticText;
+begin
+  ImportPage := CreateCustomPage(wpSelectDir, '便携版数据', '可选：把便携版的数据复制到安装版');
+  Info := TNewStaticText.Create(ImportPage);
+  Info.Parent := ImportPage.Surface;
+  Info.WordWrap := True;
+  Info.AutoSize := False;
+  Info.Width := ImportPage.SurfaceWidth;
+  Info.Height := ScaleY(118);
+  Info.Caption :=
+    '安装版的数据放在 ' + InstalledDataRoot() + '，和便携版文件夹是分开的，目前这里还没有数据。' + #13#10 + #13#10 +
+    '如果你之前用的是便携版（解压出来的 jst-batch-inbound-desktop-…-win-x64 文件夹），可以勾选下面这项，选中那个文件夹，' +
+    '安装完成后会把它的业务数据和设置复制过来。只复制、不移动，便携版文件夹不会有任何改动；录像不复制，继续保存在原来的位置。' + #13#10 + #13#10 +
+    '复制前请先退出便携版。不勾选也可以，以后需要时在安装版“设置 → 备份与恢复 → 从文件恢复”里选择便携版 data\backups 下的备份。';
+  ImportCheck := TNewCheckBox.Create(ImportPage);
+  ImportCheck.Parent := ImportPage.Surface;
+  ImportCheck.Top := Info.Top + Info.Height + ScaleY(8);
+  ImportCheck.Width := ImportPage.SurfaceWidth;
+  ImportCheck.Caption := '把便携版的数据复制到安装版';
+  ImportCheck.OnClick := @ImportControlsUpdate;
+  ImportEdit := TNewEdit.Create(ImportPage);
+  ImportEdit.Parent := ImportPage.Surface;
+  ImportEdit.Top := ImportCheck.Top + ImportCheck.Height + ScaleY(8);
+  ImportEdit.Width := ImportPage.SurfaceWidth - ScaleX(90);
+  ImportBrowse := TNewButton.Create(ImportPage);
+  ImportBrowse.Parent := ImportPage.Surface;
+  ImportBrowse.Top := ImportEdit.Top - ScaleY(1);
+  ImportBrowse.Left := ImportPage.SurfaceWidth - ScaleX(80);
+  ImportBrowse.Width := ScaleX(80);
+  ImportBrowse.Height := ScaleY(23);
+  ImportBrowse.Caption := '浏览(&R)…';
+  ImportBrowse.OnClick := @ImportBrowseClick;
+  ImportEdit.Text := CleanDir(ExpandConstant('{param:PORTABLEDATA|}'));
+  ImportCheck.Checked := ImportEdit.Text <> '';
+  ImportControlsUpdate(nil);
+end;
+
+function ShouldSkipPage(PageID: Integer): Boolean;
+begin
+  Result := (PageID = ImportPage.ID) and InstalledDataPresent();
+end;
+
+function NextButtonClick(CurPageID: Integer): Boolean;
+var
+  Dir: String;
+begin
+  Result := True;
+  if WizardSilent() then
+    exit;
+  if CurPageID = wpSelectDir then
+  begin
+    Dir := RemoveBackslashUnlessRoot(WizardDirValue());
+    if FileExists(Dir + '\Receiving.Native.exe') and not FileExists(Dir + '\installed-mode.txt') then
+    begin
+      MsgBox('这个文件夹里是便携版收货小助手，安装会覆盖它。请换一个安装位置。', mbError, MB_OK);
+      Result := False;
+    end;
+  end
+  else if CurPageID = ImportPage.ID then
+  begin
+    ImportSource := '';
+    if ImportCheck.Checked then
+    begin
+      Dir := CleanDir(ImportEdit.Text);
+      if not LooksLikePortableWithData(Dir) then
+      begin
+        MsgBox('没有在这个文件夹里找到便携版的数据。' + #13#10 + #13#10 +
+          '请选择便携版解压出来的那个文件夹：里面有 Receiving.Native.exe，还有放业务数据的 data 文件夹（data\jst.db 等）。' + #13#10 +
+          '不想复制的话，取消勾选即可。', mbError, MB_OK);
+        Result := False;
+        exit;
+      end;
+      ImportSource := Dir;
+    end;
+  end;
+end;
+
+#endif
+
 procedure InitializeWizard();
 begin
+#ifdef UpgradeOnly
+  WizardForm.WelcomeLabel2.Caption :=
+    '把收货小助手升级到 {#AppVersion}。' + #13#10 + #13#10 +
+    '这是精简的升级安装程序，不带 WebView2 和 FFmpeg：用的是这台电脑上“离线完整安装程序”或“运行依赖安装程序”已经装好的组件，' +
+    '所以安装前会先核对它们的版本。' + #13#10 + #13#10 +
+    '装过离线完整版的电脑会原地升级，数据保持不变；只装过运行依赖、一直用便携版的电脑，可以在下一步选择把便携版数据复制过来。';
+  CreateImportPage();
+#else
   WizardForm.WelcomeLabel2.Caption :=
     '收货、对单与视频举证，一次安装。' + #13#10 + #13#10 +
     '已包含 .NET、Python、FFmpeg/ffprobe 和 WebView2 固定运行时，安装和启动无需联网下载这些依赖；ERP 业务仍需要网络。' + #13#10 + #13#10 +
     '业务数据与录像独立保存，卸载时默认保留，也可以选择删除。不会自动导入或覆盖旧版数据。';
+#endif
 end;
 
 const
@@ -159,6 +491,15 @@ end;
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   Result := '';
+#ifdef UpgradeOnly
+  { The install directory is final here (the directory page may have changed it): check again. }
+  Result := RuntimeProblem(RemoveBackslashUnlessRoot(ExpandConstant('{app}')));
+  if Result <> '' then
+  begin
+    Log('Upgrade installer refused at PrepareToInstall: ' + Result);
+    exit;
+  end;
+#endif
   if IsInstalledServiceRunning() then
     Result :=
       '检测到收货小助手的业务服务（Receiving.Service.exe）仍在运行，可能正在安全收尾、提交入库数据。' + #13#10 + #13#10 +
@@ -1048,3 +1389,69 @@ begin
       end;
   end;
 end;
+
+#ifdef UpgradeOnly
+{ Upgrade installer only (needs JsonUnescape above): copy portable data after the files are installed. }
+{ Value of a top-level string field in the ASCII-escaped JSON report PortableImport.cs writes. }
+function JsonStringField(const S, Key: String): String;
+var
+  P, I: Integer;
+  T, Value: String;
+  Escaped: Boolean;
+begin
+  Result := '';
+  P := Pos('"' + Key + '":"', S);
+  if P = 0 then
+    exit;
+  T := Copy(S, P + Length(Key) + 4, Length(S));
+  Value := '';
+  Escaped := False;
+  for I := 1 to Length(T) do
+  begin
+    if (not Escaped) and (Copy(T, I, 1) = '"') then
+    begin
+      Result := JsonUnescape(Value);
+      exit;
+    end;
+    Escaped := (not Escaped) and (Copy(T, I, 1) = '\');
+    Value := Value + Copy(T, I, 1);
+  end;
+end;
+
+procedure RunPortableImport();
+var
+  Report, Message: String;
+  Raw: AnsiString;
+  Code: Integer;
+begin
+  if WizardSilent() then
+    ImportSource := CleanDir(ExpandConstant('{param:PORTABLEDATA|}'));
+  if ImportSource = '' then
+    exit;
+  WizardForm.StatusLabel.Caption := '正在复制便携版数据……';
+  Report := ExpandConstant('{tmp}\portable-import.json');
+  DeleteFile(Report);
+  if not Exec(ExpandConstant('{app}\Receiving.Native.exe'),
+      '--import-portable "' + ImportSource + '" --report "' + Report + '"', ExpandConstant('{app}'),
+      SW_HIDE, ewWaitUntilTerminated, Code) then
+    Code := -1;
+  Message := '';
+  if LoadStringFromFile(Report, Raw) then
+    Message := JsonStringField(Raw, 'message');
+  Log('Portable import from ' + ImportSource + ' exit=' + IntToStr(Code) + ' message=' + Message);
+  if Code = 0 then
+    SuppressibleMsgBox(Message, mbInformation, MB_OK, IDOK)
+  else
+  begin
+    if Message = '' then
+      Message := '复制便携版数据没有完成（代码 ' + IntToStr(Code) + '）。便携版文件夹没有改动。';
+    SuppressibleMsgBox('收货小助手已经安装好，但没有导入便携版数据：' + #13#10 + #13#10 + Message, mbError, MB_OK, IDOK);
+  end;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+    RunPortableImport();
+end;
+#endif

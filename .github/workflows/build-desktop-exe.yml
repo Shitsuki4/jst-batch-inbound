@@ -293,6 +293,39 @@ jobs:
             -PayloadRoot "desktop/dist/deps-payload" `
             -PortableRoot "desktop/dist/portable"
 
+      - name: Build slim upgrade installer (no WebView2 / FFmpeg)
+        shell: pwsh
+        run: |
+          # Pins the exact runtime files of the offline payload built above, so the upgrade installer
+          # accepts only machines whose installed runtime (offline full install or deps installer) matches.
+          ./desktop/build-upgrade-windows.ps1 `
+            -Version $env:APP_VERSION `
+            -PortableRoot "desktop/dist/portable" `
+            -ReferenceRuntime "desktop/dist/offline-payload/runtime" `
+            -InstallerName "ReceivingAssistant-$($env:APP_VERSION)-Upgrade-Setup" `
+            -InnoCompiler $env:INNO_COMPILER
+
+      - name: Verify upgrade installer (refuse without runtime, upgrade over full and deps installs, portable data import)
+        shell: pwsh
+        run: |
+          function Get-Newest([string]$pattern, [string]$what) {
+            $file = Get-ChildItem $pattern | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+            if (-not $file) { throw "No $what was produced" }
+            return $file
+          }
+          $upgrade = Get-Newest "desktop/dist/upgrade-installer/*.exe" "upgrade installer"
+          $offline = Get-Newest "desktop/dist/installer/*.exe" "offline installer"
+          $deps = Get-Newest "desktop/dist/deps-installer/*.exe" "dependency installer"
+          Write-Host ("Upgrade installer: {0} ({1:N1} MiB); offline installer: {2:N1} MiB" -f $upgrade.Name, ($upgrade.Length / 1MB), ($offline.Length / 1MB))
+          if ($upgrade.Length -ge ($offline.Length / 2)) { throw "Upgrade installer is not slim: $($upgrade.Length) bytes vs offline $($offline.Length)" }
+          ./desktop/verify-upgrade-installer.ps1 `
+            -Installer $upgrade.FullName `
+            -OfflineInstaller $offline.FullName `
+            -DepsInstaller $deps.FullName `
+            -PayloadRoot "desktop/dist/upgrade-payload" `
+            -PortableRoot "desktop/dist/portable" `
+            -Version $env:APP_VERSION
+
       - name: Upload portable artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -304,6 +337,8 @@ jobs:
             ${{ runner.temp }}/recorder-synthetic/result.json
             desktop/build/verify/installer-report.json
             desktop/build/verify-deps/deps-installer-report.json
+            desktop/build/verify-upgrade/upgrade-installer-report.json
+            desktop/dist/runtime-requirements.json
           if-no-files-found: error
 
       - name: Upload full offline installer artifact
@@ -322,6 +357,14 @@ jobs:
           if-no-files-found: error
           compression-level: 0
 
+      - name: Upload upgrade installer artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: desktop-${{ env.APP_VERSION }}-upgrade-installer
+          path: desktop/dist/upgrade-installer/*.exe
+          if-no-files-found: error
+          compression-level: 0
+
       - name: Upload release assets for the release job
         if: steps.version.outputs.release_tag != ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -332,6 +375,8 @@ jobs:
             desktop/dist/SHA256SUMS.txt
             desktop/dist/installer/ReceivingAssistant-${{ env.APP_VERSION }}-Offline-Setup.exe
             desktop/dist/deps-installer/ReceivingAssistant-Deps-${{ env.APP_VERSION }}-Setup.exe
+            desktop/dist/upgrade-installer/ReceivingAssistant-${{ env.APP_VERSION }}-Upgrade-Setup.exe
+            desktop/dist/runtime-requirements.json
           if-no-files-found: error
           compression-level: 0
           retention-days: 3
@@ -383,6 +428,9 @@ jobs:
           test -f "release-assets/SHA256SUMS.txt"
           test -f "release-assets/installer/ReceivingAssistant-$APP_VERSION-Offline-Setup.exe"
           test -f "release-assets/deps-installer/ReceivingAssistant-Deps-$APP_VERSION-Setup.exe"
+          test -f "release-assets/upgrade-installer/ReceivingAssistant-$APP_VERSION-Upgrade-Setup.exe"
+          test -f "release-assets/runtime-requirements.json"
+          grep -q "  ReceivingAssistant-$APP_VERSION-Upgrade-Setup.exe\$" release-assets/SHA256SUMS.txt
 
       - name: Publish tagged release
         if: needs.build.outputs.release_mode == 'publish'
@@ -393,6 +441,7 @@ jobs:
             release-assets/jst-batch-inbound-desktop-${{ needs.build.outputs.version }}-win-x64.zip
             release-assets/installer/ReceivingAssistant-${{ needs.build.outputs.version }}-Offline-Setup.exe
             release-assets/deps-installer/ReceivingAssistant-Deps-${{ needs.build.outputs.version }}-Setup.exe
+            release-assets/upgrade-installer/ReceivingAssistant-${{ needs.build.outputs.version }}-Upgrade-Setup.exe
             release-assets/SHA256SUMS.txt
           generate_release_notes: true
 
@@ -406,7 +455,8 @@ jobs:
             "release-assets/jst-batch-inbound-desktop-$APP_VERSION-win-x64.zip" \
             "release-assets/SHA256SUMS.txt" \
             "release-assets/installer/ReceivingAssistant-$APP_VERSION-Offline-Setup.exe" \
-            "release-assets/deps-installer/ReceivingAssistant-Deps-$APP_VERSION-Setup.exe"
+            "release-assets/deps-installer/ReceivingAssistant-Deps-$APP_VERSION-Setup.exe" \
+            "release-assets/upgrade-installer/ReceivingAssistant-$APP_VERSION-Upgrade-Setup.exe"
 
       - name: Set installer asset labels
         shell: bash
@@ -424,20 +474,29 @@ jobs:
           }
           set_label "ReceivingAssistant-$APP_VERSION-Offline-Setup.exe" "收货小助手-$APP_VERSION-离线完整安装程序.exe"
           set_label "ReceivingAssistant-Deps-$APP_VERSION-Setup.exe" "收货小助手-$APP_VERSION-运行依赖安装程序.exe"
+          set_label "ReceivingAssistant-$APP_VERSION-Upgrade-Setup.exe" "收货小助手-$APP_VERSION-升级安装程序.exe"
 
-      - name: Add gh-proxy download links to release notes
+      - name: Add gh-proxy download links and runtime requirements to release notes
         shell: bash
         run: |
           set -euo pipefail
           # Prepend a gh-proxy.com mirror section to the release body. The marker block is
           # replaced on re-runs (attach mode) so the links never duplicate.
+          # Also write the pinned runtime (an invisible HTML comment) that the auto-updater reads to
+          # choose the slim upgrade installer (backend/app/updater.py parse_runtime_requirements).
+          requirements=$(tr -d '\r\n' < release-assets/runtime-requirements.json)
+          case "$requirements" in
+            *"--"*) echo "runtime-requirements.json must not contain '--'" >&2; exit 1 ;;
+          esac
           body=$(gh release view "$RELEASE_TAG" --json body --jq '.body // ""')
           body=$(printf '%s\n' "$body" | awk '
             /<!-- gh-proxy-links:start -->/ {skip=1; next}
             /<!-- gh-proxy-links:end -->/ {skip=0; next}
+            /<!-- runtime-requirements:/ {next}
             !skip {print}
           ')
           {
+            echo "<!-- runtime-requirements: ${requirements} -->"
             echo '<!-- gh-proxy-links:start -->'
             echo '## 国内加速下载（gh-proxy.com）'
             echo
@@ -447,6 +506,7 @@ jobs:
               "jst-batch-inbound-desktop-${APP_VERSION}-win-x64.zip" \
               "ReceivingAssistant-${APP_VERSION}-Offline-Setup.exe" \
               "ReceivingAssistant-Deps-${APP_VERSION}-Setup.exe" \
+              "ReceivingAssistant-${APP_VERSION}-Upgrade-Setup.exe" \
               "SHA256SUMS.txt"; do
               echo "- [${asset}](https://gh-proxy.com/https://github.com/${GH_REPO}/releases/download/${RELEASE_TAG}/${asset})"
             done

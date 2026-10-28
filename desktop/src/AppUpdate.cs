@@ -25,17 +25,20 @@ public static class AppUpdate {
  public static void OpenUrl(string value){if(!AllowedUrl(value))throw new Exception("只允许打开本项目的发布页");Process.Start(new ProcessStartInfo(value){UseShellExecute=true});}
  // Re-verifies the package inside data/updates and, for the portable build, unpacks it next to the current folder.
  public static UpdatePlan Prepare(string kind,string version,string package,string sha256){
-  if(kind!=(AppPaths.Installed?"installer":"portable"))throw new Exception("更新包类型与当前版本（"+(AppPaths.Installed?"安装版":"便携版")+"）不符");
+  // Installed mode accepts the full offline installer ("installer") or the slim upgrade installer ("upgrade");
+  // both are Inno Setup exes with the same AppId and are launched the same way.
+  var setupKind=kind is "installer" or "upgrade";
+  if(AppPaths.Installed?!setupKind:kind!="portable")throw new Exception("更新包类型与当前版本（"+(AppPaths.Installed?"安装版":"便携版")+"）不符");
   if(string.IsNullOrWhiteSpace(version)||version.Any(c=>!(char.IsAsciiLetterOrDigit(c)||c is '.' or '-' or '_')))throw new Exception("更新版本号无效");
   var expected=(sha256??"").Trim().ToLowerInvariant();if(expected.StartsWith("sha256:",StringComparison.Ordinal))expected=expected[7..];
   if(expected.Length!=64||expected.Any(c=>!Uri.IsHexDigit(c)))throw new Exception("缺少有效的SHA256校验值");
   var root=CacheRoot.TrimEnd(Path.DirectorySeparatorChar)+Path.DirectorySeparatorChar;var full=Path.GetFullPath(package);
   if(!full.StartsWith(root,StringComparison.OrdinalIgnoreCase))throw new Exception("更新包不在更新缓存目录内，已拒绝");
   if(!File.Exists(full))throw new Exception("更新包不存在，请重新下载");
-  var ext=Path.GetExtension(full).ToLowerInvariant();if(kind=="installer"?ext!=".exe":ext!=".zip")throw new Exception("更新包文件类型不符");
+  var ext=Path.GetExtension(full).ToLowerInvariant();if(setupKind?ext!=".exe":ext!=".zip")throw new Exception("更新包文件类型不符");
   string actual;using(var stream=new FileStream(full,FileMode.Open,FileAccess.Read,FileShare.Read)){actual=Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();}
   if(actual!=expected)throw new Exception("更新包SHA256校验不一致，已拒绝安装，请重新下载");
-  if(kind=="installer")return new UpdatePlan(kind,version,full,full);
+  if(setupKind)return new UpdatePlan("installer",version,full,full);
   return new UpdatePlan(kind,version,full,ExtractPortable(full,version));
  }
  static string ExtractPortable(string zip,string version){

@@ -80,7 +80,9 @@ powershell -ExecutionPolicy Bypass -File desktop/build-windows.ps1 -SkipTests -R
 - WebView2：程序旁 `runtime\webview2` → `%LOCALAPPDATA%\ReceivingAssistant\runtime\webview2`
   （须含 `msedgewebview2.exe`）→ 系统 Evergreen 运行时。
 
-离线完整安装版（存在 `installed-mode.txt`）只使用自带的 `runtime\`，不读取共享目录，行为不变。
+安装版（存在 `installed-mode.txt`）按组件先用安装目录自带的 `runtime\`；没有自带时（用升级安装程序
+装在只有运行依赖的电脑上）改用上面的共享目录。安装版从不查 `native-settings.json` 的路径、WinGet、PATH
+或系统 Evergreen 运行时。离线完整安装版自带 `runtime\`，行为不变。
 
 ## 运行依赖安装程序
 
@@ -153,6 +155,35 @@ powershell -ExecutionPolicy Bypass -File desktop/build-offline-windows.ps1 `
 构建脚本会校验两个依赖的 SHA256、组装 `desktop/dist/offline-payload`、用 Inno Setup 编译出
 `desktop/dist/installer/收货小助手-<版本>-离线完整安装程序.exe`，并把它的哈希追加到
 `desktop/dist/SHA256SUMS.txt`。
+
+## 升级安装程序
+
+给已经装过离线完整安装程序或运行依赖安装程序的电脑用的精简安装包（约 90 MiB）。它和离线完整
+安装程序是同一份 `installer/offline_setup.iss`，加 `/DUpgradeOnly` 编译：AppId、安装目录、
+卸载程序和数据目录都相同，载荷是便携包 + `installed-mode.txt` + 说明文档，不带 `runtime\`。
+
+```powershell
+# 先按上一节构建离线安装程序（升级安装程序固定的组件取自 dist\offline-payload\runtime）
+powershell -ExecutionPolicy Bypass -File desktop/build-upgrade-windows.ps1 `
+  -InnoCompiler <Inno Setup 6 的 ISCC.exe>
+```
+
+- 构建脚本算出 `msedgewebview2.exe`、`ffmpeg.exe`、`ffprobe.exe` 的 SHA256，编进安装程序，
+  并写 `desktop/dist/runtime-requirements.json`；CI 把它作为 HTML 注释写进 Release 说明，
+  供自动更新判断。
+- 安装前按程序实际查找顺序（安装目录 `runtime\` 优先，否则共享目录）核对这三个文件。缺失或
+  不一致就拒绝安装，提示改用离线完整安装程序，不做任何改动（启动时检查一次，确定安装目录后
+  在 PrepareToInstall 再查一次）。
+- `[InstallDelete]` 只清理旧的 `backend\_internal`，不删 `runtime\webview2`；也不再跑 icacls。
+- 安装版数据目录 `v3` 里还没有数据时，显示“便携版数据”页：可选中便携版文件夹，安装后由
+  `Receiving.Native.exe --import-portable <文件夹> --report <json>`（`desktop/src/PortableImport.cs`）
+  复制数据。规则：只复制不移动；便携版在运行、有未完成的恢复、安装版已有数据时拒绝；先复制到
+  `v3\.portable-import-*` 暂存目录并逐个 SHA256 校验，再移到位；跳过 `data\updates` 下载缓存和
+  连接/实例文件；录像不复制，默认录像目录（`<便携版>\录像`）写进设置继续使用；留下
+  `v3\portable-import.json` 记录。静默安装用 `/PORTABLEDATA="<文件夹>"`。
+- 验收脚本 `desktop/verify-upgrade-installer.ps1` 在 CI 上跑三种情况：都没装时拒绝；装了离线完整版时
+  组件被改动拒绝、原地升级保留 `runtime\` 和数据、卸载清理干净；装了运行依赖时安装、导入便携版数据、
+  重复导入拒绝、`/PURGEDATA` 卸载不碰共享组件和便携版文件夹。
 
 ### 卸载
 
@@ -258,8 +289,10 @@ IPv6 地址会因重新拨号 / 隐私地址轮换而变化，打不开时回设
 - 推送 `desktop-v*` 标签时构建并创建 GitHub Release。
 
 工作流会下载固定版本的 WebView2 固定运行时、FFmpeg full build 和 Inno Setup 并校验
-SHA256，然后依次构建便携 ZIP、编译完整离线安装程序并跑安装级验收、编译运行依赖安装程序并跑验收，
-最后把便携 ZIP、离线安装程序与运行依赖安装程序一起作为产物上传；标签构建会把它们发布到 Release。
+SHA256，然后依次构建便携 ZIP、编译完整离线安装程序并跑安装级验收、编译运行依赖安装程序并跑验收、
+编译升级安装程序并跑验收，最后把便携 ZIP、离线安装程序、运行依赖安装程序与升级安装程序一起作为产物上传；
+标签构建会把它们发布到 Release（升级安装程序显示名 `收货小助手-<版本>-升级安装程序.exe`），并在
+Release 说明里写入运行组件要求。
 
 要把产物补传到已存在的 Release（例如 `desktop-v4.1.3`），在手动触发时填写
 `publish_release_tag` 输入框即可。
