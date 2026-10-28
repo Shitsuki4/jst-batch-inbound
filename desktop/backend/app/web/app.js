@@ -1217,7 +1217,7 @@
         + '<input class="qty-input" data-id="' + l.id + '" value="' + fmtNum(l.qty) + '">'
         + '<button data-act="inc" data-id="' + l.id + '">＋</button>'
         + '</div></td>'
-        + '<td style="text-align:right">' + window.ReceiptEditor.button(l) + '<button class="icon-btn" data-act="del" data-id="' + l.id + '">✕</button></td>'
+        + '<td style="text-align:right">' + window.ReceiptEditor.button(l) + '<button class="icon-btn icon-del" data-act="del" data-id="' + l.id + '" title="删除这一行" aria-label="删除 ' + esc(l.name || l.sku_id || '') + '">✕</button></td>'
         + '</tr>';
     });
     tb.innerHTML = html;
@@ -1325,7 +1325,12 @@
         var id = +b.dataset.id;
         var line = (S.lines || []).filter(function (l) { return l.id === id; })[0];
         if (!line) return;
-        if (b.dataset.act === 'del') { delLine(id); return; }
+        if (b.dataset.act === 'del') {
+          // 删除整行要先确认：扫码时手一偏点到 ✕，几十件就没了，而且没有撤销
+          confirmBox('删除这一行？', '<b>' + esc(line.name || line.sku_id || '') + '</b><br>当前 ' + esc(fmtNum(line.qty))
+            + ' 件，删除后要重新扫码录入。', '删除该行', function () { delLine(id); });
+          return;
+        }
         var step = Math.max(1, Math.round(num(S.settings && S.settings.scan_step)) || 1);   // 数量只能是整数
         setQty(id, Math.max(0, num(line.qty) + (b.dataset.act === 'inc' ? step : -step)));
       };
@@ -1364,7 +1369,8 @@
   function delLine(id) {
     suppressRefocus = Date.now() + 400;
     api('/api/line/del', { method: 'POST', body: { line_id: id, batch_id: S.current_batch } })
-      .then(function (r) { if (r.ok) delete qtySaveErrors[id]; afterLineChange(r); });
+      .then(function (r) { if (r.ok) delete qtySaveErrors[id]; afterLineChange(r); })
+      .catch(function () { netAlert('这一行是否已删除未确认，请核对明细'); });
   }
 
   /* -------------------- 结单 -------------------- */
@@ -1464,7 +1470,7 @@
         + '<td class="sku">' + esc(l.sku_code) + '</td>'
         + '<td style="width:104px"><input class="qty-input js-rec-qty" data-id="' + l.id + '" value="'
         + fmtNum(l.qty) + '"' + (l.inbound_job_id ? ' disabled' : '') + '></td>'
-        + '<td style="text-align:right">' + window.ReceiptEditor.button(l) + '<button class="icon-btn js-del-line" data-id="' + l.id + '">✕</button></td>'
+        + '<td style="text-align:right">' + window.ReceiptEditor.button(l) + '<button class="icon-btn icon-del js-del-line" data-id="' + l.id + '" title="删除这一行" aria-label="删除 ' + esc(l.name || l.sku_id || '') + '">✕</button></td>'
         + '</tr>';
     }).join('') : '<tr><td colspan="5"><div class="empty">无明细</div></td></tr>';
     return '<div class="table-wrap"><table class="tbl"><thead><tr>'
@@ -1491,7 +1497,7 @@
         + (l.spec ? '<div style="color:#6b7a8d;font-size:12px">' + esc(l.spec) + '</div>' : '') + '</td>'
         + '<td style="width:104px"><input class="qty-input js-rec-qty" data-id="' + l.id + '" value="'
         + fmtNum(l.qty) + '"' + (g.inbound_job_id ? ' disabled' : '') + '></td>'
-        + '<td style="text-align:right">' + window.ReceiptEditor.button(l) + '<button class="icon-btn js-del-line" data-id="' + l.id + '">✕</button></td>'
+        + '<td style="text-align:right">' + window.ReceiptEditor.button(l) + '<button class="icon-btn icon-del js-del-line" data-id="' + l.id + '" title="删除这一行" aria-label="删除 ' + esc(l.name || l.sku_id || '') + '">✕</button></td>'
         + '</tr>';
     }).join('') : '<tr><td colspan="4"><div class="empty">该物流单号暂无明细</div></td></tr>';
     return '<div class="grp">'
