@@ -131,7 +131,7 @@ public static class Program {
 // 主窗口外壳（方向 C）：白色细工具栏 + 状态行，不再重复网页侧栏的品牌标题。
 // Shared with the library acceptance so CI can screenshot the shell without a backend.
 public static class ShellChrome {
- public const string Brand="扫码入库",WindowTitle="扫码入库 · 聚水潭收货助手 4.1.2";
+ public const string Brand="扫码入库",WindowTitle="扫码入库 · 聚水潭收货助手 4.1.3";
  public static (Border Top,WrapPanel Bar) Build(TextBlock status){
   var bar=new WrapPanel{VerticalAlignment=VerticalAlignment.Center};
   status.FontWeight=FontWeights.SemiBold;status.TextWrapping=TextWrapping.Wrap;status.Foreground=Palette.Text2;status.VerticalAlignment=VerticalAlignment.Center;
