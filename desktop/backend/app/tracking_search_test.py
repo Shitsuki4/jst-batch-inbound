@@ -64,6 +64,16 @@ class TrackingSearchTests(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
+        # Windows 上库文件开着时删不掉临时目录：先关掉本测试打开的无采购单 / 快递单 / 联合收货库
+        cls.f.http.shutdown()
+        for name in ('UNPLANNED', 'EXPRESS', 'JOINT'):
+            inst = getattr(getattr(cls.s, name, None), 'instance', None)
+            store = getattr(inst, 'store', None)
+            if store is not None:
+                try:
+                    store.db.close()
+                except Exception:
+                    pass
         cls.f.close()
 
     def express_new(self, tracking, note=''):
