@@ -1,4 +1,4 @@
-# 收货小助手 3.0 桌面版
+# 收货小助手 桌面版
 
 桌面版由 WPF 宿主 `Receiving.Native.exe` 和本地 Python 业务服务
 `backend/Receiving.Service.exe` 组成。宿主负责监控浮窗、扫码自动录像、录像索引和
