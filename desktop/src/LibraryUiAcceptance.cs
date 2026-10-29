@@ -74,6 +74,11 @@ sealed class LibraryAcceptanceRunner : IVideoLibraryHost {
   if(item.Segment.Context.Source=="无采购单"){var c=item.Segment.Context.Copy();c.Purchases=new(){new("PO-ARCH","EXT-ARCH")};store.Associate(c);}
   return Task.CompletedTask;
  }
+ // 快递单登记 KD-ONLY-001 没有录像；LIB-TODAY-A 的登记有录像（应被录像列表覆盖，不重复列出）
+ public Task<IReadOnlyList<RegistrationHit>> FindRegistrations(string query)=>Task.FromResult<IReadOnlyList<RegistrationHit>>(new[]{
+  new RegistrationHit("快递单:31:7","快递单","快递单登记",31,7,"KD-ONLY-001","KD20261029-0001","","到付件","2026-10-29 09:15:00","closed",0),
+  new RegistrationHit(today1.Context.Source+":"+today1.Context.SessionId+":"+today1.Context.BatchId,today1.Context.Source,"采购单收货",today1.Context.SessionId,today1.Context.BatchId,today1.Tracking,"","PO-LIB-1","","","closed",1)}
+  .Where(r=>r.Tracking.Contains(query,StringComparison.OrdinalIgnoreCase)).ToList());
  public Task<HashSet<string>> FindByProduct(string query)=>Task.FromResult(query=="SKU-CUE-01"?new HashSet<string>{VideoLibraryView.ProductKey(today1.Tracking,today1.Context.SessionId,today1.Context.Source)}:new HashSet<string>());
  public Task<IReadOnlyList<ScanCue>> LoadCues(LibraryItem item)=>Task.FromResult<IReadOnlyList<ScanCue>>(item.Id==today1.Id
   ?new[]{new ScanCue(1.5,item.At.AddSeconds(1.5),"SKU-CUE-01","验收商品A","6901234567890","+1"),new ScanCue(3,item.At.AddSeconds(3),"SKU-CUE-02","验收商品B","6909876543210","+2")}
@@ -186,7 +191,10 @@ sealed class LibraryAcceptanceRunner : IVideoLibraryHost {
    await Search("PO-LIB-2");Check(view.Rows.Count==1&&view.Rows[0].Id==today2.Id,"采购单号搜索命中");
    await Search("LIB-WEEK-3");Check(view.Preset==LibraryPreset.All&&view.Rows.Count==1&&view.Rows[0].Id==week.Id,"扫码不在今天：自动切换到全部日期并命中");
    await Search("SKU-CUE-01");Check(view.Rows.Count==1&&view.Rows[0].Id==today1.Id,"商品编码搜索（业务扫码流水）命中");
-   await Search("NO-SUCH-CODE");Check(view.Rows.Count==0,"无结果时为空列表");
+   await Search("NO-SUCH-CODE");Check(view.Rows.Count==0&&view.RegistrationRows.Count==0&&view.Registrations.Visibility!=Visibility.Visible,"无结果时为空列表");
+   await Search("KD-ONLY-001");Check(view.Rows.Count==0&&view.RegistrationRows.Count==1&&view.Registrations.Visibility==Visibility.Visible&&view.Registrations.Text.Contains("KD-ONLY-001")&&view.Registrations.Text.Contains("快递单登记"),"没有录像的快递单登记单号也能搜到："+view.Registrations.Text.Replace("\n"," / "));
+   Shot("library-registration-only.png");
+   await Search("LIB-TODAY-A");Check(view.Rows.Any(r=>r.Id==today1.Id)&&view.RegistrationRows.Count==0,"有录像的登记只出现在录像列表里，不重复列出");
    view.Query.Clear();await view.SearchAsync(false);
    view.StatusBox.SelectedItem="售后保护";Check(view.Rows.Count==2&&view.Rows.All(r=>r.Item.Protected),"状态筛选：售后保护");
    view.StatusBox.SelectedItem="在录";Check(view.Rows.Count==1&&view.Rows[0].Id==live.Id,"状态筛选：在录");

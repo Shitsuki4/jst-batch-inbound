@@ -1160,6 +1160,55 @@ class DesktopHTTPServer(ThreadingHTTPServer):
     request_queue_size = 128
 
 
+def _extra_sources():
+    """记录查询里除采购单收货外的三个来源：(代码, 录像来源, 服务, 库文件)。库还没建过的来源跳过。"""
+    out=[]
+    for code,source,svc,db in (('unplanned','无采购单',UNPLANNED,'unplanned.db'),('express','快递单',EXPRESS,'express.db'),
+                               ('joint','联合',JOINT,'joint_receipts.db')):
+        if getattr(svc,'instance',svc) is not None or os.path.exists(os.path.join(DATA,db)):out.append((code,source,svc))
+    return out
+
+
+def _matched_trackings(svc, source, text):
+    """本次关键字命中的物流单号（按会话分组），列在记录查询的结果里，便于确认搜到的就是这个单号"""
+    import tracking_search
+    found={}
+    for h in tracking_search.hits(svc.store.db, source, text, 200):
+        found.setdefault(h['sid'],[]).append(h)
+    return found
+
+
+def extra_history(text):
+    """记录查询：无采购单收货、快递单登记、联合收货的历史。
+
+    每个来源单独查：一个来源出错（例如联合收货要先登录聚水潭）只在 errors 里说明，
+    不影响其他来源的结果，快递单登记的单号不会因此搜不到。
+    """
+    text=str(text or '').strip();rows=[];errors=[]
+    for code,source,svc in _extra_sources():
+        try:
+            hits=_matched_trackings(svc,source,text) if text else {}
+            for r in svc.history(text):
+                matched=hits.get(r['id'],[])
+                parts=[]
+                if code=='unplanned':parts.append('无采购单登记 · '+str(r.get('po_id') or '未补采购单'))
+                elif code=='express':parts.append('快递单登记 · '+str(r.get('tracking_count') or 0)+' 个物流单')
+                else:parts.append('联合收货 · 母单 '+str(r.get('mother') or '—')+' · '+','.join(str(x) for x in (r.get('po_ids') or []) if x))
+                if code!='joint' and r.get('note'):parts.append('备注 '+str(r['note']))
+                rows.append(dict(source=code,id=r['id'],label=r['input_no'],description=' · '.join(parts),
+                                 state=r.get('state') or '',started_at=r.get('started_at') or '',
+                                 trackings=[dict(tracking_no=h['tracking_no'],first_scan_at=h.get('first_scan_at') or '',
+                                                 total=float(h.get('total') or 0)) for h in matched[:20]]))
+        except Exception as e:
+            errors.append(tracking_search_label(source)+'：'+str(e))
+    return dict(rows=rows,errors=errors)
+
+
+def tracking_search_label(source):
+    import tracking_search
+    return tracking_search.SOURCE_LABELS.get(source,source)
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "jst-scan/1.0"
@@ -1413,14 +1462,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/api/receipts/extra-history':
             try:
                 with state_lock:
-                    text=q.get('q','');rows=[]
-                    if getattr(UNPLANNED,'instance',UNPLANNED) is not None or os.path.exists(os.path.join(DATA,'unplanned.db')):
-                        for r in UNPLANNED.history(text):rows.append(dict(source='unplanned',id=r['id'],label=r['input_no'],description='无采购单登记 · '+str(r.get('po_id') or '未补采购单')))
-                    if EXPRESS.instance is not None or os.path.exists(os.path.join(DATA,'express.db')):
-                        for r in EXPRESS.history(text):rows.append(dict(source='express',id=r['id'],label=r['input_no'],description='快递单登记 · '+str(r.get('tracking_count') or 0)+' 个物流单'))
-                    if JOINT.instance is not None or os.path.exists(os.path.join(DATA,'joint_receipts.db')):
-                        for r in JOINT.history(text):rows.append(dict(source='joint',id=r['id'],label=r['input_no'],description='联合收货 · 母单 '+r['mother']+' · '+','.join(r['po_ids'])))
-                    return self._ok(rows=rows)
+                    return self._ok(**extra_history(q.get('q','')))
             except Exception as e:return self._fail(str(e))
         if path.startswith('/api/joint/'):
             try:

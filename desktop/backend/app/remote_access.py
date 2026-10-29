@@ -227,6 +227,12 @@ def firewall_command(port, program=""):
 
 # ---------------------------------------------------------------- 只读数据
 
+# 远程管理页的收货类型：采购单收货 / 无采购单收货 / 联合收货 / 快递单登记，「全部」按这个顺序合并
+KINDS = ("po", "unplanned", "joint", "express")
+# 带 unplanned_meta（备注）的类型
+META_KINDS = ("unplanned", "express")
+
+
 class ReadOnlyData:
     """每次查询独立打开只读连接（WAL 下与写入并发安全），不使用 state_lock 与共享连接。"""
 
@@ -236,6 +242,8 @@ class ReadOnlyData:
             "po": receipt_db or os.path.join(data_dir, "jst.db"),
             "unplanned": os.path.join(data_dir, "unplanned.db"),
             "joint": os.path.join(data_dir, "joint_receipts.db"),
+            # 快递单登记单独存放在 express.db（结构与无采购单收货相同）
+            "express": os.path.join(data_dir, "express.db"),
         }
 
     def connect(self, kind):
@@ -253,7 +261,7 @@ class ReadOnlyData:
         return {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
 
     def history(self, kind="all", q="", start="", end="", limit=50, offset=0):
-        kinds = ["po", "unplanned", "joint"] if kind == "all" else [kind]
+        kinds = list(KINDS) if kind == "all" else [kind]
         rows = []
         for k in kinds:
             if k not in self.paths:
@@ -274,13 +282,14 @@ class ReadOnlyData:
             return []
         where, args = [], []
         join = ""
-        if kind == "unplanned":
+        if kind in META_KINDS:
             if "unplanned_meta" not in tables:
                 return []
             join = " JOIN unplanned_meta m ON m.sid=s.id"
             if "joint_group" in tables:
                 where.append("s.id NOT IN (SELECT sid FROM joint_group)")
-                where.append("s.id NOT IN (SELECT sid FROM joint_stage)")
+                if "joint_stage" in tables:
+                    where.append("s.id NOT IN (SELECT sid FROM joint_stage)")
         elif kind == "joint":
             if "joint_group" not in tables:
                 return []
@@ -296,8 +305,8 @@ class ReadOnlyData:
         if q:
             kw = "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
             fields = ["s.input_no", "s.po_id", "IFNULL(s.outer_po_id,'')", "IFNULL(s.supplier,'')"]
-            if kind == "unplanned":
-                fields.append("m.note")
+            if kind in META_KINDS:
+                fields.append("IFNULL(m.note,'')")
             if kind == "joint":
                 fields.append("g.mother")
             cond = [f + " LIKE ? ESCAPE '\\'" for f in fields]
@@ -310,7 +319,7 @@ class ReadOnlyData:
                 n += 2
             where.append("(" + " OR ".join(cond) + ")")
             args += [kw] * n
-        extra = ", m.note AS note" if kind == "unplanned" else (", g.mother AS mother" if kind == "joint" else "")
+        extra = ", m.note AS note" if kind in META_KINDS else (", g.mother AS mother" if kind == "joint" else "")
         sql = ("SELECT s.id, s.input_no, s.po_id, s.outer_po_id, s.supplier, s.wh_name, s.state, s.started_at, s.ended_at"
                + extra + " FROM session s" + join + (" WHERE " + " AND ".join(where) if where else "")
                + " ORDER BY s.id DESC LIMIT ?")
@@ -353,6 +362,24 @@ class ReadOnlyData:
         jobs = self._inbound_jobs(db, sids)
         return [{"status": j["status"], "io_id": j["io_id"]} for j in jobs]
 
+    def tracking_hits(self, q, limit=50):
+        """按物流单号在四种收货来源里找登记过的物流批次（录像查询用来列出「有登记、没录像」的单号）"""
+        import tracking_search
+        groups = []
+        for kind in KINDS:
+            db = self.connect(kind)
+            if db is None:
+                continue
+            try:
+                groups.append(tracking_search.hits(db, tracking_search.TYPE_SOURCES[kind], q, limit))
+            finally:
+                db.close()
+        rows = tracking_search.merge(groups, limit)
+        for r in rows:
+            r["type"] = next(k for k, v in tracking_search.TYPE_SOURCES.items() if v == r["source"])
+            r["key"] = tracking_search.video_key(r)
+        return rows
+
     def detail(self, kind, sid):
         if kind not in self.paths:
             raise ValueError("收货类型无效")
@@ -368,15 +395,17 @@ class ReadOnlyData:
             s = dict(s)
             if kind == "joint" and not db.execute("SELECT 1 FROM joint_group WHERE sid=?", (sid,)).fetchone():
                 raise LookupError("找不到该联合收货记录")
-            if kind == "unplanned":
+            if kind in META_KINDS:
+                what = "快递单登记记录" if kind == "express" else "无采购单收货记录"
                 if "unplanned_meta" not in tables or not db.execute("SELECT 1 FROM unplanned_meta WHERE sid=?", (sid,)).fetchone():
-                    raise LookupError("找不到该无采购单收货记录")
+                    raise LookupError("找不到该" + what)
                 if "joint_group" in tables and (db.execute("SELECT 1 FROM joint_group WHERE sid=?", (sid,)).fetchone()
-                                                or db.execute("SELECT 1 FROM joint_stage WHERE sid=?", (sid,)).fetchone()):
-                    raise LookupError("找不到该无采购单收货记录")
+                                                or ("joint_stage" in tables and
+                                                    db.execute("SELECT 1 FROM joint_stage WHERE sid=?", (sid,)).fetchone())):
+                    raise LookupError("找不到该" + what)
             head = {k: s.get(k) for k in ("id", "input_no", "po_id", "outer_po_id", "supplier", "wh_name", "status",
                                           "state", "started_at", "ended_at", "paused_at")}
-            if kind == "unplanned":
+            if kind in META_KINDS:
                 m = db.execute("SELECT note FROM unplanned_meta WHERE sid=?", (sid,)).fetchone()
                 head["note"] = m["note"] if m else ""
             batches = []
@@ -629,6 +658,10 @@ class VideoIndex:
     @staticmethod
     def public(item):
         return {k: v for k, v in item.items() if not k.startswith("_")}
+
+    def batch_keys(self):
+        """所有录像片段的 BatchKey（来源:会话:批次）"""
+        return {str(it.get("batch_key") or "") for it in self.items()}
 
     def search(self, q="", start="", end="", limit=100, offset=0):
         q = (q or "").strip().lower()
@@ -1347,7 +1380,7 @@ def make_handler(host):
         def receipts(self, q):
             try:
                 kind = q.get("type", "all")
-                if kind not in ("all", "po", "unplanned", "joint"):
+                if kind != "all" and kind not in KINDS:
                     raise ValueError("收货类型无效")
                 text = (q.get("q") or "").strip()[:100]
                 data = host.store.history(kind, text, self.date(q.get("from")), self.date(q.get("to")),
@@ -1374,8 +1407,17 @@ def make_handler(host):
         def video_list(self, q):
             try:
                 text = (q.get("q") or "").strip()[:100]
+                offset = self.int_arg(q.get("offset"), 0, 0, 100000)
                 data = host.videos.search(text, self.date(q.get("from")), self.date(q.get("to")),
-                                          self.int_arg(q.get("limit"), 100, 1, 300), self.int_arg(q.get("offset"), 0, 0, 100000))
+                                          self.int_arg(q.get("limit"), 100, 1, 300), offset)
+                # 登记过、但没有录像的物流单号（没开录像、摄像头没就绪等）：也要能搜到，单独列出，不受日期限制
+                data["registrations"] = []
+                if text and offset == 0:
+                    try:
+                        keys = host.videos.batch_keys()
+                        data["registrations"] = [r for r in host.store.tracking_hits(text, 30) if r["key"] not in keys]
+                    except sqlite3.Error:
+                        data["registrations_error"] = "收货记录暂时查不到，请稍后重试"
             except ValueError as e:
                 return self.fail(str(e))
             return self.json(dict(ok=True, allow_download=host.config()["allow_download"], **data))

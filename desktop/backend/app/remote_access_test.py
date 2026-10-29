@@ -100,6 +100,18 @@ def build_data(d):
     jo.add_qty(jb["id"], jsid, {"sku_id": "J1", "name": "联合商品"}, 4)
     jo.db.close()
 
+    # 快递单登记：单独的 express.db；KD-NOVIDEO-77 没有录像
+    ex = Store(os.path.join(d, "express.db"))
+    ex.db.execute('CREATE TABLE IF NOT EXISTS unplanned_meta(sid INTEGER PRIMARY KEY, note TEXT NOT NULL DEFAULT "")')
+    c = ex.db.execute("INSERT INTO session(input_no,po_id,id_type,state,started_at,items_json) VALUES('KD20261020-0001','','express','closed',?, '[]')",
+                      (time.strftime("%Y-%m-%d %H:%M:%S"),))
+    esid = c.lastrowid
+    ex.db.execute("INSERT INTO unplanned_meta(sid,note) VALUES(?,?)", (esid, "到付快递"))
+    ex.db.commit()
+    eb, _ = ex.ensure_batch(esid, "KD-NOVIDEO-77")
+    ex.add_qty(eb["id"], esid, {"sku_id": "E1", "name": "快递件"}, 1)
+    ex.db.close()
+
     root = os.path.join(os.path.dirname(d), "录像")   # 与正式版一致：v3\\data 旁边的 v3\\录像
     folder = os.path.join(root, "2026年10月20日", "PO-77-OUT-9", "SF123456789")
     os.makedirs(folder)
@@ -140,7 +152,7 @@ def build_data(d):
             json.dump(ls, f)
     except (OSError, NotImplementedError):
         pass
-    return {"sid": sid, "usid": usid, "jsid": jsid, "root": root, "media": media}
+    return {"sid": sid, "usid": usid, "jsid": jsid, "esid": esid, "root": root, "media": media}
 
 
 class Client:
@@ -357,7 +369,7 @@ class RemoteAccessTests(unittest.TestCase):
         cl = self.enable()
         cl.login()
         rows = cl.req("GET", "/api/receipts?type=all").data["rows"]
-        self.assertEqual(sorted(r["type"] for r in rows), ["joint", "po", "unplanned"])
+        self.assertEqual(sorted(r["type"] for r in rows), ["express", "joint", "po", "unplanned"])
         po = cl.req("GET", "/api/receipts?type=po&q=SF1234").data["rows"]
         self.assertEqual(len(po), 1)
         self.assertEqual(po[0]["po_id"], "PO-77")
@@ -378,6 +390,16 @@ class RemoteAccessTests(unittest.TestCase):
         self.assertNotIn("secret", json.dumps(d["inbound"]))
         j = cl.req("GET", "/api/receipts/detail?type=joint&id=%d" % self.info["jsid"]).data
         self.assertEqual(j["purchases"][0]["po_id"], "PO-J1")
+        # 快递单登记：按物流单号（不分大小写、部分号码）、单据号、备注都能搜到，「全部」里也有
+        for q in ("KD-NOVIDEO-77", "kd-novideo", "KD20261020", "%E5%88%B0%E4%BB%98"):   # 到付
+            ex = cl.req("GET", "/api/receipts?type=express&q=" + q).data["rows"]
+            self.assertEqual([r["id"] for r in ex], [self.info["esid"]], q)
+        allx = cl.req("GET", "/api/receipts?type=all&q=NOVIDEO").data["rows"]
+        self.assertEqual([(r["type"], r["id"]) for r in allx], [("express", self.info["esid"])])
+        e = cl.req("GET", "/api/receipts/detail?type=express&id=%d" % self.info["esid"]).data
+        self.assertEqual(e["batches"][0]["tracking_no"], "KD-NOVIDEO-77")
+        self.assertEqual(e["head"]["note"], "到付快递")
+        self.assertEqual(cl.req("GET", "/api/receipts/detail?type=express&id=99999").status, 404)
         self.assertEqual(cl.req("GET", "/api/receipts/detail?type=po&id=99999").status, 404)
         self.assertEqual(cl.req("GET", "/api/receipts/detail?type=../x&id=1").status, 400)
 
@@ -397,6 +419,15 @@ class RemoteAccessTests(unittest.TestCase):
         for q in ("SF1234", "PO-77", "OUT-9", "%E7%A0%B4%E6%8D%9F", "A1"):
             self.assertEqual(len(cl.req("GET", "/api/videos?q=" + q).data["rows"]), 1, q)
         self.assertEqual(len(cl.req("GET", "/api/videos?q=PO-OLD").data["rows"]), 0)   # 以关联索引为准
+        # 登记过、没录像的单号（快递单登记）也能在录像查询里搜到；有录像的单号不重复列出
+        d = cl.req("GET", "/api/videos?q=novideo-77&from=2000-01-01&to=2000-01-01").data
+        self.assertEqual(d["rows"], [])
+        self.assertEqual([(r["type"], r["sid"], r["tracking_no"], r["label"]) for r in d["registrations"]],
+                         [("express", self.info["esid"], "KD-NOVIDEO-77", "快递单登记")])
+        self.assertEqual(cl.req("GET", "/api/videos?q=SF123456789").data["registrations"], [])
+        self.assertEqual([r["tracking_no"] for r in cl.req("GET", "/api/videos?q=YT0001").data["registrations"]], ["YT0001"])
+        self.assertEqual([r["type"] for r in cl.req("GET", "/api/videos?q=JDJOINT").data["registrations"]], ["joint"])
+        self.assertEqual(cl.req("GET", "/api/videos").data["registrations"], [])
         self.assertEqual(len(cl.req("GET", "/api/videos?from=2000-01-01&to=2000-01-01").data["rows"]), 0)
         v = cl.req("GET", "/api/videos/detail?id=" + "a" * 32).data["video"]
         self.assertEqual(v["purchase"], "PO-77")

@@ -1,7 +1,7 @@
 /* 远程管理页：只读。所有文本一律 textContent 渲染，不拼接 HTML。 */
 (function(){'use strict';
  const $=id=>document.getElementById(id);
- const TYPES={po:'采购单收货',unplanned:'无采购单收货',joint:'联合收货'};
+ const TYPES={po:'采购单收货',unplanned:'无采购单收货',joint:'联合收货',express:'快递单登记'};
  const STATES={active:'收货中',paused:'挂起',closed:'已结单'};
  const INBOUND={complete:'已入库',pending:'待确认',unknown:'结果待核实',rejected:'已拒绝',reserved:'生成中'};
  const VSTATE={saved:'已保存',recording:'录制中',starting:'启动中',failed:'异常',stopped:'已停止'};
@@ -85,10 +85,18 @@
   if(reset){vOffset=0;$('v-list').replaceChildren();}
   msg('v-msg','查询中…');const [from,to]=range();
   try{const d=await api('/api/videos?'+new URLSearchParams({q:$('v-q').value.trim(),from,to,offset:String(vOffset),limit:'100'}));vOffset+=d.rows.length;
+   if(reset&&(d.registrations||[]).length){$('v-list').append(el('div',{class:'hint',text:'以下单号有收货或登记记录，但没有录像（不受日期限制），点开看登记明细：'}));for(const r of d.registrations)$('v-list').append(registrationItem(r));}
+   if(reset&&d.registrations_error)$('v-list').append(el('div',{class:'msg error',text:d.registrations_error}));
    for(const v of d.rows)$('v-list').append(videoItem(v));
    if(!$('v-list').childElementCount)$('v-list').append(el('div',{class:'empty',text:'没有符合条件的录像'}));
    $('v-more').hidden=!d.more;msg('v-msg','共 '+d.total+' 段，已显示 '+vOffset+' 段');}
   catch(e){msg('v-msg',e.message,true);}
+ }
+ function registrationItem(r){
+  return el('button',{type:'button',class:'item',onclick:()=>openReceipt(r.type,r.sid)},
+   el('div',{class:'l1'},el('span',{text:r.tracking_no}),el('span',{text:'实收 '+num(r.total)})),
+   el('div',{class:'l2'},tag('无录像','warn'),tag(TYPES[r.type]||r.label),tag(STATES[r.state]||r.state||'',r.state==='closed'?'ok':'warn'),' ',fmtTime(r.first_scan_at||r.started_at)),
+   el('div',{class:'l2',text:[r.input_no&&('单据 '+r.input_no),r.po_id&&('采购 '+r.po_id),r.note&&('备注 '+r.note)].filter(Boolean).join(' · ')}));
  }
  function videoItem(v){
   return el('button',{type:'button',class:'item',onclick:()=>openVideo(v.id)},

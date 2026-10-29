@@ -1620,14 +1620,24 @@
         }).join('') + '</tr>'; }).join('') + '</tbody></table></details>';
   }
 
-  function extraHistoryHTML(rows){return (rows||[]).map(function(r){return '<div class="q-block"><strong>'+esc(r.label)+'</strong><p>'+esc(r.description)+'</p><a class="btn btn-primary" href="/'+(r.source==='joint'?'joint':r.source==='express'?'express':'unplanned')+'.html?sid='+Number(r.id)+'">查看明细 / 继续收货'+(r.source==='joint'?' / 汇总对单':'')+'</a></div>';}).join('');}
+  function extraHistoryHTML(rows,errors){
+    var labels={unplanned:'无采购单收货',express:'快递单登记',joint:'联合收货'},states={active:'收货中',paused:'已挂起',closed:'已结束'};
+    var html=(rows||[]).map(function(r){
+      var tks=(r.trackings||[]).map(function(t){return '<span>物流单号 <strong>'+esc(t.tracking_no)+'</strong>'+(t.first_scan_at?' · 首次扫描 '+esc(t.first_scan_at):'')+' · '+esc(t.total)+' 件</span>';}).join('');
+      return '<div class="q-block"><div class="q-title">'+esc(r.label)+'<span class="chip">'+esc(labels[r.source]||'')+'</span>'+(r.state?'<span class="chip'+(r.state==='closed'?' bad':'')+'">'+esc(states[r.state]||r.state)+'</span>':'')+'</div>'
+        +'<p>'+esc(r.description)+(r.started_at?' · 开始 '+esc(r.started_at):'')+'</p>'
+        +(tks?'<div class="q-kv">'+tks+'</div>':'')
+        +'<a class="btn btn-primary" href="/'+(r.source==='joint'?'joint':r.source==='express'?'express':'unplanned')+'.html?sid='+Number(r.id)+'">查看明细 / 继续收货'+(r.source==='joint'?' / 汇总对单':'')+'</a></div>';
+    }).join('');
+    return html+(errors||[]).map(function(e){return '<p class="error">其他收货来源查询失败：'+esc(e)+'</p>';}).join('');
+  }
   function runPoQuery() {
     if(document.querySelector('.qty-saving,.qty-save-error,.qty-unsaved'))return toast('请先保存当前数量，失败时可按Enter重试','warn');
     lastQ = 'po';
     var no = $('#q-po').value.trim();
     if (!no) return toast('请输入采购单号等关键字', 'warn');
     queryOpen.po=true;var request=++querySeq.po;$('#btn-close-po').hidden=false;
-    Promise.all([api('/api/query/po?no=' + encodeURIComponent(no) + '&refresh=1'),api('/api/receipts/extra-history?q='+encodeURIComponent(no))]).then(function (results) {var r=results[0],extra=extraHistoryHTML(results[1].rows);
+    Promise.all([api('/api/query/po?no=' + encodeURIComponent(no) + '&refresh=1'),api('/api/receipts/extra-history?q='+encodeURIComponent(no))]).then(function (results) {var r=results[0],extra=extraHistoryHTML(results[1].rows,results[1].errors);
       if(!queryOpen.po||request!==querySeq.po||document.querySelector('.qty-saving,.qty-save-error,.qty-unsaved'))return;
       if(!results[1].ok)extra='<p class="error">其他收货来源查询失败：'+esc(results[1].msg)+'</p>';
       if (!r.ok){$('#q-po-out').innerHTML=extra+'<p class="error">普通收货查询失败：'+esc(r.msg||'请检查登录与权限后重试')+'</p>';return;}
@@ -1674,7 +1684,7 @@
     var no = $('#q-tk').value.trim();
     if (!no) return toast('请输入物流单号关键字', 'warn');
     queryOpen.tk=true;var request=++querySeq.tk;$('#btn-close-tk').hidden=false;
-    Promise.all([api('/api/query/tracking?no=' + encodeURIComponent(no)),api('/api/receipts/extra-history?q='+encodeURIComponent(no))]).then(function (results) {var r=results[0],extra=extraHistoryHTML(results[1].rows);
+    Promise.all([api('/api/query/tracking?no=' + encodeURIComponent(no)),api('/api/receipts/extra-history?q='+encodeURIComponent(no))]).then(function (results) {var r=results[0],extra=extraHistoryHTML(results[1].rows,results[1].errors);
       if(!queryOpen.tk||request!==querySeq.tk||document.querySelector('.qty-saving,.qty-save-error,.qty-unsaved'))return;
       if(!results[1].ok)extra='<p class="error">其他收货来源查询失败：'+esc(results[1].msg)+'</p>';
       if (!r.ok){$('#q-tk-out').innerHTML=extra+'<p class="error">普通收货查询失败：'+esc(r.msg||'请检查登录与权限后重试')+'</p>';return;}
