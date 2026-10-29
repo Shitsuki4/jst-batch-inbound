@@ -188,7 +188,8 @@ def main():
                          ("restore-http", "restore_http_test.py"),
                          ("operation-log", "oplog_test.py"),
                          ("learned-codes", "learned_codes_test.py"),
-                         ("updater", "updater_test.py")]:
+                         ("updater", "updater_test.py"),
+                         ("tracking-search", "tracking_search_test.py")]:
         env = dict(os.environ, PYTHONIOENCODING="utf-8", JST_DB_DIR=tempfile.gettempdir())
         rc, out = run_script([sys.executable, os.path.join(HERE, script)], name, cwd=ROOT, env=env)
         results.append((name, rc == 0, out))

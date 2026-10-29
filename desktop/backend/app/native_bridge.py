@@ -135,6 +135,29 @@ def export_store(store,q):
    scans=[e['scan_at'] for e in ev if e['scan_at'] and e['action']=='scan']
    rows.append([' / '.join(str(x[0]) for x in joint.get(r['sid'],[])) or r['po'],' / '.join(str(x[1]) for x in joint.get(r['sid'],[])) or r['outer_no'],r['tracking'],r['sku'],r['name'],r['qty'],local(min(scans)) if scans else '',local(max(scans)) if scans else '',local(ev[-1]['at']) if ev else '', '仅新版流水时间；旧历史未补造'])
  return {'columns':cols,'rows':rows,'count':len(rows),'note':'时间范围按流水确认/修改时间；汇总数量为当前累计，并非范围内增量。旧版6列仍在原导出页。'}
+def registrations(s,text,limit=30):
+ """录像查询用：按物流单号在四种收货来源里找登记过的物流批次（含快递单登记）。
+
+ 录像窗口用 key（来源:会话:批次，与录像片段 BatchKey 一致）判断哪些单号没有录像，单独列出来，
+ 这样没开录像或录像没录上的登记单号在录像查询里也能搜到。只读，不改数据。
+ """
+ import tracking_search
+ text=str(text or '').strip()[:100]
+ try:limit=max(1,min(int(limit or 30),100))
+ except (TypeError,ValueError):limit=30
+ if not text:return []
+ groups=[tracking_search.hits(s.STORE.db,'普通',text,limit)]
+ for source,svc,db in (('无采购单',s.UNPLANNED,'unplanned.db'),('联合',s.JOINT,'joint_receipts.db'),('快递单',s.EXPRESS,'express.db')):
+  if getattr(svc,'instance',svc) is None and not os.path.exists(os.path.join(getattr(s,'DATA',''),db)):continue
+  groups.append(tracking_search.hits(svc.store.db,source,text,limit))
+ out=[]
+ for r in tracking_search.merge(groups,limit):
+  out.append(dict(key=tracking_search.video_key(r),source=r['source'],label=r['label'],sessionId=r['sid'],batchId=r['bid'],
+                  tracking=r['tracking_no'],inputNo=r.get('input_no') or '',purchase=r.get('po_id') or '',note=r.get('note') or '',
+                  at=r.get('first_scan_at') or r.get('started_at') or '',state=r.get('state') or '',total=float(r.get('total') or 0)))
+ return out
+
+
 def export_data(s,q):
  out=None
  stores=[('普通',s.STORE),('无采购单',s.UNPLANNED.store),('联合',s.JOINT.store)]
@@ -221,6 +244,7 @@ def install(s):
        except (ValueError,KeyError):missing.append(key)
       return oldok(h,contexts=contexts,missing=missing)
      if u.path=='/api/native/export':return oldok(h,**export_data(s,q))
+     if u.path=='/api/native/registrations':return oldok(h,rows=registrations(s,q.get('q',''),q.get('limit','30')))
      if u.path=='/api/native/health':return oldok(h,version=APP_VERSION,last=s.STORE.db.execute('SELECT COALESCE(MAX(id),0) FROM native_event').fetchone()[0])
    except Exception as e:return h._fail(str(e))
    return h._nf()

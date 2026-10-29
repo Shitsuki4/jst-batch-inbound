@@ -40,6 +40,8 @@ public interface IVideoLibraryHost {
  Task<int> RefreshAssociations(IReadOnlyList<LibraryItem> items);
  Task RefreshContext(LibraryItem item);
  Task<HashSet<string>> FindByProduct(string query);
+ // 按物流单号查四种收货来源的登记记录（含快递单登记）；录像查询用它列出「有登记、没有录像」的单号。
+ Task<IReadOnlyList<RegistrationHit>> FindRegistrations(string query) => Task.FromResult<IReadOnlyList<RegistrationHit>>(Array.Empty<RegistrationHit>());
  Task<IReadOnlyList<ScanCue>> LoadCues(LibraryItem item);
  Task<T> Exclusive<T>(Func<string?, Task<T>> action);
  Task AfterChange(LibraryItem item, string? movedTo = null);
@@ -47,6 +49,11 @@ public interface IVideoLibraryHost {
 }
 
 public enum LibraryPreset { Today, Last7, Last30, All, Custom }
+
+// 一条登记过的物流批次。Key 与录像片段的 BatchKey（来源:会话:批次）一致。
+public sealed record RegistrationHit(string Key, string Source, string Label, long SessionId, long BatchId, string Tracking, string InputNo, string Purchase, string Note, string At, string State, double Total) {
+ public string Text => Label + " " + (InputNo.Length > 0 ? InputNo : "#" + SessionId) + " · 物流 " + Tracking + (At.Length > 0 ? " · " + At : "") + " · " + Total.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture) + " 件" + (Purchase.Length > 0 ? " · 采购 " + Purchase : "") + (Note.Length > 0 ? " · 备注 " + Note : "");
+}
 
 public sealed class VideoLibraryRow {
  // C tokens: soft pill background + strong text. Red is reserved for delete, so 异常 uses the warning pair.
@@ -108,6 +115,10 @@ public sealed class VideoLibraryView : DockPanel {
  public DatePicker To { get; } = new() { Width = 128 };
  public TextBlock Summary { get; } = new() { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(12, 0, 0, 0), FontWeight = FontWeights.SemiBold, Foreground = Palette.Text2 };
  public TextBlock Notice { get; } = new() { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(4, 10, 4, 0), Foreground = Palette.Text2, FontSize = 13 };
+ // 有收货 / 登记记录、但本机没有录像的单号（例如没开录像时做的快递单登记）
+ public TextBlock Registrations { get; } = new() { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 6, 0, 0), Padding = new Thickness(10, 6, 10, 6), Foreground = Palette.WarnText, Background = Palette.WarnSoft, FontSize = 13, Visibility = Visibility.Collapsed };
+ List<RegistrationHit> registrations = new();
+ public IReadOnlyList<RegistrationHit> RegistrationRows => registrations;
  readonly Dictionary<LibraryPreset, RadioButton> presets = new();
  readonly TextBlock placeholder = new() { Text = Placeholder, Foreground = Palette.Text3, IsHitTestVisible = false, Margin = new Thickness(13, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center, FontSize = 15 };
  readonly DispatcherTimer debounce = new() { Interval = TimeSpan.FromMilliseconds(300) };
@@ -131,7 +142,7 @@ public sealed class VideoLibraryView : DockPanel {
   // ---- search bar (C 风格：白色卡片承载搜索与筛选)
   var top = new StackPanel(); var topCard = Theme.Card(top, 12); DockPanel.SetDock(topCard, Dock.Top); Children.Add(topCard); topArea = topCard;
   var searchRow = new DockPanel { Margin = new Thickness(0, 0, 0, 8) }; top.Children.Add(searchRow);
-  var clear = ActionButton(Theme.Ghost, "清空", () => { Query.Clear(); productHits = new(); productQuery = ""; ApplyFilter(); FocusSearch(); return Task.CompletedTask; }); DockPanel.SetDock(clear, Dock.Right); searchRow.Children.Add(clear);
+  var clear = ActionButton(Theme.Ghost, "清空", () => { Query.Clear(); productHits = new(); productQuery = ""; ShowRegistrations(new()); ApplyFilter(); FocusSearch(); return Task.CompletedTask; }); DockPanel.SetDock(clear, Dock.Right); searchRow.Children.Add(clear);
   var refresh = ActionButton(Theme.Secondary, "刷新", () => ReloadAsync()); DockPanel.SetDock(refresh, Dock.Right); searchRow.Children.Add(refresh);
   var searchBox = new Grid(); searchBox.Children.Add(Query); searchBox.Children.Add(placeholder); searchRow.Children.Add(searchBox);
   Query.TextChanged += (_, _) => { placeholder.Visibility = Query.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed; debounce.Stop(); debounce.Start(); };
@@ -150,6 +161,7 @@ public sealed class VideoLibraryView : DockPanel {
   filterRow.Children.Add(Theme.Label("   状态 "));
   StatusBox.ItemsSource = new[] { "全部", "已完成", "在录", "异常", "售后保护", "已归档" }; StatusBox.SelectedIndex = 0;
   StatusBox.SelectionChanged += (_, _) => ApplyFilter(); filterRow.Children.Add(StatusBox); filterRow.Children.Add(Summary);
+  top.Children.Add(Registrations);
   // ---- row actions
   var actions = new WrapPanel { Margin = new Thickness(0, 10, 0, 10) }; DockPanel.SetDock(actions, Dock.Top); Children.Add(actions); actionArea = actions;
   actions.Children.Add(ActionButton(Theme.Primary, "播放所选", PlaySelectedAsync));
@@ -246,7 +258,7 @@ public sealed class VideoLibraryView : DockPanel {
 
  // ---------------------------------------------------------------- loading / filtering
  public async Task OpenAsync(int? selectOldDays = null) {
-  if (!selectOldDays.HasValue) { Query.Clear(); productHits = new(); productQuery = ""; StatusBox.SelectedIndex = 0; SetPreset(LibraryPreset.Today, false); }
+  if (!selectOldDays.HasValue) { Query.Clear(); productHits = new(); productQuery = ""; ShowRegistrations(new()); StatusBox.SelectedIndex = 0; SetPreset(LibraryPreset.Today, false); }
   await ReloadAsync();
   if (selectOldDays is 90 or 180) { CleanupBox.SelectedIndex = selectOldDays == 90 ? 0 : 1; SelectOld(selectOldDays.Value); }
   FocusSearch();
@@ -305,16 +317,27 @@ public sealed class VideoLibraryView : DockPanel {
  public Task SearchAsync(bool fromEnter) => SearchNowAsync(fromEnter);
  async Task SearchNowAsync(bool fromEnter) {
   var q = Query.Text.Trim();
-  if (q != productQuery) { productHits = new(); productQuery = q; }
+  if (q != productQuery) { productHits = new(); productQuery = q; ShowRegistrations(new()); }
   ApplyFilter();
   if (q.Length >= 3) {
    try { var hits = await host.FindByProduct(q); if (Query.Text.Trim() == q) { productHits = hits; ApplyFilter(); } } catch { }
+   try {
+    var found = await host.FindRegistrations(q);
+    if (Query.Text.Trim() == q) { var recorded = all.SelectMany(i => new[] { i.Segment.BatchKey, i.Segment.Context?.Key ?? "" }).ToHashSet(StringComparer.Ordinal); ShowRegistrations(found.Where(r => !recorded.Contains(r.Key)).ToList()); }
+   } catch (Exception ex) { if (Query.Text.Trim() == q) { ShowRegistrations(new()); Registrations.Text = "收货记录暂时查不到（只显示本机录像）：" + ex.Message; Registrations.Visibility = Visibility.Visible; } }
   }
   if (fromEnter && q.Length > 0) {
    if (rows.Count == 0 && preset != LibraryPreset.All && Filtered(true).Any()) { SetPreset(LibraryPreset.All); Notice.Text = $"「{q}」不在当前日期范围内，已自动切换到全部日期。"; }
    if (rows.Count == 1) { Grid.SelectedItem = rows[0]; Grid.ScrollIntoView(rows[0]); }
    Query.SelectAll(); // the next scan replaces the text
   }
+ }
+
+ void ShowRegistrations(List<RegistrationHit> hits) {
+  registrations = hits;
+  if (hits.Count == 0) { Registrations.Text = ""; Registrations.Visibility = Visibility.Collapsed; return; }
+  Registrations.Text = $"以下 {hits.Count} 个单号有收货 / 登记记录，但本机没有录像（不受日期筛选影响）：\n" + string.Join("\n", hits.Take(10).Select(h => h.Text)) + (hits.Count > 10 ? $"\n…还有 {hits.Count - 10} 条，请输入更完整的单号" : "") + "\n登记明细可在「记录查询」按物流单号查看。";
+  Registrations.Visibility = Visibility.Visible;
  }
 
  // ---------------------------------------------------------------- actions
@@ -759,6 +782,16 @@ public sealed partial class MainWindow : IVideoLibraryHost {
  }
  static int Column(JsonElement columns, string name) { var i = 0; foreach (var c in columns.EnumerateArray()) { if (c.GetString() == name) return i; i++; } return -1; }
  static string Cell(JsonElement row, int index) => index < 0 || index >= row.GetArrayLength() ? "" : row[index].ValueKind == JsonValueKind.Null ? "" : row[index].ToString();
+ async Task<IReadOnlyList<RegistrationHit>> IVideoLibraryHost.FindRegistrations(string query) {
+  if (!backend.Alive) return Array.Empty<RegistrationHit>();
+  using var d = await backend.Get("/api/native/registrations?limit=30&q=" + Uri.EscapeDataString(query));
+  var list = new List<RegistrationHit>();
+  static string S(JsonElement e, string name) => e.TryGetProperty(name, out var v) && v.ValueKind != JsonValueKind.Null ? v.ToString() : "";
+  static long L(JsonElement e, string name) => e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetInt64() : 0;
+  foreach (var r in d.RootElement.GetProperty("rows").EnumerateArray())
+   list.Add(new RegistrationHit(S(r, "key"), S(r, "source"), S(r, "label"), L(r, "sessionId"), L(r, "batchId"), S(r, "tracking"), S(r, "inputNo"), S(r, "purchase"), S(r, "note"), S(r, "at"), S(r, "state"), r.TryGetProperty("total", out var t) && t.ValueKind == JsonValueKind.Number ? t.GetDouble() : 0));
+  return list;
+ }
  async Task<HashSet<string>> IVideoLibraryHost.FindByProduct(string query) {
   var hits = new HashSet<string>(); if (!backend.Alive) return hits;
   using var d = await backend.Get("/api/native/export?mode=events&sku=" + Uri.EscapeDataString(query));
