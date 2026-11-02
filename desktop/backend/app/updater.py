@@ -55,6 +55,15 @@ RUNTIME_FILES = ("ffmpeg.exe", "ffprobe.exe", "msedgewebview2.exe")
 
 # ---------------------------------------------------------------- 纯函数（有单元测试）
 
+
+def _diag(op, msg, code):
+    """更新失败写进诊断日志；日志模块不可用时静默。"""
+    try:
+        import diaglog
+        diaglog.warn(op, msg, code=code)
+    except Exception:
+        pass
+
 def parse_version(text):
     """'3.0.3' / 'v3.0.3' / 'desktop-v3.0.3' -> (3, 0, 3)；预发布后缀、非法格式返回 None。"""
     s = str(text or "").strip()
@@ -573,7 +582,8 @@ class UpdateHost:
                     except Exception:
                         pass
             else:
-                c["error"] = "检查更新失败（" + "；".join(errors) + "）"
+                c["error"] = "[E-UPD-1001] 检查更新失败（" + "；".join(errors) + "）"
+                _diag("update.check", c["error"], "E-UPD-1001")
             with self.lock:
                 self._write(self.cache_path, c)
         finally:
@@ -731,6 +741,9 @@ class UpdateHost:
             self._set(state="cancelled", error="已取消下载（已下载部分保留，下次继续）")
         except Exception as e:
             msg = str(e) if isinstance(e, (ValueError, IOError)) else _short_error(e)
+            code = "E-UPD-1003" if ("SHA256" in msg or "校验" in msg or "篡改" in msg) else "E-UPD-1002"
+            msg = "[%s] %s" % (code, msg)
+            _diag("update.download", msg, code)
             self._set(state="failed", error=msg, suggest_channel=other_channel(channel))
 
     def _download_once(self, url, part):

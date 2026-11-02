@@ -1185,9 +1185,32 @@ def make_handler(host):
         def json(self, obj, code=200, extra=None):
             self.send(code, json.dumps(obj, ensure_ascii=False), extra=extra)
 
-        def fail(self, msg, code=400, extra=None, **kw):
-            d = {"ok": False, "msg": msg}
+        def fail(self, msg, code=400, extra=None, error_code=None, **kw):
+            """远程管理页的报错出口：同样带错误码和日志编号，并写诊断日志。"""
+            import errors as errreg
+            import diaglog
+            exc = errreg.current_exception()
+            if error_code not in errreg.REGISTRY:
+                if code == 401:
+                    error_code = "E-RMT-1001"
+                elif code == 404:
+                    error_code = "E-REQ-1404"
+                elif code == 403 and "跨站" in str(msg):
+                    error_code = "E-REQ-1403"
+                else:
+                    error_code = errreg.classify(exc, msg, "/api/remote")
+                    if error_code in ("E-APP-9001",) and code < 500:
+                        error_code = "E-RMT-1000"
+            rid = diaglog.new_request_id()
+            d = {"ok": False, "msg": errreg.format_msg(error_code, msg), "error_code": error_code,
+                 "error_title": errreg.title(error_code), "request_id": rid}
             d.update(kw)
+            try:
+                diaglog.write("ERROR" if code >= 500 else "WARN", "remote:" + urllib.parse.urlsplit(self.path).path,
+                              str(msg), code=error_code, page="远程管理页", exc=exc, rid=rid,
+                              with_trace=code >= 500, status=code)
+            except Exception:
+                pass
             self.json(d, code, extra)
 
         def cookie_token(self):
@@ -1286,10 +1309,10 @@ def make_handler(host):
                 return self.fail("接口不存在", 404)
             except (BrokenPipeError, ConnectionResetError, ssl.SSLError, socket.timeout, TimeoutError):
                 self.close_connection = True
-            except Exception:
+            except Exception as e:
                 self.close_connection = True
                 try:
-                    self.fail("查询失败，请稍后重试", 500)
+                    self.fail("查询失败，请稍后重试（%s）" % type(e).__name__, 500)
                 except Exception:
                     pass
 
@@ -1314,9 +1337,9 @@ def make_handler(host):
                 return self.fail("接口不存在", 404)
             except (BrokenPipeError, ConnectionResetError, ssl.SSLError, socket.timeout, TimeoutError):
                 pass
-            except Exception:
+            except Exception as e:
                 try:
-                    self.fail("请求失败", 500)
+                    self.fail("请求失败（%s）" % type(e).__name__, 500)
                 except Exception:
                     pass
 

@@ -114,7 +114,7 @@
 
  // ---------- 5. 重复扫码：定位 + 提示 ----------
  const toastBox=el('div','desk-toast');toastBox.setAttribute('role','alert');toastBox.hidden=true;document.body.append(toastBox);let toastTimer=0;
- function toast(main,sub,kind){toastBox.className='desk-toast '+(kind||'warn');toastBox.innerHTML='';toastBox.append(el('strong',null,main));if(sub)toastBox.append(el('span',null,sub));toastBox.hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>{toastBox.hidden=true;},3500);}
+ function toast(main,sub,kind){if(kind==='err'&&main&&window.JstErr)main=JstErr.ensure(main);toastBox.className='desk-toast '+(kind||'warn');toastBox.innerHTML='';toastBox.append(el('strong',null,main));if(sub)toastBox.append(el('span',null,sub));toastBox.hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>{toastBox.hidden=true;},3500);}
  function dupSound(){try{if(host.jstSound){host.jstSound(true);setTimeout(()=>host.jstSound(true),180);return;}const C=root.AudioContext||root.webkitAudioContext;if(!C)return;const c=dupSound.c||(dupSound.c=new C());c.resume();[0,0.16].forEach((t,i)=>{const o=c.createOscillator(),g=c.createGain();o.connect(g);g.connect(c.destination);o.frequency.value=i?440:660;g.gain.value=0.08;o.start(c.currentTime+t);o.stop(c.currentTime+t+0.11);});}catch(e){}}
  let pendingDup=null;
  function noteScan(){const input=$('tracking');if(!input||!state)return;const hit=findDuplicate(state.batches,input.value);pendingDup=hit?{id:hit.id,batch:hit,at:Date.now()}:null;}

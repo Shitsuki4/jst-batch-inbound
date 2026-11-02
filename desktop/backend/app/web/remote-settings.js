@@ -29,7 +29,7 @@
  <p class="hint">安全提示：这是直接暴露在公网的入口。请使用长密码，不用时关闭；登录与观看录像都会记录在 data\\logs\\remote-access.log。</p>
  </div>`;
  let state=null,busy=false;
- function msg(text,error){const m=$('remote-msg');m.textContent=text||'';m.classList.toggle('error',!!error);}
+ function msg(text,error){if(error&&text&&window.JstErr)text=JstErr.ensure(text);const m=$('remote-msg');m.textContent=text||'';m.classList.toggle('error',!!error);}
  function paint(s){
   state=s;
   $('remote-state').textContent=s.running?('运行中 · 端口 '+s.port+(s.allow_download?' · 允许下载':' · 仅在线播放')):(s.enabled?('已启用但未运行'+(s.error?'：'+s.error:'')):'已关闭（默认）');

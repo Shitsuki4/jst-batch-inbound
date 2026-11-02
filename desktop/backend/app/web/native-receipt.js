@@ -2,10 +2,10 @@
   const pendingEditor=()=>Boolean(document.querySelector('#pending-bar:not([hidden]),#pending:not([hidden]),dialog[open]'));
   document.addEventListener('click',e=>{if(e.target.closest?.('a[href]')&&pendingEditor()){e.preventDefault();e.stopImmediatePropagation();(window.JstDialog?JstDialog.alert:window.alert)('请先确认或取消当前商品，再切换模块。');}},true);
   const orig=window.fetch.bind(window),pending=new Map();
-  function recordingBlocked(message){const error=Error(message);error.code='NATIVE_RECORDING_BLOCKED';error.requestSent=false;return error;}
+  function recordingBlocked(message){const error=Error('[E-REC-1001] '+String(message||'录像尚未就绪').replace(/^\s*\[E-[A-Z]{2,5}-\d{4}\]\s*/,''));error.error_code='E-REC-1001';error.code='NATIVE_RECORDING_BLOCKED';error.requestSent=false;return error;}
   let uiQueue=Promise.resolve(),linkFailed=false;
   const shared=window.parent!==window?parent.NativeReceiptLink:null;
-  function linkWarning(message){linkFailed=true;if(window.__nativeVideo)window.__nativeVideo.ready=false;uiQueue=uiQueue.catch(()=>{}).then(()=>window.NativeDesk?.available?NativeDesk.call("stop"):undefined).catch(()=>{});(window.JstDialog?JstDialog.alert:window.alert)(message+"。本次业务结果已保存，请勿重复扫码或重复确认；先核对录像，再重新确认物流。");}
+  function linkWarning(message){linkFailed=true;if(window.__nativeVideo)window.__nativeVideo.ready=false;uiQueue=uiQueue.catch(()=>{}).then(()=>window.NativeDesk?.available?NativeDesk.call("stop"):undefined).catch(()=>{});(window.JstDialog?JstDialog.alert:window.alert)("[E-REC-1000] "+String(message).replace(/^\s*\[E-[A-Z]{2,5}-\d{4}\]\s*/,"")+"。本次业务结果已保存，请勿重复扫码或重复确认；先核对录像，再重新确认物流。");}
   window.addEventListener('native-receipt',ev=>{
     const detail=ev.detail;
     if(shared){parent.dispatchEvent(new parent.CustomEvent('native-receipt',{detail}));return;}

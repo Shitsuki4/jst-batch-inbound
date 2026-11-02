@@ -26,7 +26,7 @@
  }
  function beep(kind){refreshMuted();if(muted)return;const s=SOUNDS[kind]||SOUNDS.ok;tone(s[0],s[1]);}
  // el 为扫码框下方的提示条；kind = ok / tracking / warn / err
- function flash(el,text,kind){if(!el)return;el.textContent=text||'';el.className=(el.dataset.base||'flash')+(kind?' '+kind:'');}
+ function flash(el,text,kind){if(!el)return;if(kind==='err'&&text&&window.JstErr)text=JstErr.ensure(text);el.textContent=text||'';el.className=(el.dataset.base||'flash')+(kind?' '+kind:'');}
  function show(el,text,kind){flash(el,text,kind);beep(kind);}
  root.ScanFeedback={SOUNDS,tone,beep,flash,show,setMuted:v=>{muted=!!v;mutedAt=Date.now();}};
 })(window);

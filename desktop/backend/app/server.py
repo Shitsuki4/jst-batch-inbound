@@ -21,6 +21,7 @@ import socket
 import sys
 import threading
 import time
+import subprocess
 import urllib.parse
 import webbrowser
 from datetime import datetime
@@ -79,6 +80,7 @@ _LOG.info("进程启动 pid=%s；正在初始化本地数据", os.getpid())
 
 sys.path.insert(0, HERE)
 from jst import (JstClient, BizError, LoginError, CaptchaError,  # noqa: E402
+                 CallbackRejected, PermissionDenied, SessionExpired, JstNetworkError,
                  normalize_po_row, normalize_po_item, match_item, match_item_by_any)
 from store import Store, now_str, validate_qty, plan_by_key  # noqa: E402
 from catalog import CatalogDB, CatalogSync, scope_key
@@ -107,6 +109,10 @@ from report_clipboard import ReportClipboard, MAX_REQUEST_BYTES
 from oplog import OpLog, DEVICE_LABELS as OPLOG_DEVICE_LABELS, MODULES as OPLOG_MODULES, OPS as OPLOG_OPS, MIN_RETENTION_DAYS, MAX_RETENTION_DAYS
 import oplog_hooks
 from statelock import STATE_LOCK, remote, unlocked, keyed
+import errors as errreg
+import diaglog
+diaglog.configure(DATA)
+STARTED_AT = time.time()
 
 # Local packaging diagnostic: temporary certificate only, no DB or ERP requests.
 if __name__ == "__main__" and "--self-test" in sys.argv:
@@ -143,7 +149,7 @@ if __name__ == "__main__":
 REPORT_CLIPBOARD = ReportClipboard(os.path.join(DATA, "report-clipboard"))
 
 PORT = int(os.environ.get("JST_PORT", "8765"))
-PERM_MSG = "当前账号无此操作权限"
+# 「当前账号无此操作权限」只用于聚水潭明确的权限拒绝（E-JST-1401），见 errors.py。
 ID_TYPES = ["po_id", "outer_po_id", "source_o_id", "plat_so_id"]
 ID_TYPE_LABELS = {"po_id": "采购单号", "outer_po_id": "外部单号",
                   "source_o_id": "来源单号", "plat_so_id": "线上采购单号"}
@@ -235,21 +241,21 @@ def _find_purchase_in_scope(no, owner, auth):
     """Read-only exact lookup for an existing receipt. Never rotate its company scope."""
     owner, auth = str(owner or '').strip(), str(auth or '').strip()
     if not JST.uid or not JST.coid:
-        raise BizError('采购单查询需要登录，请重新登录聚水潭后再核对')
+        raise BizError('采购单查询需要登录，请重新登录聚水潭后再核对', code='E-JST-1102')
     if owner in ('', '0', '2147483647') or auth in ('', '0', '2147483647'):
-        raise BizError('当前收货批次缺少具体货主 / 分仓范围，请核对批次，不能自动跨范围关联')
+        raise BizError('当前收货批次缺少具体货主 / 分仓范围，请核对批次，不能自动跨范围关联', code='E-PO-1003')
     errors = []
     for kind in ('po_id', 'outer_po_id'):
         try:
             with remote("search_po"):
                 raw, _ = JST.search_po(no, owner, auth, kind)
             if not isinstance(raw, list) or any(not isinstance(r, dict) for r in raw):
-                raise BizError('采购列表响应格式异常')
+                raise BizError('采购列表响应格式异常', code='E-JST-1201')
         except (BizError, OSError, ValueError) as exc:
-            errors.append(str(exc) or type(exc).__name__)
+            errors.append(exc)
             continue
         if len(raw) >= 25:
-            raise BizError('采购单查询结果过多，无法确认唯一单据；请使用完整采购单号核对')
+            raise BizError('采购单查询结果过多，无法确认唯一单据；请使用完整采购单号核对', code='E-PO-1000')
         matches = {}
         for source in raw:
             row = normalize_po_row(source)
@@ -257,17 +263,19 @@ def _find_purchase_in_scope(no, owner, auth):
                 continue
             if ((row['owner_co_id'] and row['owner_co_id'] != owner)
                     or (row['wms_co_id'] and row['wms_co_id'] != auth)):
-                raise BizError('采购单返回的货主 / 分仓与当前收货批次范围不一致，未关联')
+                raise BizError('采购单返回的货主 / 分仓与当前收货批次范围不一致，未关联', code='E-PO-1003')
             matches[row['po_id']] = row
         if len(matches) > 1:
-            raise BizError('该外部单号对应多张采购单，请输入具体采购单号后再核对')
+            raise BizError('该外部单号对应多张采购单，请输入具体采购单号后再核对', code='E-PO-1000')
         if matches:
             return next(iter(matches.values())), dict(owner=owner, auth=auth, id_type=kind)
     if errors:
-        reason = '；'.join(dict.fromkeys(errors))[:200]
-        raise BizError('采购单查询未完成：'+reason+'。请检查登录状态、采购查询权限及网络后重试；未更换原关联。')
+        first = _most_significant(errors)
+        reason = '；'.join(dict.fromkeys(_user_text(e) for e in errors))[:200]
+        raise BizError('采购单查询未完成：'+reason+'。未更换原关联。',
+                       code=getattr(first, 'error_code', None) or 'E-JST-1999')
     raise BizError('当前批次范围（货主 '+owner+' / 分仓 '+auth+'）未找到精确匹配的采购单。'
-                   '支持采购单号或外部单号；请确认补开的采购单已保存，且属于该货主 / 分仓。')
+                   '支持采购单号或外部单号；请确认补开的采购单已保存，且属于该货主 / 分仓。', code='E-PO-1001')
 
 
 def find_purchase_order(no, pick_owner="", pick_auth="", prefer="", *, strict_scope=False):
@@ -279,22 +287,24 @@ def find_purchase_order(no, pick_owner="", pick_auth="", prefer="", *, strict_sc
     """
     no = (no or "").strip()
     if not no:
-        raise BizError("单号为空")
+        raise BizError("单号为空", code="E-PO-2008")
     if strict_scope:
         return _find_purchase_in_scope(no, pick_owner, pick_auth)
     preferred = prefer if prefer in ID_TYPES else STORE.get_kv("default_id_type", "auto")
     if preferred not in ID_TYPES:
         preferred = ""
     order = ([preferred] if preferred else []) + [t for t in ID_TYPES if t != preferred]
-    last_err = None
+    failures = []
+    searched = False
     for owner, auth in _ctx_candidates(pick_owner, pick_auth):
         for t in order:
             try:
                 with remote("search_po"):
                     rows, _ = JST.search_po(no, owner, auth, t)
             except BizError as e:
-                last_err = e
+                failures.append(e)
                 continue
+            searched = True
             if not rows:
                 continue
             rows = [normalize_po_row(r) for r in rows if str(r.get("po_id", "")).strip()]
@@ -305,8 +315,29 @@ def find_purchase_order(no, pick_owner="", pick_auth="", prefer="", *, strict_sc
             _remember_ctx(row.get("owner_co_id") or owner, row.get("wms_co_id") or auth)
             return row, {"owner": row.get("owner_co_id") or owner,
                          "auth": row.get("wms_co_id") or auth, "id_type": t}
-    log("find_purchase_order miss: %s (%s)" % (no, last_err))
-    raise BizError("PO_NOT_FOUND")
+    log("find_purchase_order miss: %s (%s)" % (no, failures[-1] if failures else None))
+    # 以前所有查询失败（断网、超时、登录失效、无权限）都被当成「找不到」，再被前端说成「无权限」。
+    # 现在：一次都没查成功，或有网络 / 登录类失败时，如实报出真正原因和它的错误码。
+    if failures:
+        first = _most_significant(failures)
+        if not searched or not isinstance(first, CallbackRejected) or isinstance(first, PermissionDenied):
+            raise first
+    extra = ("（另有部分货主 / 分仓范围查询失败：%s）" % _user_text(failures[-1])) if failures else ""
+    raise BizError("PO_NOT_FOUND", code="E-PO-1001",
+                   user_text="未找到采购单 %s。请核对采购单号或外部单号，或在「设置」里补充所属货主ID%s" % (no, extra))
+
+
+def _user_text(exc):
+    if hasattr(exc, "user_message"):
+        return exc.user_message()
+    return str(exc) or type(exc).__name__
+
+
+def _most_significant(excs):
+    """多次查询失败时，挑最能说明问题的那个：登录失效 > 网络 > 权限 > 其他。"""
+    rank = lambda e: (0 if isinstance(e, SessionExpired) else 1 if isinstance(e, JstNetworkError)
+                      else 2 if isinstance(e, PermissionDenied) else 3)
+    return sorted(excs, key=rank)[0]
 
 
 def fetch_items(row, ctx):
@@ -315,7 +346,7 @@ def fetch_items(row, ctx):
     items = [normalize_po_item(r) for r in (raw.get("datas") or [])]
     items = [it for it in items if it["sku_id"] or it["name"]]
     if not items:
-        raise BizError("采购单无明细")
+        raise BizError("采购单无明细", code="E-PO-1002")
     return items
 
 
@@ -329,26 +360,26 @@ def refresh_purchase_session(sid):
     """
     s = STORE.get_session(sid)
     if not s or not JST.uid:
-        raise BizError("请先登录聚水潭并选择收货单，旧数据未更新")
+        raise BizError("请先登录聚水潭并选择收货单，旧数据未更新", code="E-JST-1102")
     owner, auth = s.get("owner_co_id") or "", s.get("auth_co_id") or ""
     if not owner or not auth:
-        raise BizError("旧收货单缺少货主或仓库公司，请在电脑重新查询采购单")
+        raise BizError("旧收货单缺少货主或仓库公司，请在电脑重新查询采购单", code="E-PO-1003")
     ident = (s["po_id"], owner, auth, JST.uid, JST.coid)
     with remote("search_po"):
         raw, _ = JST.search_po(s["po_id"], owner, auth, "po_id")
     exact = [r for r in raw if str(r.get("po_id", "")).strip() == str(s["po_id"])]
     if len(exact) != 1:
-        raise BizError("未找到唯一的原采购单，旧数据未更新，请核对权限和采购单状态")
+        raise BizError("未找到唯一的原采购单，旧数据未更新，请核对采购单状态", code="E-PO-1001")
     row = normalize_po_row(exact[0])
     if ((row.get("owner_co_id") and row["owner_co_id"] != owner)
             or (row.get("wms_co_id") and row["wms_co_id"] != auth)):
-        raise BizError("采购单公司上下文不一致，已停止刷新")
+        raise BizError("采购单公司上下文不一致，已停止刷新", code="E-PO-1003")
     items = fetch_items(row, {"owner": owner, "auth": auth})
     # Both remote calls completed before changing the local snapshot. Back under the
     # lock: refuse to apply if the session vanished or its scope / login changed.
     cur = STORE.get_session(sid)
     if not cur or (cur["po_id"], cur.get("owner_co_id") or "", cur.get("auth_co_id") or "", JST.uid, JST.coid) != ident:
-        raise BizError("刷新期间收货单或登录账号已变化，旧数据未更新，请重试")
+        raise BizError("刷新期间收货单或登录账号已变化，旧数据未更新，请重试", code="E-REQ-1409")
     with STORE.db:
         STORE.db.execute(
             "UPDATE session SET supplier=?,wh_name=?,status=?,po_date=?,outer_po_id=?,items_json=? WHERE id=?",
@@ -418,7 +449,7 @@ def load_partners(refresh=False):
             data = {"owners": JST.partners(), "wms": JST.wms_list(), "ts": now_str(),
                     "ver": PARTNERS_CACHE_VER}
         if not data["owners"] and not data["wms"]:
-            raise BizError("empty partner list")
+            raise BizError("empty partner list", user_text="聚水潭没有返回货主 / 分仓列表", code="E-JST-1201")
         if gen != PARTNERS_GEN or ident != (JST.uid, JST.coid):
             # 拉取期间登录身份变了：这份清单属于旧账号，既不缓存也不返回
             log("partners 拉取期间账号已切换，丢弃旧结果")
@@ -468,7 +499,7 @@ def partners_for_scope():
         data = {"owners": client.partners(), "wms": client.wms_list(), "ts": now_str(),
                 "ver": PARTNERS_CACHE_VER}
         if not data["owners"] and not data["wms"]:
-            raise BizError("empty partner list")
+            raise BizError("empty partner list", user_text="聚水潭没有返回货主 / 分仓列表", code="E-JST-1201")
     except Exception as e:
         log("partners (PDA) fail: %s" % e)
         with state_lock:
@@ -1209,6 +1240,41 @@ def tracking_search_label(source):
     return tracking_search.SOURCE_LABELS.get(source,source)
 
 
+
+def diag_environment():
+    """诊断包里的版本与环境（不含账号、密码、Cookie）。"""
+    try:
+        from app_version import VERSION as _ver
+    except Exception:
+        _ver = ""
+    sizes = {}
+    for name in ("receiving.db", "unplanned.db", "joint.db", "express.db", "inventory.db"):
+        p = os.path.join(DATA, name)
+        if os.path.isfile(p):
+            sizes[name] = os.path.getsize(p)
+    return {
+        "app_version": _ver,
+        "data_dir": DATA,
+        "export_dir": EXPORT_DIR,
+        "portable": os.environ.get("JST_PORTABLE", "") or None,
+        "db_sizes": sizes,
+        "pid": os.getpid(),
+        "uptime_s": int(time.time() - STARTED_AT),
+    }
+
+
+def diag_info():
+    files = []
+    for p in diaglog.files():
+        try:
+            st = os.stat(p)
+            files.append({"name": os.path.basename(p), "size": st.st_size,
+                          "mtime": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(st.st_mtime))})
+        except OSError:
+            continue
+    return {"log_dir": diaglog.log_dir(), "export_dir": EXPORT_DIR, "files": files,
+            "max_bytes": diaglog.MAX_BYTES, "backups": diaglog.BACKUPS, "environment": diag_environment()}
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "jst-scan/1.0"
@@ -1295,12 +1361,72 @@ class Handler(BaseHTTPRequestHandler):
             d["learned_notice"] = "\n".join(notices)
         self._json(d)
 
-    def _fail(self, msg, hint="", code=200):
-        d = {"ok": False, "msg": msg, "hint": hint}
+    def _fail(self, msg, hint="", code=200, error_code=None, **extra):
+        """所有报错的唯一出口：带错误码、日志编号，并写诊断日志。
+
+        错误码来源：显式 error_code → 正在处理的异常（BizError 子类等自带的码）→ 消息里已有的码
+        → 所在功能的默认码。msg 统一成「[E-XXX-NNNN] 原因」，旧页面直接显示 msg 也能看到错误码。
+        """
+        exc = errreg.current_exception()
+        path = urllib.parse.urlparse(getattr(self, "path", "") or "").path
+        if error_code in errreg.REGISTRY:
+            ecode = error_code
+        elif code == 404 and exc is None and not errreg.strip_code(str(msg or ""))[0]:
+            ecode = "E-REQ-1404"
+        else:
+            ecode = errreg.classify(exc, msg, path)
+        _, bare = errreg.strip_code(str(msg or ""))
+        if exc is not None:
+            raw = str(exc)
+            if hasattr(exc, "user_message") and raw and raw in bare:
+                bare = bare.replace(raw, exc.user_message())
+            elif ecode == "E-APP-9001" and bare in (raw, repr(exc), ""):
+                bare = "程序内部错误（%s）" % type(exc).__name__
+            elif ecode == "E-DATA-1001" and bare == raw:
+                bare = "本机数据库出错：%s" % raw
+        if not bare.strip():
+            bare = errreg.title(ecode)
+        rid = getattr(self, "_rid", "") or diaglog.request_id() or diaglog.new_request_id()
+        d = {"ok": False, "msg": errreg.format_msg(ecode, bare), "hint": hint,
+             "error_code": ecode, "error_title": errreg.title(ecode), "request_id": rid}
+        d.update(extra)
         notices = take_notices()
         if notices:
             d["learned_notice"] = "\n".join(notices)
+        try:
+            unexpected = exc is not None and not isinstance(exc, (ValueError, BizError, LoginError))
+            diaglog.write("ERROR" if unexpected or ecode.startswith(("E-APP", "E-DATA-1001")) else "WARN",
+                          path, bare, code=ecode, page=self._diag_page(), exc=exc,
+                          with_trace=ecode == "E-APP-9001", status=code, rid=rid, **self._diag_ids())
+        except Exception:
+            pass
         self._json(d, code)
+
+    def _diag_page(self):
+        try:
+            ref = self.headers.get("Referer") or ""
+            return urllib.parse.urlparse(ref).path if ref else ""
+        except Exception:
+            return ""
+
+    def _diag_ids(self):
+        """日志里带上采购单号 / 物流单号 / 批次，方便按单号查日志。只取这些字段，不记整个请求体。"""
+        out = {}
+        try:
+            b = getattr(self, "_desktop_body", None)
+            if not isinstance(b, dict):
+                b = {}
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            pick = lambda *keys: next((str(src.get(k) if src is b else (src.get(k) or [""])[0])
+                                       for k in keys for src in (b, q) if (src.get(k) if src is b else src.get(k))), "")
+            out["sid"] = pick("sid", "session_id")
+            out["batch_id"] = pick("batch_id", "bid")
+            out["po"] = pick("po_id", "po", "no", "new_no")
+            out["outer_po"] = pick("outer_po_id")
+            out["tracking"] = pick("tracking_no", "tracking")
+        except Exception:
+            pass
+        return {k: v[:80] for k, v in out.items() if v}
 
     def _body(self):
         if hasattr(self, "_desktop_body"):
@@ -1353,7 +1479,7 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, OSError):
             pass
         self.close_connection = True
-        self._fail("禁止非本机地址或跨站请求", code=403)
+        self._fail("禁止非本机地址或跨站请求", code=403, error_code="E-REQ-1403")
         return False
 
     def _clipboard_guard(self):
@@ -1428,15 +1554,29 @@ class Handler(BaseHTTPRequestHandler):
     # SQLite connection or the shared JstClient session.
     LOCK_FREE_GETS = frozenset(("/api/heartbeat", "/api/pda/download/status",
                                 "/api/report/clipboard/status", "/api/remote/status",
-                                "/api/update/status"))
+                                "/api/update/status", "/api/diag/info", "/api/diag/logs",
+                                "/api/errors/codes"))
 
     def do_GET(self):
+        self._rid = diaglog.new_request_id()
         if not self._desktop_guard(): return
         path = urllib.parse.urlparse(self.path).path
         if path.startswith("/api/") and path not in self.LOCK_FREE_GETS:
             with self._reply_after_unlock(), state_lock:
-                return self._do_get()
-        return self._do_get()
+                return self._do_get_safe(path)
+        return self._do_get_safe(path)
+
+    def _do_get_safe(self, path):
+        try:
+            return self._do_get()
+        except Exception as e:  # noqa: BLE001
+            log("GET %s crash: %s" % (path, e))
+            if not path.startswith("/api/"):
+                raise
+            try:
+                return self._fail(str(e), code=500)
+            except Exception:
+                return None
 
     def _do_get(self):
         global LAST_HEARTBEAT
@@ -1536,6 +1676,19 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/heartbeat":
             note_beat()
             return self._ok(ts=time.time())
+        if path == "/api/errors/codes":
+            return self._ok(codes=errreg.registry_json())
+        if path == "/api/diag/info":
+            return self._ok(**diag_info())
+        if path == "/api/diag/logs":
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            one = lambda k, d="": (q.get(k) or [d])[0].strip()
+            try:
+                limit = int(one("limit", "200") or 200)
+            except ValueError:
+                limit = 200
+            return self._ok(entries=diaglog.tail(limit, code=one("code"), rid=one("rid"),
+                                                 level=one("level"), text=one("q")))
 
         if path == "/api/report/clipboard/status":
             if not self._clipboard_guard(): return
@@ -1596,13 +1749,13 @@ class Handler(BaseHTTPRequestHandler):
                 if not sid:
                     s = STORE.active_session()
                     if not s:
-                        return self._fail(PERM_MSG)
+                        return self._fail("当前没有进行中的收货批次，请先查询采购单", error_code="E-PO-1000")
                     sid = s["id"]
                 return self._ok(session=session_payload(sid), rows=STORE.diff_report(sid),
                                 receiving_round=STORE.receiving_round(sid))
             except Exception as e:
                 log("diff fail: %s" % e)
-                return self._fail(PERM_MSG)
+                return self._fail("差异报告读取失败：%s" % e)
 
         if path == "/api/query/po":
             try:
@@ -1632,7 +1785,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._ok(found=True, records=out)
             except Exception as e:
                 log("query po fail: %s" % e)
-                return self._fail(PERM_MSG)
+                return self._fail("按采购单查询收货记录失败：%s" % e)
 
         if path == "/api/query/tracking":
             try:
@@ -1645,7 +1798,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._ok(found=bool(bs), batches=bs)
             except Exception as e:
                 log("query tracking fail: %s" % e)
-                return self._fail(PERM_MSG)
+                return self._fail("按物流单号查询收货记录失败：%s" % e)
 
         if path == "/api/export":
             return self._export(q)
@@ -1814,7 +1967,7 @@ class Handler(BaseHTTPRequestHandler):
             rows = STORE.export_rows(mode, q.get("value", ""), q.get("start", ""), q.get("end", ""))
         except Exception as e:
             log("export fail: %s" % e)
-            return self._fail(PERM_MSG)
+            return self._fail("导出数据读取失败：%s" % e, error_code="E-DATA-1006")
         if not rows:
             return self._fail("所选范围内没有可导出的收货记录", hint="请确认筛选条件")
 
@@ -1842,6 +1995,7 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---------- POST ----------
     def do_POST(self):
+        self._rid = diaglog.new_request_id()
         path = urllib.parse.urlparse(self.path).path
         if not self._desktop_guard(): return
         if path == "/api/report/clipboard":
@@ -1874,11 +2028,15 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             log("%s crash: %s" % (path, e))
             try:
-                return self._fail(str(e) if "入库" in str(e) else PERM_MSG)
+                # 以前这里一律显示「当前账号无此操作权限」。现在按异常类型给出真实原因和错误码。
+                return self._fail(str(e))
             except Exception:
                 return None
 
     def _nf(self):
+        path = urllib.parse.urlparse(getattr(self, "path", "") or "").path
+        if path.startswith("/api/"):
+            return self._fail("接口不存在：%s" % path, code=404, error_code="E-REQ-1404")
         self._send(404, b"not found")
 
     def _post_api_purchase_watch_action(self):
@@ -2396,12 +2554,10 @@ class Handler(BaseHTTPRequestHandler):
             row, ctx = find_purchase_order(no, pick_owner, pick_auth, prefer=prefer)
             items = fetch_items(row, ctx)
         except BizError as e:
-            detail = str(e)
-            return self._fail(PERM_MSG,
-                              hint=("未找到该采购单。请确认单号，或在「设置」里补充所属货主ID"
-                                    if detail == "PO_NOT_FOUND" else ""))
-        except Exception:
-            return self._fail(PERM_MSG)
+            return self._fail(e.user_message(),
+                              hint=errreg.suggestion(getattr(e, "error_code", "") or "E-JST-1999"))
+        except Exception as e:
+            return self._fail(str(e))
 
         existing = STORE.find_session_by_po(row["po_id"], ctx["owner"], ctx["auth"])
         was_closed = bool(existing and existing["state"] == "closed")
@@ -2920,6 +3076,34 @@ class Handler(BaseHTTPRequestHandler):
         JST._sku_cache = {}
         return self._ok(cleared=n, msg="已清空商品缓存 %d 条" % n)
 
+    def _post_api_diag_export(self):
+        """导出诊断包（日志 + 版本与环境 + 错误码表），放到「导出」文件夹。"""
+        try:
+            path = diaglog.export_zip(EXPORT_DIR, env=diag_environment(), codes=errreg.registry_json(),
+                                      extra_files=[p for p in (os.path.join(os.path.dirname(DATA), "native-errors.log"),)
+                                                   if os.path.isfile(p)])
+        except OSError as e:
+            return self._fail("诊断包导出失败：%s" % e, error_code="E-DATA-1006")
+        diaglog.info("diag.export", "导出诊断包", file=os.path.basename(path))
+        opened = False
+        if os.name == "nt" and self._body().get("open", True):
+            try:
+                subprocess.Popen(["explorer", "/select,", os.path.normpath(path)])
+                opened = True
+            except OSError:
+                opened = False
+        return self._ok(path=path, name=os.path.basename(path), folder=EXPORT_DIR, opened=opened)
+
+    def _post_api_diag_open_logs(self):
+        folder = diaglog.log_dir()
+        try:
+            os.makedirs(folder, exist_ok=True)
+            if os.name == "nt":
+                os.startfile(folder)  # type: ignore[attr-defined]
+        except OSError as e:
+            return self._fail("打开日志文件夹失败：%s" % e, error_code="E-DATA-1002")
+        return self._ok(folder=folder)
+
     def _post_api_open_folder(self):
         try:
             os.makedirs(EXPORT_DIR, exist_ok=True)
@@ -2990,10 +3174,10 @@ def open_browser(port):
 def qr_launch(kind="weixin", refresh=False):
     """Dedicated per-launch profile; use the browser's actual debug port, never Cookie DB."""
     if kind not in ("weixin", "dingtalk", "official"):
-        raise BizError("不支持的登录方式")
+        raise BizError("不支持的登录方式", code="E-LGN-1001")
     exe = edge_exe()
     if not exe:
-        raise BizError("没有找到 Microsoft Edge，请安装后打开官方登录窗口")
+        raise BizError("没有找到 Microsoft Edge，请安装后打开官方登录窗口", code="E-LGN-1003")
     # 启动浏览器并等待调试端口最长约 15 秒：不持有 state_lock（锁顺序：从不在持 QR_LOCK 时等 state_lock）。
     with unlocked("qr-launch"):
         return _qr_launch_locked(exe, kind, refresh)
@@ -3044,7 +3228,7 @@ def _qr_launch_locked(exe, kind, refresh):
                 pass
             time.sleep(0.25)
         qr_close()
-    raise BizError("官方登录窗口的连接未就绪（可能被浏览器策略禁用）。请关闭刚打开的登录窗口后重试；不会读取Cookie文件或要求管理员权限")
+    raise BizError("官方登录窗口的连接未就绪（可能被浏览器策略禁用）。请关闭刚打开的登录窗口后重试；不会读取Cookie文件或要求管理员权限", code="E-LGN-1003")
 
 
 def _qr_live():

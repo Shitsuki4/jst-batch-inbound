@@ -14,6 +14,7 @@
       body: JSON.stringify(body) } : {}).then(function (r) { return r.json(); });
   }
   function message(msg, error) {
+    if (error && msg && window.JstErr) msg = window.JstErr.ensure(msg);
     var box = dialog.querySelector('.inbound-message');
     box.textContent = msg;
     box.className = 'inbound-message' + (error ? ' error' : ' success');

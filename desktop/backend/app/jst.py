@@ -68,10 +68,77 @@ class CaptchaError(LoginError):
     need_captcha = True
 
 class BizError(Exception):
-    """其它一切失败。前端一律提示「当前账号无此操作权限」"""
+    """聚水潭接口失败。每个子类有自己的错误码（见 errors.py），
+    只有聚水潭明确返回权限拒绝时才是 PermissionDenied（E-JST-1401），
+    网络、超时、服务器出错、解析失败、业务校验都不再提示「无此操作权限」。"""
+    error_code = "E-JST-1999"
+    user_text = ""
+
+    def __init__(self, msg="", user_text=None, code=None):
+        super().__init__(msg)
+        if user_text is not None:
+            self.user_text = user_text
+        if code:
+            self.error_code = code
+
+    def user_message(self):
+        return self.user_text or str(self) or "聚水潭接口返回了错误"
+
+class JstNetworkError(BizError):
+    """连不上聚水潭（DNS、断网、连接被重置）。"""
+    error_code = "E-NET-2001"
+
+class JstTimeoutError(JstNetworkError):
+    error_code = "E-NET-2002"
+
+class JstSslError(JstNetworkError):
+    error_code = "E-NET-2003"
+
+class JstHttpError(BizError):
+    """聚水潭返回 HTTP 错误状态。5xx → E-JST-1001；其余 4xx → E-JST-1002。"""
+    def __init__(self, status, url=""):
+        self.status = int(status or 0)
+        self.error_code = "E-JST-1001" if self.status >= 500 else "E-JST-1002"
+        text = ("聚水潭服务器出错（HTTP %s），请稍后重试" % self.status) if self.status >= 500 \
+            else ("聚水潭拒绝了请求（HTTP %s），请刷新或重新登录后重试" % self.status)
+        super().__init__("HTTP %s %s" % (status, url), user_text=text)
+
+class SessionExpired(BizError):
+    error_code = "E-JST-1101"
+    def __init__(self, msg="登录态失效"):
+        super().__init__(msg, user_text="聚水潭登录态失效，请重新登录后再操作")
+
+class JstParseError(BizError):
+    error_code = "E-JST-1201"
 
 class CallbackRejected(BizError):
     """WebForms 明确返回 IsSuccess=false，区别于写请求网络超时。"""
+    error_code = "E-JST-1301"
+
+class PermissionDenied(CallbackRejected):
+    """聚水潭明确返回「没有权限 / 无权」。只有这种才显示权限提示。"""
+    error_code = "E-JST-1401"
+
+PERMISSION_WORDS = ("没有权限", "无权限", "无此权限", "无操作权限", "无权操作", "无权访问",
+                    "权限不足", "未授权", "没有该权限", "没有此权限", "权限不够", "暂无权限", "无访问权限")
+
+def rejected(msg):
+    """把聚水潭返回的业务失败文字分成「权限拒绝」和「其他业务校验」。"""
+    text = str(msg or "").strip() or "聚水潭拒绝了此操作（未返回原因）"
+    if any(w in text for w in PERMISSION_WORDS):
+        return PermissionDenied(text)
+    return CallbackRejected(text)
+
+def network_error(exc, url=""):
+    import socket as _socket, ssl as _ssl
+    reason = getattr(exc, "reason", exc)
+    short = url.split("?")[0]
+    if isinstance(reason, _ssl.SSLError) or isinstance(exc, _ssl.SSLError):
+        return JstSslError("NET %s %s" % (exc, short), user_text="连接聚水潭时证书或代理出错，请检查系统时间和代理设置")
+    if isinstance(reason, (_socket.timeout, TimeoutError)) or isinstance(exc, (_socket.timeout, TimeoutError)) \
+            or "timed out" in str(exc).lower():
+        return JstTimeoutError("NET %s %s" % (exc, short), user_text="聚水潭响应超时，请稍后重试")
+    return JstNetworkError("NET %s %s" % (exc, short), user_text="连不上聚水潭服务器，请检查网络后重试")
 
 class ItemLookupError(Exception):
     """商品资料接口不可用（网络 / 无权限 / 返回异常）。
@@ -214,9 +281,9 @@ class JstClient(object):
             with urllib.request.urlopen(req, timeout=(timeout or self.timeout), context=_SSL) as r:
                 raw = r.read()
         except urllib.error.HTTPError as e:
-            raise BizError("HTTP %s %s" % (e.code, url))
+            raise JstHttpError(e.code, url.split("?")[0])
         except Exception as e:
-            raise BizError("NET %s %s" % (e, url))
+            raise network_error(e, url)
         try:
             return raw.decode("utf-8", "replace")
         except Exception:
@@ -259,9 +326,9 @@ class JstClient(object):
                 meta = {"ctype": r.headers.get("Content-Type", ""),
                         "set_cookie": list(r.headers.get_all("Set-Cookie") or [])}
         except urllib.error.HTTPError as e:
-            raise BizError("HTTP %s %s" % (e.code, url))
+            raise JstHttpError(e.code, url.split("?")[0])
         except Exception as e:
-            raise BizError("NET %s %s" % (e, url))
+            raise network_error(e, url)
         if binary:
             return raw, meta
         try:
@@ -293,7 +360,7 @@ class JstClient(object):
         try:
             j = json.loads(text)
         except Exception:
-            raise BizError("登录服务返回异常，请稍后重试")
+            raise JstParseError("登录服务返回异常，请稍后重试")
         return j, meta
 
     def _apply_session(self, ck):
@@ -468,11 +535,15 @@ class JstClient(object):
             return hit[0], hit[1]
         html = self._request(page_url, referer=page_url)
         if "login" in html[:4000].lower() and "__VIEWSTATE" not in html:
-            raise BizError("登录态失效")
+            raise SessionExpired()
         vs = (re.search(r'name="__VIEWSTATE"[^>]*value="([^"]*)"', html) or [None, ""])[1]
         vsg = (re.search(r'name="__VIEWSTATEGENERATOR"[^>]*value="([^"]*)"', html) or [None, ""])[1]
         if not vs:
-            raise BizError("未取到页面状态（%s）" % page_url.split("?")[0])
+            head = re.sub(r"<[^>]+>", " ", html[:6000])
+            if any(w in head for w in PERMISSION_WORDS):
+                raise PermissionDenied("聚水潭页面提示无权限（%s）" % page_url.split("?")[0].rsplit("/", 1)[-1])
+            raise JstParseError("未取到页面状态（%s）" % page_url.split("?")[0],
+                                user_text="聚水潭页面没有返回可用状态（%s），请稍后重试或重新登录" % page_url.split("?")[0].rsplit("/", 1)[-1])
         self._vs_cache[page_url] = (vs, vsg, now)
         return vs, vsg
 
@@ -497,11 +568,11 @@ class JstClient(object):
             outer = json.loads(re.sub(r"^\d+\|", "", text, count=1))
         except Exception:
             if "login" in text[:500].lower() or len(text) < 200:
-                raise BizError("登录态失效")
-            raise BizError("响应解析失败")
+                raise SessionExpired()
+            raise JstParseError("响应解析失败", user_text="聚水潭返回的数据无法识别，请稍后重试")
         if not outer.get("IsSuccess"):
             msg = outer.get("ExceptionMessage") or outer.get("Message") or ""
-            raise CallbackRejected(msg or "接口调用失败")
+            raise rejected(msg or "接口调用失败")
         rv = outer.get("ReturnValue")
         if isinstance(rv, str):
             try:
@@ -558,8 +629,8 @@ class JstClient(object):
         m = re.search(r'<div id="_jt_data"[^>]*>([\s\S]*?)</div>', html, re.I)
         if not m:
             if "parent.location" in html and "login" in html[:2000].lower():
-                raise BizError("登录态失效")
-            raise BizError("明细页未返回数据")
+                raise SessionExpired()
+            raise JstParseError("明细页未返回数据", user_text="聚水潭采购单明细页没有返回数据，请稍后重试")
         raw = m.group(1).strip()
         if not raw:
             return {"dp": None, "datas": []}
@@ -569,7 +640,7 @@ class JstClient(object):
             try:
                 return json.loads(raw.replace("&quot;", '"').replace("&amp;", "&"))
             except Exception:
-                raise BizError("明细数据解析失败")
+                raise JstParseError("明细数据解析失败", user_text="聚水潭采购单明细无法识别，请稍后重试")
 
 
     # ---------------- 商品资料（新架构 JSON API） ----------------
@@ -590,9 +661,9 @@ class JstClient(object):
         try:
             j = json.loads(text)
         except Exception:
-            raise BizError("商品资料接口返回异常")
+            raise JstParseError("商品资料接口返回异常", user_text="聚水潭商品资料接口返回异常，请稍后重试")
         if j.get("code") != 0:
-            raise BizError("SKU_API code=%s %s" % (j.get("code"), (j.get("msg") or "").strip()))
+            raise rejected("商品资料接口：%s（code=%s）" % ((j.get("msg") or "").strip() or "调用失败", j.get("code")))
         return j.get("data")
 
     def clone_for_catalog(self):
