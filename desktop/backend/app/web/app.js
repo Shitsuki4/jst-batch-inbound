@@ -32,7 +32,15 @@
     }).then(function (r) { return r.json(); }).then(function (r) {
       if (writing) { writesPending--; stateEpoch++; }
       return r;
-    }, function (e) { if (writing) { writesPending--; stateEpoch++; } throw e; });
+    }, function (e) {
+      if (writing) { writesPending--; stateEpoch++; }
+      // Native recording validation can reject before fetch sends a request.
+      // Keep this local business failure out of the transport-error handlers.
+      if (e && e.code === 'NATIVE_RECORDING_BLOCKED' && e.requestSent === false) {
+        return {ok:false, code:e.code, msg:e.message};
+      }
+      throw e;
+    });
   }
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
@@ -141,10 +149,22 @@
 
   function handleFail(r) {
     if (!r) return netAlert();
+    if (r.code === 'NATIVE_RECORDING_BLOCKED') { recordingAlert(r.msg); return true; }
     if (r.msg === '当前账号无此操作权限') { permAlert(r.hint); return true; }
     toast(r.msg || '操作失败', 'err');
     beep(180, 0.16);
     return false;
+  }
+
+  function recordingAlert(message) {
+    var batch = (S.batches || []).filter(function (b) { return b.id === S.current_batch; })[0];
+    var buttons = [{text:'稍后再试',cls:'btn-ghost',fn:closeModal}];
+    if (batch) buttons.push({text:'重新确认当前物流单',cls:'btn-primary',fn:function () {
+      if (closeModal() === false) return;
+      runSerial(function () { return scanTracking(batch.tracking_no); });
+    }});
+    openModal('录像尚未就绪', '<p>' + esc(message) + '</p><p class="hint">本次操作尚未提交，实收数量未增加。重启助手或恢复旧批次后，请重新确认当前物流单，并等待顶部显示正在录制。</p>', buttons, closeModal);
+    beep(180, 0.16);
   }
 
   /* 二次确认弹窗（删除类操作统一走这里） */
@@ -843,7 +863,7 @@
     if (q === null) { toast('数量必须是大于0的整数（商品数量不能有小数）', 'warn'); pendingFocus(); return Promise.resolve(); }
     var p = takePending();
     return postConfirm(p, q).then(function (r) {
-      if (!r.ok) { handleFail(r); refocus(); return; }
+      if (!r.ok) { if (r.code === 'NATIVE_RECORDING_BLOCKED') restorePending(p, q); handleFail(r); refocus(); return; }
       S.lines = r.lines; if (r.items) S.items = r.items; S.progress = r.progress;
       renderLines(); renderPoItems(); renderStatus();
       var sid = (r.item && r.item.sku_id) || (p.choose && p.choose.sku_id);
@@ -924,7 +944,7 @@
     if (unplannedConfirmed || unplannedAccepted[unplannedKey(a && a.id, code)]) body.confirm_unplanned = true;
     return api('/api/tracking/scan', { method: 'POST', body: body }).then(function (r) {
       if (!r.ok) {
-        if (r.msg === '当前账号无此操作权限') return handleFail(r);
+        if (r.code === 'NATIVE_RECORDING_BLOCKED' || r.msg === '当前账号无此操作权限') return handleFail(r);
         // 常见错误（如结单后误扫）用轻提示，别弹「无权限」吓人
         toast(r.msg || '操作失败', 'err');
         beep(180, 0.16);
@@ -988,6 +1008,11 @@
         flash((r.item && r.item.name ? r.item.name : p.label) + '  →  ' + fmtNum(r.added || q), 'ok');
         beep(1318, 0.06);
       } else if (!r.ok) {
+        if (r.code === 'NATIVE_RECORDING_BLOCKED') {
+          restorePending(p, q);
+          handleFail(r);
+          return;
+        }
         handleFail(r);
       }
       return next();
@@ -1007,12 +1032,16 @@
     pending = { op_id: newOpId(), code: code, batch_id: res.batch_id || S.current_batch, label: label || code,
                 choose: chooseItem || null, expected_sku_id: res.item && res.item.sku_id,
                 expected_matched: !res.unmatched };
-    $('#pb-name').textContent = label || code;
-    $('#pb-code').textContent = code;
-    var q = $('#pending-qty');
-    q.value = '1';
-    $('#pending-bar').hidden = false;
+    restorePending(pending, 1);
     pendingFocus();
+  }
+
+  function restorePending(p, q) {
+    pending = p;
+    $('#pb-name').textContent = p.label || p.code;
+    $('#pb-code').textContent = p.code;
+    $('#pending-qty').value = String(q);
+    $('#pending-bar').hidden = false;
   }
 
   function pendingFocus() {
