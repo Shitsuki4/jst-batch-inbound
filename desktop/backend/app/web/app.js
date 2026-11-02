@@ -676,6 +676,88 @@
   });
 
   /* 退出批次：把当前收货中的单挂起，人立刻空闲，可去创建别的批次 */
+  /* -------------------- 更换采购单号 / 外部单号并重新匹配 -------------------- */
+  // 先预览（只读）：新采购单上有的、没有的、超收的；确认时服务端重新查聚水潭，数据有变化会要求重新预览（E-PO-2005）
+  var rematchBusy = false;
+  function rematchRows(rows, cols) {
+    if (!rows || !rows.length) return '<p class="muted">无</p>';
+    return '<table class="tbl"><thead><tr>' + cols.map(function (c) { return '<th>' + esc(c[1]) + '</th>'; }).join('') + '</tr></thead><tbody>'
+      + rows.map(function (r) { return '<tr>' + cols.map(function (c) { return '<td>' + esc(c[2] ? c[2](r) : r[c[0]]) + '</td>'; }).join('') + '</tr>'; }).join('')
+      + '</tbody></table>';
+  }
+  function rematchView(p, note) {
+    var n = p.new || {}, o = p.old || {};
+    var name = function (r) { return (r.name || r.sku_code || r.sku_id || '') + (r.spec ? '（' + r.spec + '）' : ''); };
+    return (note ? '<p class="warn">' + esc(note) + '</p>' : '')
+      + '<p><b>' + esc(o.po_id) + (o.outer_po_id ? '（外部单号 ' + esc(o.outer_po_id) + '）' : '') + ' → '
+      + esc(n.po_id) + (n.outer_po_id ? '（外部单号 ' + esc(n.outer_po_id) + '）' : '') + '</b>'
+      + (n.supplier ? ' · ' + esc(n.supplier) : '') + '</p>'
+      + '<p class="muted">共 ' + esc(p.batches) + ' 个物流单、' + esc(p.lines) + ' 行、实收 ' + esc(fmtNum(p.total_received)) + ' 件，数量和物流单号都不变。</p>'
+      + '<h4>新采购单上有（' + (p.matches || []).length + '）</h4>'
+      + rematchRows(p.matches, [['name', '商品', name], ['received', '已收', function (r) { return fmtNum(r.received); }], ['plan', '本轮应收', function (r) { return fmtNum(r.plan); }], ['newly_matched', '', function (r) { return r.newly_matched ? '新匹配上' : ''; }]])
+      + '<h4>新采购单上没有（' + (p.missing || []).length + '）</h4>'
+      + rematchRows(p.missing, [['name', '商品', name], ['received', '已收', function (r) { return fmtNum(r.received); }]])
+      + '<h4>超收（' + (p.over || []).length + '）</h4>'
+      + rematchRows(p.over, [['name', '商品', name], ['received', '已收', function (r) { return fmtNum(r.received); }], ['plan', '本轮应收', function (r) { return fmtNum(r.plan); }], ['over', '超出', function (r) { return fmtNum(r.over); }]])
+      + ((p.missing || []).length ? '<p class="muted">新采购单上没有的商品会留在这个批次里，标成「不在采购单上」，生成入库单前请先处理。</p>' : '');
+  }
+  function rematchOpen(no, body, buttons) {
+    if (!S.session) return;
+    var s = S.session;
+    openModal('更换采购单号 / 外部单号',
+      '<p>当前：采购单 ' + esc(s.po_id) + (s.outer_po_id ? '（外部单号 ' + esc(s.outer_po_id) + '）' : '') + '</p>'
+      + '<p class="muted">已收的数量、物流单号、扫码记录和录像都留在这个批次上，只按新采购单重新匹配。本轮已经生成过入库单时不能更换。</p>'
+      + '<div class="row"><input id="rematch-no" class="input" placeholder="新的采购单号或外部单号" autocomplete="off" value="' + esc(no || '') + '"></div>'
+      + '<div id="rematch-result">' + (body || '') + '</div>',
+      buttons || [{ text: '取消', cls: 'btn-ghost', fn: closeModal }, { text: '预览匹配结果', cls: 'btn-primary', fn: rematchPreview }]);
+    var inp = $('#rematch-no');
+    inp.onkeydown = function (e) { if (e.key === 'Enter') { e.preventDefault(); rematchPreview(); } };
+    inp.oninput = function () { var b = $('#rematch-confirm'); if (b) b.disabled = true; };
+    if (!body) inp.focus();
+  }
+  function rematchFail(r) {
+    var msg = window.JstErr ? window.JstErr.ensure(r.msg || '更换失败') : (r.msg || '更换失败');
+    $('#rematch-result').innerHTML = '<p class="err">' + esc(msg) + '</p>' + (r.hint ? '<p class="muted">' + esc(r.hint) + '</p>' : '')
+      + (r.error_code || r.request_id ? errMeta(r.error_code, r.request_id) : '');
+  }
+  function rematchShow(no, p, note) {
+    rematchOpen(no, rematchView(p, note), [
+      { text: '取消', cls: 'btn-ghost', fn: closeModal },
+      { text: '重新预览', cls: 'btn-secondary', fn: rematchPreview },
+      { text: '确认更换并重新匹配', cls: 'btn-primary', fn: function () { rematchConfirm(no, p); } }]);
+    var btns = $('#modal-foot').querySelectorAll('button');
+    btns[btns.length - 1].id = 'rematch-confirm';
+  }
+  function rematchPreview() {
+    if (rematchBusy || !S.session) return;
+    var no = ($('#rematch-no').value || '').trim();
+    if (!no) { toast('[E-PO-2008] 请输入新的采购单号或外部单号', 'err'); return; }
+    rematchBusy = true;
+    $('#rematch-result').innerHTML = '<p class="muted">正在查询采购单 ' + esc(no) + '…</p>';
+    api('/api/po/rematch/preview', { method: 'POST', body: { sid: S.session.id, no: no } }).then(function (r) {
+      rematchBusy = false;
+      if (!r.ok) return rematchFail(r);
+      rematchShow(no, r);
+    }, function () { rematchBusy = false; rematchFail({ msg: '[E-NET-1001] 没连上本机收货服务，数据没有改动' }); });
+  }
+  function rematchConfirm(no, p) {
+    if (rematchBusy || !S.session) return;
+    if (($('#rematch-no').value || '').trim() !== no) { toast('[E-PO-2005] 单号改过了，请先重新预览', 'err'); return; }
+    rematchBusy = true;
+    api('/api/po/rematch/confirm', { method: 'POST', body: { sid: S.session.id, no: no, fingerprint: p.fingerprint, confirmed: true } }).then(function (r) {
+      rematchBusy = false;
+      if (r.ok) {
+        closeModal();
+        toast('已更换为采购单 ' + (r.new && r.new.po_id || no) + '，已收商品已重新匹配', 'ok');
+        reload();
+        return;
+      }
+      if (r.error_code === 'E-PO-2005' && r.preview) return rematchShow(no, r.preview, '确认前数据有变化（有新的扫码或采购单被修改），请核对下面新的预览后再确认。');
+      rematchFail(r);
+    }, function () { rematchBusy = false; rematchFail({ msg: '[E-NET-1001] 没连上本机收货服务，请重新预览确认是否已经更换' }); });
+  }
+  $('#btn-rematch-po').onclick = function () { if (S.session) rematchOpen(''); };
+
   function askExit() {
     suppressRefocus = Date.now() + 4000;
     var s = S.session, n = (S.batches || []).length;

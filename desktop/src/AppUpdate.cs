@@ -22,30 +22,30 @@ public static class AppUpdate {
   if(tail.Contains("..",StringComparison.Ordinal)||tail.Contains('\\'))return false;
   return Uri.TryCreate(value,UriKind.Absolute,out var uri)&&uri.Scheme==Uri.UriSchemeHttps&&uri.Host is "github.com" or "gh-proxy.com";
  }
- public static void OpenUrl(string value){if(!AllowedUrl(value))throw new Exception("只允许打开本项目的发布页");Process.Start(new ProcessStartInfo(value){UseShellExecute=true});}
+ public static void OpenUrl(string value){if(!AllowedUrl(value))throw new CodedException("E-NAT-1004","只允许打开本项目的发布页");Process.Start(new ProcessStartInfo(value){UseShellExecute=true});}
  // Re-verifies the package inside data/updates and, for the portable build, unpacks it next to the current folder.
  public static UpdatePlan Prepare(string kind,string version,string package,string sha256){
   // Installed mode accepts the full offline installer ("installer") or the slim upgrade installer ("upgrade");
   // both are Inno Setup exes with the same AppId and are launched the same way.
   var setupKind=kind is "installer" or "upgrade";
-  if(AppPaths.Installed?!setupKind:kind!="portable")throw new Exception("更新包类型与当前版本（"+(AppPaths.Installed?"安装版":"便携版")+"）不符");
-  if(string.IsNullOrWhiteSpace(version)||version.Any(c=>!(char.IsAsciiLetterOrDigit(c)||c is '.' or '-' or '_')))throw new Exception("更新版本号无效");
+  if(AppPaths.Installed?!setupKind:kind!="portable")throw new CodedException("E-UPD-1003","更新包类型与当前版本（"+(AppPaths.Installed?"安装版":"便携版")+"）不符");
+  if(string.IsNullOrWhiteSpace(version)||version.Any(c=>!(char.IsAsciiLetterOrDigit(c)||c is '.' or '-' or '_')))throw new CodedException("E-UPD-1003","更新版本号无效");
   var expected=(sha256??"").Trim().ToLowerInvariant();if(expected.StartsWith("sha256:",StringComparison.Ordinal))expected=expected[7..];
-  if(expected.Length!=64||expected.Any(c=>!Uri.IsHexDigit(c)))throw new Exception("缺少有效的SHA256校验值");
+  if(expected.Length!=64||expected.Any(c=>!Uri.IsHexDigit(c)))throw new CodedException("E-UPD-1003","缺少有效的SHA256校验值");
   var root=CacheRoot.TrimEnd(Path.DirectorySeparatorChar)+Path.DirectorySeparatorChar;var full=Path.GetFullPath(package);
-  if(!full.StartsWith(root,StringComparison.OrdinalIgnoreCase))throw new Exception("更新包不在更新缓存目录内，已拒绝");
-  if(!File.Exists(full))throw new Exception("更新包不存在，请重新下载");
-  var ext=Path.GetExtension(full).ToLowerInvariant();if(setupKind?ext!=".exe":ext!=".zip")throw new Exception("更新包文件类型不符");
+  if(!full.StartsWith(root,StringComparison.OrdinalIgnoreCase))throw new CodedException("E-UPD-1003","更新包不在更新缓存目录内，已拒绝");
+  if(!File.Exists(full))throw new CodedException("E-UPD-1003","更新包不存在，请重新下载");
+  var ext=Path.GetExtension(full).ToLowerInvariant();if(setupKind?ext!=".exe":ext!=".zip")throw new CodedException("E-UPD-1003","更新包文件类型不符");
   string actual;using(var stream=new FileStream(full,FileMode.Open,FileAccess.Read,FileShare.Read)){actual=Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();}
-  if(actual!=expected)throw new Exception("更新包SHA256校验不一致，已拒绝安装，请重新下载");
+  if(actual!=expected)throw new CodedException("E-UPD-1003","更新包SHA256校验不一致，已拒绝安装，请重新下载");
   if(setupKind)return new UpdatePlan("installer",version,full,full);
   return new UpdatePlan(kind,version,full,ExtractPortable(full,version));
  }
  static string ExtractPortable(string zip,string version){
   var current=Path.GetFullPath(AppContext.BaseDirectory).TrimEnd(Path.DirectorySeparatorChar);
-  var parent=Path.GetDirectoryName(current)??throw new Exception("无法确定便携版所在目录");
+  var parent=Path.GetDirectoryName(current)??throw new CodedException("E-UPD-1004","无法确定便携版所在目录");
   var name="jst-batch-inbound-desktop-"+version;var target=Path.Combine(parent,name);
-  for(int i=2;Directory.Exists(target)||File.Exists(target);i++){if(i>50)throw new Exception("新版本目录已存在过多副本，请手动整理："+parent);target=Path.Combine(parent,name+"-"+i);}
+  for(int i=2;Directory.Exists(target)||File.Exists(target);i++){if(i>50)throw new CodedException("E-UPD-1004","新版本目录已存在过多副本，请手动整理："+parent);target=Path.Combine(parent,name+"-"+i);}
   var staging=Path.Combine(parent,"."+name+".partial-"+Guid.NewGuid().ToString("N")[..8]);
   var stagingRoot=Path.GetFullPath(staging).TrimEnd(Path.DirectorySeparatorChar)+Path.DirectorySeparatorChar;
   try{
@@ -53,7 +53,7 @@ public static class AppUpdate {
    using(var archive=ZipFile.OpenRead(zip)){
     foreach(var entry in archive.Entries){
      var dest=Path.GetFullPath(Path.Combine(staging,entry.FullName));
-     if(!dest.StartsWith(stagingRoot,StringComparison.OrdinalIgnoreCase))throw new Exception("更新包含非法路径，已拒绝："+entry.FullName);
+     if(!dest.StartsWith(stagingRoot,StringComparison.OrdinalIgnoreCase))throw new CodedException("E-UPD-1004","更新包含非法路径，已拒绝："+entry.FullName);
      if(entry.FullName.EndsWith("/",StringComparison.Ordinal)||entry.FullName.EndsWith("\\",StringComparison.Ordinal)){Directory.CreateDirectory(dest);continue;}
      Directory.CreateDirectory(Path.GetDirectoryName(dest)!);entry.ExtractToFile(dest,false);
     }
@@ -76,6 +76,6 @@ public static class AppUpdate {
   var exe=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),"WindowsPowerShell","v1.0","powershell.exe");if(!File.Exists(exe))exe="powershell.exe";
   var p=new ProcessStartInfo(exe){UseShellExecute=false,CreateNoWindow=true,WindowStyle=ProcessWindowStyle.Hidden,WorkingDirectory=Path.GetTempPath()};
   foreach(var a in new[]{"-NoProfile","-NonInteractive","-ExecutionPolicy","Bypass","-WindowStyle","Hidden","-EncodedCommand",encoded})p.ArgumentList.Add(a);
-  using var launched=Process.Start(p)??throw new Exception("无法启动更新程序");
+  using var launched=Process.Start(p)??throw new CodedException("E-UPD-1004","无法启动更新程序");
  }
 }

@@ -22,7 +22,7 @@ public sealed partial class MainWindow {
    id=m.GetProperty("id").GetString()??"";if(id.Length is <1 or >100)return;var action=m.GetProperty("action").GetString()??"";var args=m.TryGetProperty("args",out var a)?a:default;
    entered=await commandGate.WaitAsync(0);if(!entered)throw new Exception("已有原生操作进行中，请等待完成。");
    var result=await DesktopCommand(action,args);web.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(new{kind="receiving-reply",id,ok=true,result},UserSettings.WebJson));
-  }catch(Exception ex){if(id!=""&&web.CoreWebView2!=null)web.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(new{kind="receiving-reply",id,ok=false,error=ex.Message}));}
+  }catch(Exception ex){var code=NativeDiag.CodeOf(ex,"E-NAT-1003");var text=NativeDiag.Format(code,ex.Message);NativeDiag.Error(code,"command",text,ex);if(id!=""&&web.CoreWebView2!=null)web.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(new{kind="receiving-reply",id,ok=false,error=text,error_code=code}));}
   finally{if(entered)commandGate.Release();}
  }
  static string Arg(JsonElement args,string name){if(args.ValueKind!=JsonValueKind.Object||!args.TryGetProperty(name,out var v)||v.ValueKind!=JsonValueKind.String)throw new Exception("缺少参数："+name);var s=v.GetString()?.Trim()??"";if(s.Length>2000||s.Contains('\0'))throw new Exception("无效参数："+name);return s;}
@@ -125,8 +125,8 @@ public sealed partial class MainWindow {
   }catch(Exception ex){backendExited=false;status.Text="退出未完成："+ex.Message;}
   if(backendExited){
    try{Process.Start(new ProcessStartInfo(Environment.ProcessPath??Path.Combine(AppContext.BaseDirectory,"Receiving.Native.exe")){UseShellExecute=false,ArgumentList={"--restart-after",Environment.ProcessId.ToString()}});}
-   catch(Exception ex){MessageBox.Show(this,"已准备恢复，但自动重新打开失败："+ex.Message+"\n请手动重新打开收货小助手完成恢复。","备份恢复");}
-  }else MessageBox.Show(this,"业务服务退出未确认，未自动重新打开。请核实原入库单，不要重复提交；稍后手动重新打开收货小助手完成恢复。","备份恢复",MessageBoxButton.OK,MessageBoxImage.Warning);
+   catch(Exception ex){NativeDiag.Show(this,"E-NAT-1007","restore.reopen","已准备恢复，但自动重新打开失败："+ex.Message+"\n请手动重新打开收货小助手完成恢复。","备份恢复",ex:ex);}
+  }else NativeDiag.Show(this,"E-NAT-1007","restore.reopen","业务服务退出未确认，未自动重新打开。请核实原入库单，不要重复提交；稍后手动重新打开收货小助手完成恢复。","备份恢复");
   hotkeys?.Dispose();sounds?.Dispose();preview.ExitAllowed=true;preview.Close();web.Dispose();Close();
  }
  static bool BackendExited(int pid){try{using var p=Process.GetProcessById(pid);return p.WaitForExit(10000);}catch(ArgumentException){return true;}catch(InvalidOperationException){return true;}}

@@ -13,7 +13,7 @@
   #define OutputDir "..\dist\deps-installer"
 #endif
 #ifndef AppVersion
-  #define AppVersion "4.1.6"
+  #define AppVersion "4.1.7"
 #endif
 #ifndef OutputBaseFilename
   #define OutputBaseFilename "收货小助手-" + AppVersion + "-运行依赖安装程序"
@@ -123,7 +123,7 @@ end;
 function InUseMessage(): String;
 begin
   Result :=
-    '检测到收货小助手正在使用这些运行依赖（录像或业务界面仍在运行）。' + #13#10 + #13#10 +
+    '[E-INS-1004] 检测到收货小助手正在使用这些运行依赖（录像或业务界面仍在运行）。' + #13#10 + #13#10 +
     '请先打开收货小助手，结束当前录像并通过正常方式退出程序，然后重新运行本程序。';
 end;
 

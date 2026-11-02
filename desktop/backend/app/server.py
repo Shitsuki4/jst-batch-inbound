@@ -111,6 +111,7 @@ import oplog_hooks
 from statelock import STATE_LOCK, remote, unlocked, keyed
 import errors as errreg
 import diaglog
+import po_rematch
 diaglog.configure(DATA)
 STARTED_AT = time.time()
 
@@ -1072,6 +1073,22 @@ def _locked_connections(audit=False):
 
 STATE_LOCK.register_db(_locked_connections)
 STATE_LOCK.register_audit(lambda: _locked_connections(audit=True))
+
+
+def rematch_other_inbound(po_id, owner, auth):
+    """新采购单在其他收货方式（无采购单 / 联合）里有没有入库记录；有则返回那种方式的名字。"""
+    sql = ("SELECT 1 FROM inbound_job j JOIN session s ON s.id=j.session_id WHERE j.status<>'rejected'"
+           " AND s.po_id=? AND COALESCE(s.owner_co_id,'')=? AND COALESCE(s.auth_co_id,'')=? LIMIT 1")
+    args = (str(po_id), str(owner or ""), str(auth or ""))
+    for name, store in purchase_sources().items():
+        if store is STORE:
+            continue
+        if store.db.execute(sql, args).fetchone():
+            return {"unplanned": "无采购单收货"}.get(name, name)
+    if JOINT.instance is not None or os.path.exists(os.path.join(DATA, 'joint_receipts.db')):
+        if JOINT.store.db.execute(sql, args).fetchone():
+            return "联合收货"
+    return ""
 
 
 def cross_receipt_guard(store,sid):
@@ -2582,6 +2599,69 @@ class Handler(BaseHTTPRequestHandler):
     # 兼容旧前端/旧书签
     _post_api_po_activate = _po_create
     _post_api_po_create = _po_create
+
+    def _rematch_lookup(self, b):
+        """更换采购单：先查本地能不能换（不用联网），再查聚水潭，最后在锁内算预览。"""
+        try:
+            sid = int(b.get("sid") or 0)
+        except (TypeError, ValueError):
+            sid = 0
+        no = str(b.get("no") or "").strip()
+        if not no:
+            raise errreg.AppError("E-PO-2008")
+        s = po_rematch.check_session(STORE, sid)
+        prefer = str(b.get("id_type") or "").strip()
+        row, ctx = find_purchase_order(no, s.get("owner_co_id") or "", s.get("auth_co_id") or "", prefer=prefer)
+        items = fetch_items(row, ctx)
+        other = rematch_other_inbound(row["po_id"], ctx["owner"], ctx["auth"])
+        return no, po_rematch.preview(STORE, sid, row, ctx, items, other_inbound=other)
+
+    def _post_api_po_rematch_preview(self):
+        """只读：按新单号查采购单，列出已收商品在新单上的匹配 / 不在新单上 / 超收。"""
+        b = self._body()
+        try:
+            _, p = self._rematch_lookup(b)
+        except BizError as e:
+            return self._fail(e.user_message(), error_code=getattr(e, "error_code", "") or "E-JST-1999")
+        except errreg.AppError as e:
+            return self._fail(str(e), hint=e.hint or errreg.suggestion(e.error_code))
+        return self._ok(**po_rematch.public(p))
+
+    def _post_api_po_rematch_confirm(self):
+        """确认更换：重新查聚水潭、重新预览，指纹和预览时一致才写库；同一事务里改单号、重新匹配并记审计。"""
+        b = self._body()
+        if b.get("confirmed") is not True:
+            return self._fail("请先预览并确认更换", error_code="E-PO-2005")
+        fingerprint = str(b.get("fingerprint") or "")
+        try:
+            no, p = self._rematch_lookup(b)
+            if not fingerprint or fingerprint != p["fingerprint"]:
+                raise errreg.AppError("E-PO-2005")
+            detail = po_rematch.apply(STORE, p, no, time.strftime("%Y-%m-%d %H:%M:%S"))
+        except BizError as e:
+            return self._fail(e.user_message(), error_code=getattr(e, "error_code", "") or "E-JST-1999")
+        except errreg.AppError as e:
+            return self._fail(str(e), hint=e.hint or errreg.suggestion(e.error_code), **(
+                {"preview": po_rematch.public(p)} if e.error_code == "E-PO-2005" and "p" in locals() else {}))
+        except sqlite3.IntegrityError as e:
+            # 兜底：数据库触发器拒绝（例如并发生成了入库单）
+            return self._fail("更换未完成，数据未改动：%s" % e, error_code="E-PO-2002")
+        sid = p["sid"]
+        old, new = p["old"], p["new"]
+        summary = "更换采购单 %s%s → %s%s" % (old["po_id"], ("（外部单号 %s）" % old["outer_po_id"]) if old["outer_po_id"] else "",
+                                         new["po_id"], ("（外部单号 %s）" % new["outer_po_id"]) if new.get("outer_po_id") else "")
+        try:
+            OPLOG.write([{"module": "receipt", "op": "purchase_link", "source": "receipt", "sid": sid,
+                          "po_id": new["po_id"], "outer_po_id": new.get("outer_po_id", ""), "summary": summary,
+                          "detail": {"old_po": old["po_id"], "old_outer": old["outer_po_id"], "new_po": new["po_id"],
+                                     "new_outer": new.get("outer_po_id", ""), "missing": len(p["missing"]),
+                                     "over": len(p["over"]), "lines": p["lines"]}}],
+                        self._op_device(), oplog_hooks.erp(sys.modules[__name__]))
+        except Exception as e:  # noqa: BLE001 - 操作记录失败不影响已完成的更换
+            log("rematch oplog fail: %s" % e)
+        diaglog.info("/api/po/rematch/confirm", summary, sid=sid, po=new["po_id"], outer_po=new.get("outer_po_id", ""),
+                     old_po=old["po_id"], old_outer=old["outer_po_id"])
+        return self._ok(session=session_payload(sid), changed=detail, **po_rematch.public(p))
 
     def _post_api_session_pause(self):
         """退出批次：把当前收货中的单挂起，人立刻空闲，可去创建别的批次。
