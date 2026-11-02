@@ -6,7 +6,7 @@
  function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
  function native(){return !!(window.NativeDesk&&NativeDesk.available);}
  async function api(p,b){var r=await fetch('/api/'+p,b===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});var j=await r.json();if(!j.ok)throw Error(j.msg||'操作失败');return j;}
- function msg(t,bad){var m=$('restore-msg');m.textContent=t||'';m.style.color=bad?'var(--danger)':'';}
+ function msg(t,bad){var m=$('restore-msg');if(bad&&t&&window.JstErr)t=JstErr.ensure(t);m.textContent=t||'';m.style.color=bad?'var(--danger)':'';}
  function size(n){n=Number(n)||0;return n>1048576?(n/1048576).toFixed(1)+' MB':(n/1024).toFixed(0)+' KB';}
  function param(s){return s.id?'id='+encodeURIComponent(s.id):'path='+encodeURIComponent(s.path);}
  async function run(fn){if(busy)return;busy=true;paint();try{await fn();}catch(e){msg(e.message,true);}finally{busy=false;paint();}}

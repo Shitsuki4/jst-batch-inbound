@@ -6,7 +6,7 @@ const $=id=>document.getElementById(id)||(EXPRESS?(stubs[id]||(stubs[id]=documen
 const QTY_MSG='数量必须是大于0的整数（商品数量不能有小数），且不超过10亿',QTY_MSG0='数量必须是整数（商品数量不能有小数），不能为负数且不超过10亿';
 function wholeQty(v,allowZero){const s=String(v??'').trim();if(!/^\d+$/.test(s)||Number(s)>1e9||(!allowZero&&Number(s)===0))throw Error(allowZero?QTY_MSG0:QTY_MSG);return Number(s);}
 function guardQtyInput(el,allowZero){if(!el)return;const check=()=>{const s=el.value.trim(),bad=el.validity&&el.validity.badInput;el.setCustomValidity(!bad&&(s===''||/^\d+$/.test(s)&&Number(s)<=1e9&&(allowZero||Number(s)>0))?'':(allowZero?QTY_MSG0:QTY_MSG));};el.addEventListener('input',check);el.addEventListener('change',check);}
-function message(s,error=false){$('message').textContent=s;$('message').classList.toggle('error',error);}
+function message(s,error=false){if(error&&s&&window.JstErr)s=JstErr.ensure(s);$('message').textContent=s;$('message').classList.toggle('error',error);}
 async function api(url,body){const r=await fetch(url,body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:undefined);const data=await r.json();if(!r.ok||!data.ok)throw Error(data.msg||'请求失败');return data;}
 async function run(fn){if(busy)return message('正在加载或保存，请稍候再试');busy=true;$('new').disabled=true;window.ReceivingDesk?.setBusy(true);try{await fn()}catch(err){message(err.message,true);window.ReceivingDesk?.feedback?.(err.message,'err')}finally{busy=false;$('new').disabled=false;window.ReceivingDesk?.setBusy(false)}}
 function body(extra){return {sid:state?.session.id,revision:state?.meta.revision,batch_id:bid,...extra};}

@@ -26,7 +26,7 @@
   <p class="hint" id="update-message" role="status"></p>
   <p class="hint">正在录像或入库中时不能安装；安装前会安全退出程序。<b>便携版会解压到新文件夹，旧文件夹中的数据不会自动迁移。</b></p></div>`;
 
-  const msg=(t,cls)=>{const m=$('update-message');m.textContent=t||'';m.className='hint'+(cls?' '+cls:'');};
+  const msg=(t,cls)=>{if(cls==='err'&&t&&window.JstErr)t=JstErr.ensure(t,/失败|校验/.test(t)&&!/\[E-/.test(t)?'E-UPD-1000':'');const m=$('update-message');m.textContent=t||'';m.className='hint'+(cls?' '+cls:'');};
   function paint(d){
    last=d;const dl=d.download||{},latest=d.latest;
    $('update-channel').value=d.channel||'github';$('update-auto').checked=!!d.auto_check;

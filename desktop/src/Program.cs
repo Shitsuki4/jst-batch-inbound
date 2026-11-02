@@ -37,10 +37,10 @@ public sealed partial class MainWindow:Window {
  }
  static string FindTool(string name,string preferred)=>Dependencies.Resolve(name,preferred);
  Button Add(Panel p,string text,Func<Task> fn,string level=Theme.Secondary){var b=ShellChrome.Action(text,level);b.Click+=async(_,_)=>{b.IsEnabled=false;try{await Safe(fn);}finally{b.IsEnabled=true;}};p.Children.Add(b);return b;}
- async Task Safe(Func<Task> f){try{await f();}catch(Exception ex){status.Text=ex.Message;MessageBox.Show(this,ex.Message,"操作未完成",MessageBoxButton.OK,MessageBoxImage.Warning);}}
+ async Task Safe(Func<Task> f){try{await f();}catch(Exception ex){var code=NativeDiag.CodeOf(ex,"E-NAT-1003");status.Text=NativeDiag.Format(code,ex.Message);NativeDiag.Show(this,code,"action",ex.Message,ex:ex);}}
  async Task Start(){
-  var data=Path.Combine(root,"data");if(UiTest.Active)await backend.AttachForAcceptance(UiTest.Url,UiTest.Token,UiTest.Pid);else await backend.Start(AppContext.BaseDirectory,data);
-  var env=await CoreWebView2Environment.CreateAsync(AppPaths.BrowserFolder,Path.Combine(root,"webview-profile"));webEnvironment.TrySetResult(env);await web.EnsureCoreWebView2Async(env);
+  var data=Path.Combine(root,"data");if(UiTest.Active)await backend.AttachForAcceptance(UiTest.Url,UiTest.Token,UiTest.Pid);else{try{await backend.Start(AppContext.BaseDirectory,data);}catch(Exception ex)when(ex is not CodedException){throw new CodedException("E-NAT-1001",ex.Message,ex);}}
+  try{var env=await CoreWebView2Environment.CreateAsync(AppPaths.BrowserFolder,Path.Combine(root,"webview-profile"));webEnvironment.TrySetResult(env);await web.EnsureCoreWebView2Async(env);}catch(Exception ex)when(ex is not CodedException){throw new CodedException("E-NAT-1002","页面组件初始化失败："+ex.Message,ex);}
   web.CoreWebView2.WebMessageReceived+=ReceiveCommand;
   if(UiTest.Active){
    web.CoreWebView2.AddWebResourceRequestedFilter("*",CoreWebView2WebResourceContext.All);
@@ -105,9 +105,9 @@ public sealed partial class MainWindow:Window {
  UIElement LibraryPanel()=>VideoLibraryPanel();
  async Task<bool> HasPending(bool includeSettings=true){if(web.CoreWebView2==null)return false;try{return await web.CoreWebView2.ExecuteScriptAsync("Boolean(document.querySelector('#pending-bar:not([hidden]),#pending:not([hidden]),#editor[open],.qty-saving,.qty-save-error,.qty-unsaved') || window.ReceivingApp?.isBusy() || window.ReceivingDesk?.blocked()"+(includeSettings?" || window.SettingsWorkspace?.hasUnsaved()":"")+")")=="true";}catch{return true;}}
  void SaveSettings(){if(settingsLoadFailed)return;settings.Camera=rec.Camera;settings.Directory=rec.DirectoryPath;settings.Engine=rec.Engine;settings.Resolution=rec.Resolution;settings.Left=preview.Left;settings.Top=preview.Top;settings.Width=preview.Width;settings.Height=preview.RestoreHeight;WriteSettings(settings);}
- async void OnClosing(object? sender,System.ComponentModel.CancelEventArgs e){if(closing)return;e.Cancel=true;if(await HasPending()){MessageBox.Show(this,"请先保存或取消待录入商品 / 设置草稿，等待保存完成后再退出。");return;}if(MessageBox.Show(this,"退出将结束并保存录像。请确认没有尚未保存的数量或正在提交的入库操作。是否退出？","安全退出",MessageBoxButton.YesNo,MessageBoxImage.Question)!=MessageBoxResult.Yes)return;await ShutdownSafely();}
+ async void OnClosing(object? sender,System.ComponentModel.CancelEventArgs e){if(closing)return;e.Cancel=true;if(await HasPending()){NativeDiag.Show(this,"E-NAT-1006","shutdown.pending","请先保存或取消待录入商品 / 设置草稿，等待保存完成后再退出。","安全退出");return;}if(MessageBox.Show(this,"退出将结束并保存录像。请确认没有尚未保存的数量或正在提交的入库操作。是否退出？","安全退出",MessageBoxButton.YesNo,MessageBoxImage.Question)!=MessageBoxResult.Yes)return;await ShutdownSafely();}
  // Shared by the window close button and applyUpdate. beforeClose runs after recorder and backend have stopped cleanly.
- async Task<bool> ShutdownSafely(Action? beforeClose=null){closing=true;IsEnabled=false;timer.Stop();try{await eventsGate.WaitAsync();try{await rec.DisposeAsync();await backend.DisposeAsync();SaveSettings();}finally{eventsGate.Release();}beforeClose?.Invoke();hotkeys?.Dispose();sounds?.Dispose();preview.ExitAllowed=true;preview.Close();web.Dispose();Close();return true;}catch(Exception ex){closing=false;IsEnabled=true;MessageBox.Show(this,"退出未完成："+ex.Message);return false;}}
+ async Task<bool> ShutdownSafely(Action? beforeClose=null){closing=true;IsEnabled=false;timer.Stop();try{await eventsGate.WaitAsync();try{await rec.DisposeAsync();await backend.DisposeAsync();SaveSettings();}finally{eventsGate.Release();}beforeClose?.Invoke();hotkeys?.Dispose();sounds?.Dispose();preview.ExitAllowed=true;preview.Close();web.Dispose();Close();return true;}catch(Exception ex){closing=false;IsEnabled=true;NativeDiag.Show(this,"E-NAT-1006","shutdown","退出未完成："+ex.Message,ex:ex);return false;}}
 }
 public static class Program {
  [STAThread]public static void Main(string[] args){
@@ -124,16 +124,16 @@ public static class Program {
   // Restore relaunch: wait (≤30s) for the previous instance to exit before taking the single-instance mutexes.
   var restartAt=Array.IndexOf(args,"--restart-after");
   if(restartAt>=0&&restartAt+1<args.Length&&int.TryParse(args[restartAt+1],out var previousPid)){try{using var previous=Process.GetProcessById(previousPid);previous.WaitForExit(30000);}catch(ArgumentException){}catch(InvalidOperationException){}}
-  using var installedMutex=new Mutex(AppPaths.Installed,"Local\\ReceivingAssistantInstalled",out var installedFirst);if(AppPaths.Installed&&!installedFirst){MessageBox.Show("已安装的小助手正在运行，请勿重复启动。");return;}
-  using var mutex=new Mutex(true,"Local\\ReceivingNativeTrial_"+Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(AppPaths.DataRoot)))[..16],out var first);if(!first){MessageBox.Show("此数据目录已有一个程序在运行，请勿重复启动。");return;}
-  var app=new Application{ShutdownMode=ShutdownMode.OnMainWindowClose};app.DispatcherUnhandledException+=(_,e)=>{try{System.IO.File.AppendAllText(Path.Combine(AppPaths.DataRoot,"native-errors.log"),DateTimeOffset.Now+" "+e.Exception+"\n");}catch{}MessageBox.Show("发生异常，请先核实保存状态："+e.Exception.Message);e.Handled=true;};Theme.Apply();if(!UiTest.Active){app.ShutdownMode=ShutdownMode.OnExplicitShutdown;var setup=new DependencyWindow();setup.ShowDialog();if(!setup.Accepted){app.Shutdown();return;}}app.ShutdownMode=ShutdownMode.OnMainWindowClose;var main=new MainWindow();app.MainWindow=main;app.Run(main);
+  using var installedMutex=new Mutex(AppPaths.Installed,"Local\\ReceivingAssistantInstalled",out var installedFirst);if(AppPaths.Installed&&!installedFirst){NativeDiag.Show(null,"E-NAT-1005","startup","已安装的小助手正在运行，请勿重复启动。","收货小助手",MessageBoxImage.Information);return;}
+  using var mutex=new Mutex(true,"Local\\ReceivingNativeTrial_"+Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(AppPaths.DataRoot)))[..16],out var first);if(!first){NativeDiag.Show(null,"E-NAT-1005","startup","此数据目录已有一个程序在运行，请勿重复启动。","收货小助手",MessageBoxImage.Information);return;}
+  var app=new Application{ShutdownMode=ShutdownMode.OnMainWindowClose};app.DispatcherUnhandledException+=(_,e)=>{NativeDiag.Show(null,NativeDiag.CodeOf(e.Exception,"E-NAT-9001"),"unhandled","发生异常，请先核实保存状态："+e.Exception.Message,"收货小助手",MessageBoxImage.Error,e.Exception);e.Handled=true;};Theme.Apply();if(!UiTest.Active){app.ShutdownMode=ShutdownMode.OnExplicitShutdown;var setup=new DependencyWindow();setup.ShowDialog();if(!setup.Accepted){app.Shutdown();return;}}app.ShutdownMode=ShutdownMode.OnMainWindowClose;var main=new MainWindow();app.MainWindow=main;app.Run(main);
  }
 }
 
 // 主窗口外壳（方向 C）：白色细工具栏 + 状态行，不再重复网页侧栏的品牌标题。
 // Shared with the library acceptance so CI can screenshot the shell without a backend.
 public static class ShellChrome {
- public const string Brand="扫码入库",WindowTitle="扫码入库 · 聚水潭收货助手 4.1.6";
+ public const string Brand="扫码入库",WindowTitle="扫码入库 · 聚水潭收货助手 4.1.7";
  public static (Border Top,WrapPanel Bar) Build(TextBlock status){
   var bar=new WrapPanel{VerticalAlignment=VerticalAlignment.Center};
   status.FontWeight=FontWeights.SemiBold;status.TextWrapping=TextWrapping.Wrap;status.Foreground=Palette.Text2;status.VerticalAlignment=VerticalAlignment.Center;

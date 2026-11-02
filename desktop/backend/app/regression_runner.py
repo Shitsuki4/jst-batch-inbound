@@ -177,6 +177,8 @@ def main():
                          ("pda-backup", "pda_test.py"),
                          ("inbound-unit", "inbound_test.py"),
                          ("inbound-http", "inbound_http_test.py"),
+                         ("error-codes", "errors_test.py"),
+                         ("po-rematch", "po_rematch_test.py"),
                          ("existing-features", "new_features_test.py"),
                          ("batch-flow-unit", "batch_flow_test.py"),
                          ("concurrency-fixes", "concurrency_fixes_test.py"),

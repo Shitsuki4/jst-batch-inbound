@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       publish_release_tag:
-        description: "Attach the built assets to this existing release tag, e.g. desktop-v4.1.6 (optional; main only; version must match the csproj)."
+        description: "Attach the built assets to this existing release tag, e.g. desktop-v4.1.7 (optional; main only; version must match the csproj)."
         required: false
         type: string
   push:
@@ -112,6 +112,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Recording gate regression failed: $LASTEXITCODE" }
           node desktop/backend/app/rename_recording_test.js
           if ($LASTEXITCODE -ne 0) { throw "Recording rename regression failed: $LASTEXITCODE" }
+          node desktop/backend/app/errcode_test.js
+          if ($LASTEXITCODE -ne 0) { throw "Error code regression failed: $LASTEXITCODE" }
 
       - name: Run Python regression
         env:

@@ -2,7 +2,7 @@
    video settings are saved by the native host. Never claim a cross-store transaction. */
 (function(){'use strict';
  const $=id=>document.getElementById(id),root=document.querySelector('[data-view="settings"]');if(!root)return;
- const cards=[...root.children],groups=[['receiving','收货与扫码'],['video','视频举证'],['catalog','商品资料'],['data','数据与备份'],['devices','PDA 与设备'],['update','软件更新'],['remote','远程管理页']];
+ const cards=[...root.children],groups=[['receiving','收货与扫码'],['video','视频举证'],['catalog','商品资料'],['data','数据与备份'],['devices','PDA 与设备'],['update','软件更新'],['remote','远程管理页'],['diagnostic','诊断与日志']];
  root.innerHTML='<div class="settings-heading"><div><h2>设置</h2><p>业务与视频分别保存；切换分区保留草稿，离开前会提醒。</p></div><button class="btn btn-ghost" id="settings-return">返回收货工作台</button></div><div class="settings-workspace"><aside class="settings-nav" aria-label="设置分区">'+groups.map(([id,name])=>'<button type="button" data-settings-section="'+id+'">'+name+'<span></span></button>').join('')+'</aside><div class="settings-content">'+groups.map(([id])=>'<section data-settings-pane="'+id+'" hidden></section>').join('')+'</div></div>';
  const pane=id=>root.querySelector('[data-settings-pane="'+id+'"]');
  cards.forEach((c,i)=>pane(i===0?'receiving':i===1?'catalog':i<4?'data':'devices').append(c));
@@ -54,7 +54,7 @@
  function dirtyIDs(){return Object.keys(fields).filter(dirty);}
  function badges(){root.querySelectorAll('[data-settings-section]').forEach(b=>b.querySelector('span').textContent=dirty(b.dataset.settingsSection)?'未保存':'');}
  function capture(id){baseline[id]=values(id);badges();}
- function notice(id,text,error=false){const el=$(id);el.textContent=text;el.classList.toggle('error',error);}
+ function notice(id,text,error=false){if(error&&text&&window.JstErr)text=JstErr.ensure(text);const el=$(id);el.textContent=text;el.classList.toggle('error',error);}
  function beforeLeave(){if(saving.size){JstDialog.alert('设置正在保存 / 操作中，请完成后再离开。');return false;}const ids=dirtyIDs();if(!ids.length)return true;if(!confirm(ids.map(id=>groups.find(x=>x[0]===id)[1]).join('、')+' 尚未保存。离开并放弃这些草稿？'))return false;ids.forEach(id=>{for(const [key,el] of Object.entries(fields[id]))writeField($(el),baseline[id][key]);});if(ids.includes('video'))paintVideo(videoState);badges();return true;}
  function show(id){if(!groups.some(g=>g[0]===id))id='receiving';section=id;root.querySelectorAll('[data-settings-pane]').forEach(p=>p.hidden=p.dataset.settingsPane!==id);root.querySelectorAll('[data-settings-section]').forEach(b=>{b.classList.toggle('active',b.dataset.settingsSection===id);b.setAttribute('aria-current',b.dataset.settingsSection===id?'page':'false');});if(id==='video'&&!videoLoaded)loadVideo();}
  root.querySelectorAll('[data-settings-section]').forEach(b=>b.onclick=()=>show(b.dataset.settingsSection));

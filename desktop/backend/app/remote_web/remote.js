@@ -17,10 +17,13 @@
  function msg(id,text,error){const m=$(id);m.textContent=text||'';m.classList.toggle('error',!!error);}
 
  async function api(path,opts){
-  const r=await fetch(path,Object.assign({credentials:'same-origin',cache:'no-store'},opts||{}));
-  let d={};try{d=await r.json();}catch{d={ok:false,msg:'服务器响应无效（'+r.status+'）'};}
-  if(r.status===401&&d.login){showLogin(d.msg&&me?'会话已过期，请重新登录':'');throw new Error(d.msg||'未登录');}
-  if(!r.ok||!d.ok)throw new Error(d.msg||('请求失败 '+r.status));
+  let r;
+  try{r=await fetch(path,Object.assign({credentials:'same-origin',cache:'no-store'},opts||{}));}
+  catch(e){throw new Error('[E-NET-1001] 连不上收货电脑，请确认电脑上的小助手正在运行、手机网络正常');}
+  let d={};try{d=await r.json();}catch{d={ok:false,msg:'[E-NET-1003] 服务器响应无效（HTTP '+r.status+'）'};}
+  if(d&&d.ok===false&&!/\[E-[A-Z]{2,5}-\d{4}\]/.test(d.msg||''))d.msg='['+(r.status===404?'E-REQ-1404':r.status>=500?'E-NET-1004':'E-RMT-1000')+'] '+(d.msg||('请求失败 HTTP '+r.status));
+  if(r.status===401&&d.login){showLogin(d.msg&&me?'[E-RMT-1001] 会话已过期，请重新登录':'');throw new Error(d.msg||'[E-RMT-1001] 未登录');}
+  if(!r.ok||!d.ok)throw new Error((d.msg||('[E-NET-1004] 请求失败 HTTP '+r.status))+(d.request_id?'（日志编号 '+d.request_id+'）':''));
   return d;
  }
 

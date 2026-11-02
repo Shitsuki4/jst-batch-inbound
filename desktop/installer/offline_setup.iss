@@ -26,7 +26,7 @@
   #define OutputDir "..\dist\installer"
 #endif
 #ifndef AppVersion
-  #define AppVersion "4.1.6"
+  #define AppVersion "4.1.7"
 #endif
 #ifdef UpgradeOnly
   #ifndef ReqFfmpegSha
@@ -245,12 +245,12 @@ begin
   Result := '';
   if Missing = 3 then
     Result :=
-      '这台电脑上没有找到收货小助手的运行组件（WebView2 固定运行时和 FFmpeg/ffprobe）。' + #13#10 + #13#10 +
+      '[E-INS-1001] 这台电脑上没有找到收货小助手的运行组件（WebView2 固定运行时和 FFmpeg/ffprobe）。' + #13#10 + #13#10 +
       '升级安装程序只能用在已经装过“离线完整安装程序”或“运行依赖安装程序”的电脑上，它本身不带这些组件。' + #13#10 + #13#10 +
       '请改用 ' + FullInstallerName + '（自带全部组件）。本次没有做任何改动。'
   else if (Missing > 0) or (Different > 0) then
     Result :=
-      '这台电脑上的运行组件和 {#AppVersion} 要求的版本不一致或不完整（' + Names + '）。' + #13#10 +
+      '[E-INS-1002] 这台电脑上的运行组件和 {#AppVersion} 要求的版本不一致或不完整（' + Names + '）。' + #13#10 +
       '本版本需要 WebView2 ' + ReqWebView2Version + '、FFmpeg ' + ReqFfmpegVersion + '。' + #13#10 + #13#10 +
       '请改用 ' + FullInstallerName + '（自带全部组件，会一并更新运行组件）。本次没有做任何改动。';
 end;
@@ -388,7 +388,7 @@ begin
     Dir := RemoveBackslashUnlessRoot(WizardDirValue());
     if FileExists(Dir + '\Receiving.Native.exe') and not FileExists(Dir + '\installed-mode.txt') then
     begin
-      MsgBox('这个文件夹里是便携版收货小助手，安装会覆盖它。请换一个安装位置。', mbError, MB_OK);
+      MsgBox('[E-INS-1003] 这个文件夹里是便携版收货小助手，安装会覆盖它。请换一个安装位置。', mbError, MB_OK);
       Result := False;
     end;
   end
@@ -400,7 +400,7 @@ begin
       Dir := CleanDir(ImportEdit.Text);
       if not LooksLikePortableWithData(Dir) then
       begin
-        MsgBox('没有在这个文件夹里找到便携版的数据。' + #13#10 + #13#10 +
+        MsgBox('[E-INS-1003] 没有在这个文件夹里找到便携版的数据。' + #13#10 + #13#10 +
           '请选择便携版解压出来的那个文件夹：里面有 Receiving.Native.exe，还有放业务数据的 data 文件夹（data\jst.db 等）。' + #13#10 +
           '不想复制的话，取消勾选即可。', mbError, MB_OK);
         Result := False;
@@ -1120,7 +1120,7 @@ begin
     '• 如果正在提交入库或写入 ERP，这次提交可能被中断。卸载后请在聚水潭核对相关入库单，避免漏单或重复提交。' + #13#10 +
     '• 正在录制的录像会丢失尚未保存的部分。' + #13#10 + #13#10 +
     '更稳妥的做法：点“取消”，回到小助手结束当前录像、等提交完成后正常退出，再重新卸载。';
-  Result := TaskDialogMsgBox('收货小助手仍在运行', Text, mbError, MB_OKCANCEL, [
+  Result := TaskDialogMsgBox('[E-INS-1004] 收货小助手仍在运行', Text, mbError, MB_OKCANCEL, [
     '强制结束并继续卸载' + #13#10 + '立即结束安装目录内的小助手进程，然后继续卸载',
      '取消' + #13#10 + '不结束任何进程，退出卸载，程序和数据都不改动'], 0) = IDOK;
 end;
@@ -1181,7 +1181,7 @@ begin
     if not WmiOk then
     begin
       SuppressibleMsgBox(
-        '收货小助手正在运行，但无法确定它的进程位置，因此不会强制结束。' + #13#10 + #13#10 +
+        '[E-INS-1004] 收货小助手正在运行，但无法确定它的进程位置，因此不会强制结束。' + #13#10 + #13#10 +
         '请先在小助手里结束当前录像、等提交完成后正常退出，然后重新卸载。', mbError, MB_OK, IDOK);
       exit;
     end;
@@ -1193,7 +1193,7 @@ begin
       begin
         Log('App is running and /FORCECLOSE was not given; refusing silent uninstall.');
         SuppressibleMsgBox(
-          '收货小助手正在运行，静默卸载已取消，程序和数据均未改动。' + #13#10 +
+          '[E-INS-1004] 收货小助手正在运行，静默卸载已取消，程序和数据均未改动。' + #13#10 +
           '请先正常退出小助手；如确需强制结束，请在命令行加上 /FORCECLOSE。', mbError, MB_OK, IDOK);
         exit;
       end;
@@ -1228,7 +1228,7 @@ begin
     if UninstallSilent then
     begin
       if not ForceCloseSwitch then
-        RaiseException('收货小助手在卸载过程中被启动，卸载已中止，程序和数据均未改动。');
+        RaiseException('[E-INS-1004] 收货小助手在卸载过程中被启动，卸载已中止，程序和数据均未改动。');
     end
     else if not AskForceClose(Summary) then
       RaiseException('已取消卸载，程序和数据均未改动。');
@@ -1244,7 +1244,7 @@ begin
       break;
   end;
   if GetArrayLength(Pids) > 0 then
-    RaiseException('无法结束以下进程，卸载已中止，程序和数据均未改动：' + #13#10 + Summary + #13#10 +
+    RaiseException('[E-INS-1004] 无法结束以下进程，卸载已中止，程序和数据均未改动：' + #13#10 + Summary + #13#10 +
       '请重启电脑后再卸载。');
 
   { The killed processes held the app mutexes; give Windows a moment to release them. If one is
@@ -1370,7 +1370,7 @@ begin
     else
     begin
       Log('UAC declined or failed for the firewall rule removal: ' + SysErrorMessage(Code));
-      MsgBox('未能删除防火墙放行规则（未获得管理员授权）。' + #13#10 +
+      MsgBox('[E-INS-1005] 未能删除防火墙放行规则（未获得管理员授权）。' + #13#10 +
         '可在“Windows Defender 防火墙 - 高级设置 - 入站规则”中删除名称以“' + FirewallRulePrefix + '”开头的规则。',
         mbError, MB_OK);
     end;
@@ -1445,7 +1445,7 @@ begin
   begin
     if Message = '' then
       Message := '复制便携版数据没有完成（代码 ' + IntToStr(Code) + '）。便携版文件夹没有改动。';
-    SuppressibleMsgBox('收货小助手已经安装好，但没有导入便携版数据：' + #13#10 + #13#10 + Message, mbError, MB_OK, IDOK);
+    SuppressibleMsgBox('[E-INS-1003] 收货小助手已经安装好，但没有导入便携版数据：' + #13#10 + #13#10 + Message, mbError, MB_OK, IDOK);
   end;
 end;
 

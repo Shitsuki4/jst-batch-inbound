@@ -11,7 +11,7 @@
   }
   function updateScope() { if($("scope")) $("scope").textContent="当前操作："+scopeLabel(); }
   function sound(error) { if($("sound") && $("sound").checked && window.jstSound) window.jstSound(error); }
-  function message(s, error) { updateScope(); if(error) sound(true); $('message').textContent = s; $('message').className = error ? 'inbound-warning' : 'hint'; }
+  function message(s, error) { if(error&&s&&window.JstErr)s=JstErr.ensure(s); updateScope(); if(error) sound(true); $('message').textContent = s; $('message').className = error ? 'inbound-warning' : 'hint'; }
   function setBusy(v) { busy = v; root.querySelectorAll('fieldset').forEach(function(e){ e.disabled = v; }); $('history-refresh').disabled = v; root.querySelectorAll('[data-verify]').forEach(function(e){e.disabled=v;}); }
   async function task(fn) { if (busy) return; setBusy(true); try { await fn(); } catch(e) { message(e.message || '网络请求失败，请核对操作记录。', true); } finally { setBusy(false); if(root.dataset.nextScan === "1") {delete root.dataset.nextScan;$("code").focus();} } }
   function discardPreview() { preview=null; $('preview').hidden=true; $('preview').innerHTML=''; }

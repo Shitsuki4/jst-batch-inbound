@@ -55,11 +55,13 @@
   var toastTimer = null;
   function toast(msg, type) {
     var t = $('#toast');
+    // 每条报错都带错误码：本机服务的报错自带，页面自己的输入检查补 E-UI-1001
+    if (type === 'err' && window.JstErr) msg = window.JstErr.ensure(msg);
     t.textContent = msg;
     t.style.background = type === 'err' ? '#b3261e' : (type === 'warn' ? '#8a5a00' : '#1b2733');
     t.hidden = false;
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(function () { t.hidden = true; }, 2200);
+    toastTimer = setTimeout(function () { t.hidden = true; }, type === 'err' ? 6000 : 2200);
   }
 
   var actx = null;
@@ -129,29 +131,52 @@
     if (i < 0 || (e.shiftKey && i === 0) || (!e.shiftKey && i === f.length - 1)) { e.preventDefault(); f[e.shiftKey ? f.length - 1 : 0].focus(); }
   }, true);
 
-  function permAlert(hint) {
+  // 报错弹窗里的「错误码 + 日志编号」一行：按日志编号能在诊断日志里找到这次报错的完整记录
+  function errMeta(code, rid) {
+    if (!code && !rid) return '';
+    return '<div class="err-meta" style="margin-top:10px;color:#5d6075;font-size:12px">'
+      + (code ? '错误码 <b class="err-code">' + esc(code) + '</b>' : '')
+      + (rid ? '<span style="margin-left:10px">日志编号 <b class="err-rid">' + esc(rid) + '</b></span>' : '')
+      + '<div style="margin-top:4px">设置 → 诊断与日志：可按日志编号查看记录，或导出诊断包</div></div>';
+  }
+  function stripCode(msg) { return String(msg || '').replace(/^\s*\[E-[A-Z]{2,5}-\d{4}\]\s*/, ''); }
+
+  // 只有聚水潭明确拒绝权限（错误码 E-JST-1401）才弹这个框；其他失败各有自己的错误码，不再说成「无权限」
+  function permAlert(r) {
+    r = r || {};
+    var detail = stripCode(r.msg);
     var h = '<div class="perm-msg" style="text-align:center;padding:8px 0 2px">'
       + '<div style="font-size:17px;font-weight:700;color:#d93a3a">当前账号无此操作权限</div>'
-      + (hint ? '<div style="margin-top:8px;color:#6b7a8d;font-size:13px">' + esc(hint) + '</div>' : '')
+      + (detail && detail !== '当前聚水潭账号无此操作权限' ? '<div style="margin-top:8px;color:#3d4252;font-size:13px">聚水潭提示：' + esc(detail) + '</div>' : '')
+      + (r.hint ? '<div style="margin-top:8px;color:#6b7a8d;font-size:13px">' + esc(r.hint) + '</div>' : '')
+      + errMeta('E-JST-1401', r.request_id)
       + '</div>';
     openModal('操作提示', h, [{ text: '知道了', cls: 'btn-primary', fn: closeModal }], closeModal);
   }
 
-  // 请求没有结果（断网、本机服务没在运行、返回不是 JSON）：说清是连接问题，不要报成「无权限」
-  function netAlert(hint) {
+  // 请求没有结果：区分「连不上本机服务」（E-NET-1001）、返回的数据无法识别（E-NET-1003 等）
+  // 和页面脚本自身出错（E-APP-9001），都不报成「无权限」
+  function netAlert(hint, err) {
+    var code = (err && window.JstErr && window.JstErr.codeOf(err)) || '';
+    if (!code) code = (!err || err instanceof TypeError || err.transport) ? 'E-NET-1001' : 'E-APP-9001';
+    var title = code === 'E-NET-1001' ? '没连上本机收货服务'
+      : code === 'E-APP-9001' ? '页面处理结果时出错' : stripCode(err && err.message) || '本机收货服务返回异常';
+    if (code === 'E-APP-9001' && err && window.console) console.error(err);
     var h = '<div class="perm-msg" style="text-align:center;padding:8px 0 2px">'
-      + '<div class="perm-title" style="font-size:17px;font-weight:700;color:#d93a3a">没连上本机收货服务</div>'
-      + '<div style="margin-top:8px;color:#5d6075;font-size:13px">' + esc(hint || '请确认程序还在运行，稍后重试') + '</div>'
+      + '<div class="perm-title" style="font-size:17px;font-weight:700;color:#d93a3a">' + esc(title) + '</div>'
+      + '<div style="margin-top:8px;color:#5d6075;font-size:13px">' + esc(hint || (code === 'E-NET-1001' ? '请确认程序还在运行，稍后重试' : '请刷新页面核对后再试')) + '</div>'
+      + errMeta(code, '')
       + '</div>';
-    openModal('连接中断', h, [{ text: '知道了', cls: 'btn-primary', fn: closeModal }], closeModal);
+    openModal(code === 'E-NET-1001' ? '连接中断' : '操作提示', h, [{ text: '知道了', cls: 'btn-primary', fn: closeModal }], closeModal);
     beep(180, 0.3);
   }
 
   function handleFail(r) {
     if (!r) return netAlert();
     if (r.code === 'NATIVE_RECORDING_BLOCKED') { recordingAlert(r.msg); return true; }
-    if (r.msg === '当前账号无此操作权限') { permAlert(r.hint); return true; }
-    toast(r.msg || '操作失败', 'err');
+    if (window.JstErr ? window.JstErr.isPermission(r) : r.error_code === 'E-JST-1401') { permAlert(r); return true; }
+    var text = r.msg || '[E-APP-9001] 操作失败';
+    toast(text + (r.request_id ? '（日志编号 ' + r.request_id + '）' : ''), 'err');
     beep(180, 0.16);
     return false;
   }
@@ -643,7 +668,7 @@
         beep(880, 0.08);
         reload();
       })
-      .catch(function () { btn.disabled = false; btn.textContent = '创建收货批次'; netAlert('批次是否已创建未确认，请刷新页面核对后再试'); });
+      .catch(function (e) { btn.disabled = false; btn.textContent = '创建收货批次'; netAlert('批次是否已创建未确认，请刷新页面核对后再试', e); });
   }
   $('#btn-activate').onclick = activate;
   $('#po-input').addEventListener('keydown', function (e) {
@@ -651,6 +676,88 @@
   });
 
   /* 退出批次：把当前收货中的单挂起，人立刻空闲，可去创建别的批次 */
+  /* -------------------- 更换采购单号 / 外部单号并重新匹配 -------------------- */
+  // 先预览（只读）：新采购单上有的、没有的、超收的；确认时服务端重新查聚水潭，数据有变化会要求重新预览（E-PO-2005）
+  var rematchBusy = false;
+  function rematchRows(rows, cols) {
+    if (!rows || !rows.length) return '<p class="muted">无</p>';
+    return '<table class="tbl"><thead><tr>' + cols.map(function (c) { return '<th>' + esc(c[1]) + '</th>'; }).join('') + '</tr></thead><tbody>'
+      + rows.map(function (r) { return '<tr>' + cols.map(function (c) { return '<td>' + esc(c[2] ? c[2](r) : r[c[0]]) + '</td>'; }).join('') + '</tr>'; }).join('')
+      + '</tbody></table>';
+  }
+  function rematchView(p, note) {
+    var n = p.new || {}, o = p.old || {};
+    var name = function (r) { return (r.name || r.sku_code || r.sku_id || '') + (r.spec ? '（' + r.spec + '）' : ''); };
+    return (note ? '<p class="warn">' + esc(note) + '</p>' : '')
+      + '<p><b>' + esc(o.po_id) + (o.outer_po_id ? '（外部单号 ' + esc(o.outer_po_id) + '）' : '') + ' → '
+      + esc(n.po_id) + (n.outer_po_id ? '（外部单号 ' + esc(n.outer_po_id) + '）' : '') + '</b>'
+      + (n.supplier ? ' · ' + esc(n.supplier) : '') + '</p>'
+      + '<p class="muted">共 ' + esc(p.batches) + ' 个物流单、' + esc(p.lines) + ' 行、实收 ' + esc(fmtNum(p.total_received)) + ' 件，数量和物流单号都不变。</p>'
+      + '<h4>新采购单上有（' + (p.matches || []).length + '）</h4>'
+      + rematchRows(p.matches, [['name', '商品', name], ['received', '已收', function (r) { return fmtNum(r.received); }], ['plan', '本轮应收', function (r) { return fmtNum(r.plan); }], ['newly_matched', '', function (r) { return r.newly_matched ? '新匹配上' : ''; }]])
+      + '<h4>新采购单上没有（' + (p.missing || []).length + '）</h4>'
+      + rematchRows(p.missing, [['name', '商品', name], ['received', '已收', function (r) { return fmtNum(r.received); }]])
+      + '<h4>超收（' + (p.over || []).length + '）</h4>'
+      + rematchRows(p.over, [['name', '商品', name], ['received', '已收', function (r) { return fmtNum(r.received); }], ['plan', '本轮应收', function (r) { return fmtNum(r.plan); }], ['over', '超出', function (r) { return fmtNum(r.over); }]])
+      + ((p.missing || []).length ? '<p class="muted">新采购单上没有的商品会留在这个批次里，标成「不在采购单上」，生成入库单前请先处理。</p>' : '');
+  }
+  function rematchOpen(no, body, buttons) {
+    if (!S.session) return;
+    var s = S.session;
+    openModal('更换采购单号 / 外部单号',
+      '<p>当前：采购单 ' + esc(s.po_id) + (s.outer_po_id ? '（外部单号 ' + esc(s.outer_po_id) + '）' : '') + '</p>'
+      + '<p class="muted">已收的数量、物流单号、扫码记录和录像都留在这个批次上，只按新采购单重新匹配。本轮已经生成过入库单时不能更换。</p>'
+      + '<div class="row"><input id="rematch-no" class="input" placeholder="新的采购单号或外部单号" autocomplete="off" value="' + esc(no || '') + '"></div>'
+      + '<div id="rematch-result">' + (body || '') + '</div>',
+      buttons || [{ text: '取消', cls: 'btn-ghost', fn: closeModal }, { text: '预览匹配结果', cls: 'btn-primary', fn: rematchPreview }]);
+    var inp = $('#rematch-no');
+    inp.onkeydown = function (e) { if (e.key === 'Enter') { e.preventDefault(); rematchPreview(); } };
+    inp.oninput = function () { var b = $('#rematch-confirm'); if (b) b.disabled = true; };
+    if (!body) inp.focus();
+  }
+  function rematchFail(r) {
+    var msg = window.JstErr ? window.JstErr.ensure(r.msg || '更换失败') : (r.msg || '更换失败');
+    $('#rematch-result').innerHTML = '<p class="err">' + esc(msg) + '</p>' + (r.hint ? '<p class="muted">' + esc(r.hint) + '</p>' : '')
+      + (r.error_code || r.request_id ? errMeta(r.error_code, r.request_id) : '');
+  }
+  function rematchShow(no, p, note) {
+    rematchOpen(no, rematchView(p, note), [
+      { text: '取消', cls: 'btn-ghost', fn: closeModal },
+      { text: '重新预览', cls: 'btn-secondary', fn: rematchPreview },
+      { text: '确认更换并重新匹配', cls: 'btn-primary', fn: function () { rematchConfirm(no, p); } }]);
+    var btns = $('#modal-foot').querySelectorAll('button');
+    btns[btns.length - 1].id = 'rematch-confirm';
+  }
+  function rematchPreview() {
+    if (rematchBusy || !S.session) return;
+    var no = ($('#rematch-no').value || '').trim();
+    if (!no) { toast('[E-PO-2008] 请输入新的采购单号或外部单号', 'err'); return; }
+    rematchBusy = true;
+    $('#rematch-result').innerHTML = '<p class="muted">正在查询采购单 ' + esc(no) + '…</p>';
+    api('/api/po/rematch/preview', { method: 'POST', body: { sid: S.session.id, no: no } }).then(function (r) {
+      rematchBusy = false;
+      if (!r.ok) return rematchFail(r);
+      rematchShow(no, r);
+    }, function () { rematchBusy = false; rematchFail({ msg: '[E-NET-1001] 没连上本机收货服务，数据没有改动' }); });
+  }
+  function rematchConfirm(no, p) {
+    if (rematchBusy || !S.session) return;
+    if (($('#rematch-no').value || '').trim() !== no) { toast('[E-PO-2005] 单号改过了，请先重新预览', 'err'); return; }
+    rematchBusy = true;
+    api('/api/po/rematch/confirm', { method: 'POST', body: { sid: S.session.id, no: no, fingerprint: p.fingerprint, confirmed: true } }).then(function (r) {
+      rematchBusy = false;
+      if (r.ok) {
+        closeModal();
+        toast('已更换为采购单 ' + (r.new && r.new.po_id || no) + '，已收商品已重新匹配', 'ok');
+        reload();
+        return;
+      }
+      if (r.error_code === 'E-PO-2005' && r.preview) return rematchShow(no, r.preview, '确认前数据有变化（有新的扫码或采购单被修改），请核对下面新的预览后再确认。');
+      rematchFail(r);
+    }, function () { rematchBusy = false; rematchFail({ msg: '[E-NET-1001] 没连上本机收货服务，请重新预览确认是否已经更换' }); });
+  }
+  $('#btn-rematch-po').onclick = function () { if (S.session) rematchOpen(''); };
+
   function askExit() {
     suppressRefocus = Date.now() + 4000;
     var s = S.session, n = (S.batches || []).length;
@@ -672,7 +779,7 @@
       toast(r.msg || '已退出批次', 'ok');
       beep(660, 0.08);
       reload();
-    }).catch(function () { netAlert('是否已退出批次未确认，请刷新页面核对'); });
+    }).catch(function (e) { netAlert('是否已退出批次未确认，请刷新页面核对', e); });
   }
 
   // 待确认扫码不是已保存明细；先明确确认，不能悄悄清掉或带着失败继续挂起。
@@ -734,7 +841,7 @@
       el.disabled = false;
       if (!r.ok) return handleFail(r);
       showDiff(r, r.session.state === 'closed', r.session.state === 'paused');
-    }).catch(function () { el.disabled = false; netAlert(); });
+    }).catch(function (e) { el.disabled = false; netAlert('', e); });
   });
 
   function resumeBatch(sid) {
@@ -743,7 +850,7 @@
       toast(r.msg || '已回到该批次', 'ok');
       beep(880, 0.08);
       reload();
-    }).catch(function () { netAlert('是否已回到该批次未确认，请刷新页面核对'); });
+    }).catch(function (e) { netAlert('是否已回到该批次未确认，请刷新页面核对', e); });
   }
 
   /* 点击挂起批次里的「继续收货」 */
@@ -875,7 +982,7 @@
         flash(nm + '  →  ' + fmtNum(q), 'ok'); beep(1318, 0.06);
       }
       refocus();
-    }).catch(function () { netAlert('网络中断，本笔是否已入账未确认，请核对明细后再补扫'); refocus(); });
+    }).catch(function (e) { netAlert('网络中断，本笔是否已入账未确认，请核对明细后再补扫', e); refocus(); });
   }
 
   function cancelPending() {
@@ -944,7 +1051,7 @@
     if (unplannedConfirmed || unplannedAccepted[unplannedKey(a && a.id, code)]) body.confirm_unplanned = true;
     return api('/api/tracking/scan', { method: 'POST', body: body }).then(function (r) {
       if (!r.ok) {
-        if (r.code === 'NATIVE_RECORDING_BLOCKED' || r.msg === '当前账号无此操作权限') return handleFail(r);
+        if (r.code === 'NATIVE_RECORDING_BLOCKED' || (window.JstErr && window.JstErr.isPermission(r))) return handleFail(r);
         // 常见错误（如结单后误扫）用轻提示，别弹「无权限」吓人
         toast(r.msg || '操作失败', 'err');
         beep(180, 0.16);
@@ -966,7 +1073,7 @@
         : '已切回 ' + code + '，继续补扫', 'ok');
       beep(1046, 0.07);
       refocus();
-    }).catch(function () { netAlert('物流单号是否已建好未确认，请核对右侧物流单列表后再扫'); });
+    }).catch(function (e) { netAlert('物流单号是否已建好未确认，请核对右侧物流单列表后再扫', e); });
   }
 
   var VIA_TAG = {
@@ -1016,9 +1123,9 @@
         handleFail(r);
       }
       return next();
-    }, function () {
+    }, function (e) {
       // 结果未确认：不继续处理下一件，避免在不确定状态下继续累加
-      netAlert('网络中断，上一件是否已入账未确认，请核对明细后再扫');
+      netAlert('网络中断，上一件是否已入账未确认，请核对明细后再扫', e);
     });
   }
 
@@ -1078,7 +1185,7 @@
         });
       }
       showUnresolved(r, code);
-    }).catch(function () { netAlert(); });
+    }).catch(function (e) { netAlert('', e); });
   }
 
   function showUnresolved(r, code) {
@@ -1321,7 +1428,7 @@
             if (!r.ok) return handleFail(r);
             toast(r.msg || '已删除该物流单', 'ok');
             refreshAfterMutation(isCur ? 0 : S.current_batch);
-          }).catch(function () { netAlert('该物流单号是否已删除未确认，请刷新页面核对'); });
+          }).catch(function (e) { netAlert('该物流单号是否已删除未确认，请刷新页面核对', e); });
       });
   }
 
@@ -1363,7 +1470,7 @@
             toast(r.msg || '已修改', 'ok');
             refreshAfterMutation((S.current_batch && S.current_batch !== bid) ? S.current_batch : 0);
             askRerecordAfterRename(bid, no, v);
-          }).catch(function () { closeModal(); netAlert('单号是否已修改未确认，请刷新页面核对'); });
+          }).catch(function (e) { closeModal(); netAlert('单号是否已修改未确认，请刷新页面核对', e); });
       } }],
       function () { closeModal(); refocus(); });
     var inp = $('#rename-input');
@@ -1423,7 +1530,7 @@
     suppressRefocus = Date.now() + 400;
     api('/api/line/del', { method: 'POST', body: { line_id: id, batch_id: S.current_batch } })
       .then(function (r) { if (r.ok) delete qtySaveErrors[id]; afterLineChange(r); })
-      .catch(function () { netAlert('这一行是否已删除未确认，请核对明细'); });
+      .catch(function (e) { netAlert('这一行是否已删除未确认，请核对明细', e); });
   }
 
   /* -------------------- 结单 -------------------- */
@@ -1538,7 +1645,7 @@
       openModal('子批次明细', linesTable(r.lines),
         [{ text: '关闭', cls: 'btn-primary', fn: function () { if(closeModal()===false)return; refocus(); refreshAfterMutation(); } }],
         function () { if(closeModal()===false)return; refocus(); refreshAfterMutation(); });
-    }).catch(function () { netAlert(); });
+    }).catch(function (e) { netAlert('', e); });
   }
 
   // 采购单查询结果里的单个「物流单号」分组小表
@@ -1700,7 +1807,7 @@
           + '</div></div>';
         return h;
       }).join('')+extra;
-    }).catch(function () { if(queryOpen.po&&request===querySeq.po)netAlert(); });
+    }).catch(function (e) { if(queryOpen.po&&request===querySeq.po)netAlert('', e); });
   }
   $('#btn-q-po').onclick = runPoQuery;
   $('#q-po').addEventListener('keydown', function (e) {
@@ -1731,7 +1838,7 @@
           + '<button class="btn btn-ghost btn-sm danger js-del-batch" data-id="' + b.id + '" data-sid="' + esc(b.session_id || '') + '">删除该子批次</button>'
           + '</div></div>';
       }).join('')+extra;
-    }).catch(function () { if(queryOpen.tk&&request===querySeq.tk)netAlert(); });
+    }).catch(function (e) { if(queryOpen.tk&&request===querySeq.tk)netAlert('', e); });
   }
   $('#btn-q-tk').onclick = runTkQuery;
   $('#q-tk').addEventListener('keydown', function (e) {
@@ -1851,7 +1958,7 @@
         + '<p class="hint record-refresh-status" role="status"></p>' + h + '</section>',
         [{ text: '关闭', cls: 'btn-primary', fn: function () { if(closeModal()===false)return; refocus(); refreshAfterMutation(); } }],
         function () { if(closeModal()===false)return; refocus(); refreshAfterMutation(); });
-    }).catch(function () { netAlert(); });
+    }).catch(function (e) { netAlert('', e); });
   }
   var recordRefreshEpoch = 0;
   function refreshOpenSessionDetail(live) {
@@ -1917,7 +2024,7 @@
       a.href = r.url; a.download = r.name;
       document.body.appendChild(a); a.click(); a.remove();
       toast('已导出 ' + r.rows + ' 行', 'ok');
-    }).catch(function () { netAlert(); });
+    }).catch(function (e) { netAlert('', e); });
   }
   function getExportValue() {
     var m = $('input[name=exp-mode]:checked').value;

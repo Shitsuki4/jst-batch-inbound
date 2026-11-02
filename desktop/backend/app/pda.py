@@ -16,7 +16,7 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from store import validate_qty
 
-ASSETS = {"/", "/pda.html", "/pda.js", "/style.css", "/pda.css", "/inventory.js", "/inbound.js", "/operations.js", "/ux.js", "/receipt-editor.js", "/receiving-round.js", "/barcode-learn.js", "/barcode-learn.css", "/ui-tokens.css"}
+ASSETS = {"/", "/pda.html", "/pda.js", "/errcode.js", "/style.css", "/pda.css", "/inventory.js", "/inbound.js", "/operations.js", "/ux.js", "/receipt-editor.js", "/receiving-round.js", "/barcode-learn.js", "/barcode-learn.css", "/ui-tokens.css"}
 GETS = {"/api/inventory/partners", "/api/inventory/config", "/api/inventory/lookup", "/api/inventory/history", "/api/inbound/options", "/api/inbound/preview", "/api/session/detail", "/api/operations", "/api/learned/search"}
 POSTS = {"/api/line/edit", "/api/inventory/preview", "/api/inventory/submit", "/api/inventory/verify", "/api/inbound/create", "/api/inbound/resume", "/api/tracking/scan", "/api/item/scan", "/api/item/choose", "/api/operations/note", "/api/learned/learn"}
 RECEIPT = {"/api/tracking/scan", "/api/item/scan", "/api/item/choose"}
@@ -318,16 +318,16 @@ def make_handler(host, base):
         def guard(self, pairing=False):
             self.close_connection=True
             if self.headers.get("Host")!="%s:%d"%(host.host,host.port):
-                self._fail("主机地址不匹配",code=403); return False
+                self._fail("主机地址不匹配",code=403,error_code="E-PDA-1002"); return False
             if self.command=="POST":
                 origin=self.headers.get("Origin")
                 expected="https://%s:%d"%(host.host,host.port)
                 if origin!=expected and not (pairing and not origin and self.headers.get("X-JST-Pair")=="1"):
-                    self._fail("禁止跨站请求",code=403); return False
+                    self._fail("禁止跨站请求",code=403,error_code="E-REQ-1403"); return False
             if not pairing:
                 self.device=host.authorize(self.headers.get("Cookie"))
                 if not self.device:
-                    self._fail("PDA未配对或授权已过期，请返回连接页面重新配对",code=401); return False
+                    self._fail("PDA未配对或授权已过期，请返回连接页面重新配对",code=401,error_code="E-PDA-1001"); return False
             return True
 
         def _desktop_guard(self):
@@ -367,6 +367,7 @@ def make_handler(host, base):
             return {"kind":"pda","id":d.get("id",""),"name":d.get("name","") or "PDA"}
 
         def do_GET(self):
+            self._rid=app.diaglog.new_request_id()
             u=urllib.parse.urlparse(self.path)
             q=dict(urllib.parse.parse_qsl(u.query))
             # 授权校验和收货范围（可能要访问聚水潭）都在全局锁外完成，每个请求只算一次。
@@ -390,13 +391,14 @@ def make_handler(host, base):
                     if u.path=="/api/pda/request":
                         r=app.OPERATIONS.request(q.get("id",""))
                         return self._ok(status=r["status"],response=json.loads(r["response"]) if r.get("response") else None)
-                    if u.path not in GETS: return self._fail("PDA不能使用此接口",code=403)
+                    if u.path not in GETS: return self._fail("PDA不能使用此接口",code=403,error_code="E-PDA-1000")
                     if u.path.startswith(("/api/inbound/","/api/learned/")) or u.path=="/api/session/detail": self.check_receipt(q)
                     return super().do_GET()
                 except Exception as e:
                     self._fail(str(e))
 
         def do_POST(self):
+            self._rid=app.diaglog.new_request_id()
             self.receipt_request=None
             self.parsed_body=None
             del self.parsed_body
@@ -417,7 +419,7 @@ def make_handler(host, base):
                 return self._fail(str(e))
             with self._reply_after_unlock(), app.state_lock:
                 try:
-                    if path not in POSTS: return self._fail("PDA不能使用此接口",code=403)
+                    if path not in POSTS: return self._fail("PDA不能使用此接口",code=403,error_code="E-PDA-1000")
                     if path in RECEIPT or path == "/api/line/edit" or path.startswith(("/api/inbound/","/api/learned/")): self.check_receipt(b)
                     if path == "/api/tracking/scan":
                         # PDA 请求按编号记账，必须一次落库：不走「无采购单登记」确认流程，
@@ -428,7 +430,7 @@ def make_handler(host, base):
                         old=app.OPERATIONS.reserve(rid,path,b,self._actor())
                         if old:
                             if old["status"]=="done": return self._json(json.loads(old["response"]))
-                            return self._fail("此请求结果待核实，禁止重复计数；请查看本地实收记录")
+                            return self._fail("此请求结果待核实，禁止重复计数；请查看本地实收记录",error_code="E-REQ-1409")
                         self.receipt_request=rid
                     fn=getattr(self,"_post_"+path.strip("/").replace("/","_"))
                     return self._run_logged(path,fn)
