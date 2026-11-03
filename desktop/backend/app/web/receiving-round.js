@@ -76,5 +76,5 @@
       + '<div class="table-wrap"><table class="tbl round-table"><thead><tr><th>商品信息</th><th>本轮应收</th><th>本轮已收</th><th>差额</th></tr></thead><tbody>'
       + body(round, true) + '</tbody></table></div></div>';
   }
-  window.ReceivingRoundUI = {data:data,body:body,notes:notes,report:report,progress:progress,num:num,appearance:appearance,status:status};
+  window.ReceivingRoundUI = {data:data,body:body,notes:notes,report:report,progress:progress,num:num,appearance:appearance,status:status,product:product};
 }());

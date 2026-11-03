@@ -675,3 +675,17 @@ body, .view, .card, .tbl, .tbl td, .tbl th, .pi-code, .pi-barcode, .pi-name, .sc
 .app-shell .icon-btn:focus-visible{outline:2px solid var(--c-primary);outline-offset:1px}
 .app-shell .icon-del{margin-left:10px}
 .app-shell .side-foot-acts .btn-sm,.app-shell .who{font-size:13px}
+
+/* 4.1.8 收货对单公共组件（receiving-summary.js）：无采购单匹配 / 暂存对单 / 结单对单 / 联合收货汇总
+   和「有采购单收货」同一套进度卡与商品表样式 */
+.rs-panel{display:flex;flex-direction:column;gap:12px;min-width:0}
+.rs-panel .rs-progress{box-shadow:none;border:1px solid var(--line,#e6e8f0);padding:12px 14px}
+.rs-panel .pc-legend.rs-legend-2{grid-template-columns:repeat(2,1fr)}
+.rs-table.rs-recv-only th:first-child{width:80%}
+.rs-table.rs-recv-only th:not(:first-child){width:20%}
+.rs-table td.pi-plan,.rs-table td.pi-recv,.rs-table td.pi-mark{text-align:center;font-variant-numeric:tabular-nums}
+.rs-table td.rs-extra{font-size:12px;color:var(--muted);white-space:normal;overflow-wrap:anywhere}
+.rs-table:has(td.rs-extra) th:first-child{width:40%}
+.rs-note{margin-top:4px;font-size:12px;color:var(--c-warn,#b45309);white-space:normal}
+.rs-empty{margin:8px 0}
+.rs-section-title{margin:10px 0 6px;font-size:14px;font-weight:600}
