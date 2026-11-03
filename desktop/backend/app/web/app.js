@@ -900,9 +900,32 @@
   (function () {
     var q = $('#pending-qty');
     if (!q) return;
+    // 扫码枪连扫时，下一件的条码会打进数量框（框是全选的）。记下这一串按键：
+    // 回车时若像条码，就把数量框恢复成打字前的数，按那个数确认上一件，再把这串当作下一次扫码。
+    var burst = { text: '', gaps: [], last: 0, before: '' };
     q.addEventListener('keydown', function (e) {
-      if (e.key === 'Enter') { e.preventDefault(); if (!e.repeat) confirmPending(); }
-      else if (e.key === 'Escape') { e.preventDefault(); cancelPending(); }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        if (e.repeat) return;
+        var typed = burst.text, gaps = burst.gaps, before = burst.before;
+        burst = { text: '', gaps: [], last: 0, before: '' };
+        if (typed && window.ScanFeedback && ScanFeedback.looksLikeScan(typed, gaps)
+            && String(q.value || '').trim().slice(-typed.length) === typed) {
+          q.value = before;
+          if (pendingQty() === null) q.value = '1';
+          runSerial(function () { return submitScan(typed); });
+          return;
+        }
+        confirmPending();
+      } else if (e.key === 'Escape') { e.preventDefault(); burst = { text: '', gaps: [], last: 0, before: '' }; cancelPending(); }
+      else if (e.key && e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
+        var now = Date.now();
+        if (!burst.text || now - burst.last > 300) {
+          // 新的一串：框里全选时这次按键会覆盖原数，先记下原数
+          burst = { text: '', gaps: [], last: now, before: String(q.value || '') };
+        } else burst.gaps.push(now - burst.last);
+        burst.text += e.key; burst.last = now;
+      } else if (e.key === 'Backspace' || e.key === 'Delete') burst = { text: '', gaps: [], last: 0, before: '' };
     });
     // 数量框失焦不自动确认（避免误触）。只有当用户没在操作别的控件时才把光标拉回来，
     // 否则点表格里的按钮会被不停抢焦点。
@@ -972,12 +995,15 @@
     return postConfirm(p, q).then(function (r) {
       if (!r.ok) { if (r.code === 'NATIVE_RECORDING_BLOCKED') restorePending(p, q); handleFail(r); refocus(); return; }
       S.lines = r.lines; if (r.items) S.items = r.items; S.progress = r.progress;
+      if (r.receiving_round) S.receiving_round = r.receiving_round;
       renderLines(); renderPoItems(); renderStatus();
       var sid = (r.item && r.item.sku_id) || (p.choose && p.choose.sku_id);
       if (sid) flashPoItem(sid);
       var nm = (r.item && r.item.name) ? r.item.name : p.label;
       if (r.unmatched) {
         flash((r.resolved ? '⚠ 采购单无此商品：' : '⚠ 未识别商品已记入差异：') + nm + '  →  ' + fmtNum(q), 'warn'); beep(200, 0.14);
+      } else if (r.over_receipt) {
+        flash('⚠ ' + ScanFeedback.overText(r.over_receipt), 'warn'); beep(200, 0.14);
       } else {
         flash(nm + '  →  ' + fmtNum(q), 'ok'); beep(1318, 0.06);
       }
@@ -1109,11 +1135,12 @@
         S.lines = r.lines;
         if (r.items) S.items = r.items;
         S.progress = r.progress;
+        if (r.receiving_round) S.receiving_round = r.receiving_round;
         renderLines(); renderPoItems(); renderStatus();
         var sid = (r.item && r.item.sku_id) || (p.choose && p.choose.sku_id);
         if (sid) flashPoItem(sid);
-        flash((r.item && r.item.name ? r.item.name : p.label) + '  →  ' + fmtNum(r.added || q), 'ok');
-        beep(1318, 0.06);
+        if (r.over_receipt) { flash('⚠ ' + ScanFeedback.overText(r.over_receipt), 'warn'); beep(200, 0.14); }
+        else { flash((r.item && r.item.name ? r.item.name : p.label) + '  →  ' + fmtNum(r.added || q), 'ok'); beep(1318, 0.06); }
       } else if (!r.ok) {
         if (r.code === 'NATIVE_RECORDING_BLOCKED') {
           restorePending(p, q);

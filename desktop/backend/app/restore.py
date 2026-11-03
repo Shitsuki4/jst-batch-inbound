@@ -152,10 +152,14 @@ def verify(backup_dir):
 def _counts(path):
     if not Path(path).is_file():
         return None
-    with closing(sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True)) as c:
-        tables = [r[0] for r in c.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")]
-        return {t: c.execute('SELECT COUNT(*) FROM "%s"' % t.replace('"', '""')).fetchone()[0] for t in tables}
+    try:
+        with closing(sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True)) as c:
+            tables = [r[0] for r in c.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")]
+            return {t: c.execute('SELECT COUNT(*) FROM "%s"' % t.replace('"', '""')).fetchone()[0] for t in tables}
+    except sqlite3.Error:
+        # 库损坏读不出行数：预览照常给出（入库记录的读取失败另在 inbound_check_errors 里提醒）
+        return None
 
 
 def _read_io_ids(path):

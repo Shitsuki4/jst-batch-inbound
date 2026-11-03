@@ -2845,6 +2845,24 @@ class Handler(BaseHTTPRequestHandler):
             STORE.client_op_finish(op["id"], dict(ok=True, **kw))
         return self._ok(**kw)
 
+    @staticmethod
+    def _scan_round(sid, sku_id):
+        """扫码入账后的本轮数量：返回 (receiving_round, over_receipt)。
+
+        over_receipt 只在这件商品本轮实收已超过应收时给出，前端据此提示「超收」；
+        采购单外商品另有「采购单无此商品」提示，这里不重复。查询失败不影响已入账的结果。"""
+        try:
+            rnd = STORE.receiving_round(sid)
+        except Exception as e:   # 只用于提示，不能让已入账的扫码返回失败
+            log("receiving_round after scan fail: %s" % e)
+            return None, None
+        key = str(sku_id or "")
+        for row in rnd.get("rows") or []:
+            if str(row.get("sku_id") or "") == key and row.get("over") and not row.get("extra"):
+                return rnd, {"sku_id": key, "name": row.get("name") or key, "plan": row.get("plan"),
+                             "recv": row.get("recv"), "over": row.get("diff")}
+        return rnd, None
+
     def _recheck_target(self, s, bid, mark, op=None):
         """缺码实时查询等远程调用会在锁外进行：回锁后重新校验写入目标，并重查操作编号。
 
@@ -3018,11 +3036,12 @@ class Handler(BaseHTTPRequestHandler):
                             item={k: payload[k] for k in ("sku_id", "name", "spec")},
                             batch_id=bid, msg="已识别商品，待确认数量")
         lid, qty = STORE.add_qty(bid, s["id"], payload, add, op=op)
+        rnd, over = self._scan_round(s["id"], payload["sku_id"])
         return self._ok_op(op, line_id=lid, qty=qty, added=add, via=res.get("via", "barcode"),
                         learned=payload["match_src"] == "learned",
                         item={k: payload[k] for k in ("sku_id", "name", "spec")},
                         lines=cur_lines(s["id"], bid), items=po_items(s["id"]),
-                        progress=STORE.progress(s["id"]))
+                        progress=STORE.progress(s["id"]), receiving_round=rnd, over_receipt=over)
 
     def _post_api_item_choose(self):
         """多候选时人工选定后继续追加"""
@@ -3066,9 +3085,10 @@ class Handler(BaseHTTPRequestHandler):
                    "sku_code": it.get("sku_code", ""), "name": it.get("name", ""),
                    "spec": it.get("spec", ""), "matched": matched, "match_src": it.get("match_src", "")}
         lid, qty = STORE.add_qty(bid, s["id"], payload, add, op=op)
+        rnd, over = self._scan_round(s["id"], it["sku_id"]) if matched else (None, None)
         return self._ok_op(op, line_id=lid, qty=qty, added=add, unmatched=not matched, resolved=True,
                         item=it, lines=cur_lines(s["id"], bid), items=po_items(s["id"]),
-                        progress=STORE.progress(s["id"]))
+                        progress=STORE.progress(s["id"]), receiving_round=rnd, over_receipt=over)
 
     def _post_api_line_edit(self):
         b = self._body()
