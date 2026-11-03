@@ -184,6 +184,7 @@ def main():
                          ("concurrency-fixes", "concurrency_fixes_test.py"),
                          ("lock-refactor", "lock_refactor_test.py"),
                          ("remote-access", "remote_access_test.py"),
+                         ("remote-cpolar", "remote_cpolar_test.py"),
                          ("unplanned-hint", "unplanned_hint_test.py"),
                          ("unplanned-hint-http", "unplanned_hint_http_test.py"),
                          ("restore", "restore_test.py"),

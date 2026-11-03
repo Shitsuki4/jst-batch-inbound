@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""远程管理页（IPv6 直连，只读）。
+"""远程管理页（IPv6 直连 / cpolar 穿透，只读）。
 
 设计要点（安全边界）：
 * 独立监听器，默认关闭；只有在电脑端设置里启用并设好管理员账号密码后才绑定 [::]:端口（IPV6_V6ONLY）。
@@ -9,6 +9,9 @@
 * 录像只按索引里的 ID 访问，客户端永远不能传文件路径；路径逐级校验不越出录像根目录、不跟随链接/联接点。
 * 登录：scrypt 加盐哈希、常量时间比较、按来源（IPv6 按 /64）限速与锁定、全局暴力破解节流、会话 Cookie
   （__Host- 前缀、Secure、HttpOnly、SameSite=Strict）、空闲 / 绝对超时、登出需 CSRF 令牌；审计日志轮转。
+* cpolar 穿透（4.1.9）：另开一个只绑 127.0.0.1 的明文 HTTP 入口，只给本机的 cpolar 客户端转发用，
+  公网那一段由 cpolar 的 https 地址负责。经过 cpolar 的请求来源都是 127.0.0.1，分不出是谁，所以：
+  不拿来源地址做"登录成功过的网络"、陌生设备共用一个限速桶、登录成功过的浏览器靠设备 Cookie 区分。
 """
 import base64
 import collections
@@ -35,6 +38,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from logging.handlers import RotatingFileHandler
 
 DEFAULT_PORT = 18443
+DEFAULT_TUNNEL_PORT = 18480       # cpolar 穿透入口：只绑 127.0.0.1，明文 HTTP，给本机 cpolar 客户端转发
 IDLE_TIMEOUT = 30 * 60            # 30 分钟无操作退出
 ABSOLUTE_TIMEOUT = 12 * 3600      # 登录后最长 12 小时
 MAX_SESSIONS = 32
@@ -46,6 +50,14 @@ GLOBAL_FAIL_WINDOW = 10 * 60
 GLOBAL_FAIL_LIMIT = 30            # 全局 10 分钟内 30 次失败 → 全部登录暂停
 GLOBAL_LOCK_SECONDS = 5 * 60
 TRUSTED_SECONDS = 30 * 24 * 3600   # 30 天内在这个网络登录成功过 → 全局暂停不拦它（别人刷失败锁不住自己人）
+# 经过 cpolar 的请求来源全是 127.0.0.1，没登录成功过的浏览器只能共用一个限速桶。
+# 门槛比单个来源宽一点、锁得短一点：一个人输错几次不至于把所有新设备都关在外面 15 分钟。
+SHARED_KEY = "cpolar:新设备"
+SHARED_FAIL_LIMIT = 10
+SHARED_LOCK_SECONDS = 5 * 60
+SHARED_ATTEMPTS_PER_MIN = 20      # 共用桶里有好几个人同时登录（比如交班时），成功的也算次数，放宽一些
+DEVICE_COOKIE = "__Host-jst_device"   # 登录成功过的浏览器：30 天内凭它单独限速、不受全局暂停影响
+MAX_DEVICES = 256
 MAX_STREAMS = 3                   # 同时播放 / 下载的录像流
 STREAM_WAIT = 5.0
 MAX_CONNECTIONS = 48
@@ -712,6 +724,7 @@ class Guard:
         self.global_fails = collections.deque()
         self.global_until = 0.0
         self.trusted = {}        # key -> 最近一次登录成功的时间
+        self.devices = {}        # 设备令牌的 SHA-256 -> 最近一次登录成功的时间（只在内存，重启后清空）
         self.verify_slots = threading.BoundedSemaphore(2)
 
     def _prune(self, now):
@@ -721,6 +734,7 @@ class Guard:
         self.attempts = {k: v for k, v in self.attempts.items() if v}
         self.locked = {k: v for k, v in self.locked.items() if v > now}
         self.trusted = {k: v for k, v in self.trusted.items() if v > now - TRUSTED_SECONDS}
+        self.devices = {k: v for k, v in self.devices.items() if v > now - TRUSTED_SECONDS}
         while self.global_fails and self.global_fails[0] <= now - GLOBAL_FAIL_WINDOW:
             self.global_fails.popleft()
         self.sessions = {k: v for k, v in self.sessions.items()
@@ -733,26 +747,69 @@ class Guard:
             self._prune(now)
             # 全局暂停只拦没登录成功过的网络：外网有人从很多地址刷密码时，仓库自己常用的网络照样能登录。
             # 每个来源自己的失败锁定、每分钟次数限制照旧，对常用网络也生效。
-            if self.global_until > now and key not in self.trusted:
+            if self.global_until > now and not self._trusted(key):
                 return "登录尝试过多，远程登录已暂时暂停，请稍后再试"
             if self.locked.get(key, 0) > now:
+                if key == SHARED_KEY:
+                    return "经 cpolar 地址登录的新设备失败次数过多，已暂停%d分钟；本浏览器30天内登录成功过的不受影响" % (SHARED_LOCK_SECONDS // 60)
+                if key.startswith("device:"):
+                    return "这个浏览器失败次数过多，已锁定%d分钟" % (LOCK_SECONDS // 60)
                 return "失败次数过多，该网络已锁定15分钟"
             mine = self.attempts.setdefault(key, [])
-            if len(mine) >= ATTEMPTS_PER_MIN:
+            if len(mine) >= (SHARED_ATTEMPTS_PER_MIN if key == SHARED_KEY else ATTEMPTS_PER_MIN):
                 return "登录请求过于频繁，请一分钟后再试"
             mine.append(now)
             return None
 
+    def _trusted(self, key):
+        if key.startswith("device:"):
+            return key[7:] in self.devices
+        return key in self.trusted
+
+    def device_key(self, token, now=None):
+        """浏览器带来的设备令牌还有效 → 返回它自己的限速键；否则 None。"""
+        if not token or len(token) > 128:
+            return None
+        now = time.time() if now is None else now
+        h = hashlib.sha256(token.encode("utf-8", "replace")).hexdigest()
+        with self.lock:
+            t = self.devices.get(h)
+            if t is None or t <= now - TRUSTED_SECONDS:
+                return None
+            return "device:" + h
+
+    def trust_device(self, token=None, now=None):
+        """登录成功：沿用还有效的设备令牌（续期），否则发一个新的。返回明文令牌，只写进浏览器 Cookie。"""
+        now = time.time() if now is None else now
+        h = hashlib.sha256(token.encode("utf-8", "replace")).hexdigest() if token else ""
+        with self.lock:
+            self._prune(now)
+            if not h or h not in self.devices:
+                token = secrets.token_urlsafe(32)
+                h = hashlib.sha256(token.encode()).hexdigest()
+            self.devices[h] = now
+            if len(self.devices) > MAX_DEVICES:
+                for k in sorted(self.devices, key=self.devices.get)[:len(self.devices) - MAX_DEVICES]:
+                    self.devices.pop(k, None)
+        return token
+
+    def forget_devices(self):
+        """改了管理员用户名 / 密码：以前登录成功过的浏览器都不再算数。"""
+        with self.lock:
+            self.devices = {}
+            self.trusted = {}
+
     def failed(self, key, now=None):
         now = time.time() if now is None else now
+        limit, lock_for = (SHARED_FAIL_LIMIT, SHARED_LOCK_SECONDS) if key == SHARED_KEY else (FAIL_LIMIT, LOCK_SECONDS)
         with self.lock:
             self._prune(now)
             mine = self.fails.setdefault(key, [])
             mine.append(now)
             self.global_fails.append(now)
             locked = False
-            if len(mine) >= FAIL_LIMIT:
-                self.locked[key] = now + LOCK_SECONDS
+            if len(mine) >= limit:
+                self.locked[key] = now + lock_for
                 self.fails.pop(key, None)
                 locked = True
             if len(self.global_fails) >= GLOBAL_FAIL_LIMIT:
@@ -764,6 +821,12 @@ class Guard:
     def succeeded(self, key, now=None):
         now = time.time() if now is None else now
         with self.lock:
+            if key == SHARED_KEY or key.startswith("device:"):
+                # 共用桶：一个人登录成功不能替别人清零失败次数，也不能让整个 cpolar 入口变成"登录成功过的网络"。
+                # 设备键：信任记在 devices 里（trust_device），这里只清它自己的失败次数。
+                if key != SHARED_KEY:
+                    self.fails.pop(key, None)
+                return
             self.fails.pop(key, None)
             self.trusted[key] = now
             if len(self.trusted) > 256:  # 只留最近的
@@ -870,6 +933,21 @@ class RemoteServer(ThreadingHTTPServer):
         pass
 
 
+class TunnelServer(RemoteServer):
+    """cpolar 穿透入口：只绑 127.0.0.1，明文 HTTP。只有本机程序（cpolar 客户端）连得上，外网和局域网都连不到。"""
+    address_family = socket.AF_INET
+
+    def verify_request(self, request, client_address):
+        try:
+            return ipaddress.ip_address(str(client_address[0])).is_loopback
+        except ValueError:
+            return False
+
+
+def cpolar_local_address(port):
+    return "127.0.0.1:%d" % port
+
+
 class RemoteHost:
     def __init__(self, data_dir, receipt_db=None, video_root=None, service_port=None):
         self.data = data_dir
@@ -881,6 +959,8 @@ class RemoteHost:
         self.lock = threading.RLock()
         self.server = None
         self.thread = None
+        self.tunnel = None
+        self.tunnel_error = ""
         self.error = ""
         self.fingerprint = ""
         self.bound = ""
@@ -902,8 +982,12 @@ class RemoteHost:
         except (OSError, ValueError):
             c = {}
         port = c.get("port", DEFAULT_PORT)
+        tport = c.get("tunnel_port", DEFAULT_TUNNEL_PORT)
         return {"enabled": bool(c.get("enabled", False)),
                 "port": port if isinstance(port, int) and 1024 <= port <= 65535 else DEFAULT_PORT,
+                "ipv6_enabled": bool(c.get("ipv6_enabled", True)),          # 4.1.8 及以前只有 IPv6 直连，默认保持开
+                "tunnel_enabled": bool(c.get("tunnel_enabled", False)),
+                "tunnel_port": tport if isinstance(tport, int) and not isinstance(tport, bool) and 1024 <= tport <= 65535 else DEFAULT_TUNNEL_PORT,
                 "username": c.get("username", "") if isinstance(c.get("username"), str) else "",
                 "password": c.get("password") if isinstance(c.get("password"), dict) else None,
                 "allow_download": bool(c.get("allow_download", False)),
@@ -938,6 +1022,25 @@ class RemoteHost:
                 raise ValueError("端口必须是1024到65535的整数")
             if self.service_port and port == self.service_port:
                 raise ValueError("端口与本机服务端口相同，请换一个高位端口")
+            ipv6 = body.get("ipv6_enabled", c["ipv6_enabled"])
+            tunnel = body.get("tunnel_enabled", c["tunnel_enabled"])
+            if not isinstance(ipv6, bool) or not isinstance(tunnel, bool):
+                raise ValueError("访问方式开关格式无效")
+            tport = body.get("tunnel_port", c["tunnel_port"])
+            if isinstance(tport, bool):
+                raise ValueError("cpolar 入口端口必须是1024到65535的整数")
+            try:
+                tport = int(tport)
+            except (TypeError, ValueError):
+                raise ValueError("cpolar 入口端口必须是1024到65535的整数")
+            if not 1024 <= tport <= 65535:
+                raise ValueError("cpolar 入口端口必须是1024到65535的整数")
+            if tport == port:
+                raise ValueError("cpolar 入口端口不能和 IPv6 直连端口相同")
+            if self.service_port and tport == self.service_port:
+                raise ValueError("cpolar 入口端口不能用本机收货服务的端口（%d）：那是完整的收货界面，不能穿透出去" % self.service_port)
+            if enabled and not ipv6 and not tunnel:
+                raise ValueError("请至少选一种访问方式：IPv6 直连或 cpolar 穿透")
             username = body.get("username", c["username"])
             if not isinstance(username, str) or not USERNAME.match(username.strip()):
                 raise ValueError("管理员用户名需为1～32位字母、数字或 _ . @ -")
@@ -958,16 +1061,20 @@ class RemoteHost:
             if password or username != c["username"]:
                 generation = secrets.token_hex(8)
             new = {"enabled": enabled, "port": port, "username": username, "password": record,
-                   "allow_download": allow, "generation": generation}
+                   "allow_download": allow, "generation": generation,
+                   "ipv6_enabled": ipv6, "tunnel_enabled": tunnel, "tunnel_port": tport}
             self._write_config(new)
             if generation != c["generation"]:
                 self.guard.clear()
-            changes = [k for k in ("enabled", "port", "username", "allow_download") if old[k] != new[k]]
+                self.guard.forget_devices()
+            changes = [k for k in ("enabled", "port", "username", "allow_download", "ipv6_enabled", "tunnel_enabled", "tunnel_port")
+                       if old[k] != new[k]]
             if password:
                 changes.append("password")
             self.log("设置已更新：%s" % (",".join(changes) or "无变化"))
-            restart = old["enabled"] != enabled or old["port"] != port or bool(password) or username != old["username"]
-            if restart or (enabled and not self.server):
+            restart = (old["enabled"] != enabled or old["port"] != port or bool(password) or username != old["username"]
+                       or old["ipv6_enabled"] != ipv6 or old["tunnel_enabled"] != tunnel or old["tunnel_port"] != tport)
+            if restart or (enabled and not self.server and not self.tunnel):
                 self.stop()
                 if enabled:
                     self.start()
@@ -1063,26 +1170,40 @@ class RemoteHost:
 
     def start(self):
         with self.lock:
-            if self.server:
+            if self.server or self.tunnel:
                 return self.status()
             c = self.config()
             if not c["enabled"] or not c["password"] or not c["username"]:
                 return self.status()
-            try:
-                ctx = self.certificate()
-                srv = RemoteServer((self.bind_host(), c["port"], 0, 0), make_handler(self), self)
-                srv.socket = ctx.wrap_socket(srv.socket, server_side=True, do_handshake_on_connect=False)
-            except Exception as e:
-                self.error = "远程管理页未能启动：%s" % e
-                self.log(self.error)
-                return self.status()
-            self.server = srv
-            self.error = ""
-            self.bound = "[%s]:%d" % (srv.server_address[0], srv.server_address[1])
-            self.thread = threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.3},
-                                           daemon=True, name="remote-https")
-            self.thread.start()
-            self.log("监听已启动 %s" % self.bound)
+            self.error = self.tunnel_error = ""
+            if c["ipv6_enabled"]:
+                try:
+                    ctx = self.certificate()
+                    srv = RemoteServer((self.bind_host(), c["port"], 0, 0), make_handler(self), self)
+                    srv.socket = ctx.wrap_socket(srv.socket, server_side=True, do_handshake_on_connect=False)
+                except Exception as e:
+                    self.error = "远程管理页（IPv6 直连）未能启动：%s" % e
+                    self.log(self.error)
+                else:
+                    self.server = srv
+                    self.bound = "[%s]:%d" % (srv.server_address[0], srv.server_address[1])
+                    self.thread = threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.3},
+                                                   daemon=True, name="remote-https")
+                    self.thread.start()
+                    self.log("监听已启动 %s" % self.bound)
+            if c["tunnel_enabled"]:
+                try:
+                    tsrv = TunnelServer(("127.0.0.1", c["tunnel_port"]), make_handler(self, tunnel=True), self)
+                except Exception as e:
+                    self.tunnel_error = "cpolar 穿透入口未能启动（127.0.0.1:%d）：%s" % (c["tunnel_port"], e)
+                    self.log(self.tunnel_error)
+                else:
+                    self.tunnel = tsrv
+                    threading.Thread(target=tsrv.serve_forever, kwargs={"poll_interval": 0.3},
+                                     daemon=True, name="remote-cpolar").start()
+                    self.log("cpolar 穿透入口已启动 127.0.0.1:%d（只接受本机连接）" % tsrv.server_address[1])
+            if not self.error and self.tunnel_error and not c["ipv6_enabled"]:
+                self.error = self.tunnel_error
             return self.status()
 
     def start_if_enabled(self):
@@ -1095,12 +1216,17 @@ class RemoteHost:
     def stop(self):
         with self.lock:
             srv, self.server = self.server, None
+            tsrv, self.tunnel = self.tunnel, None
             self.guard.clear()
             if srv:
                 srv.shutdown()
                 srv.server_close()
                 self.log("监听已停止 %s" % self.bound)
                 self.bound = ""
+            if tsrv:
+                tsrv.shutdown()
+                tsrv.server_close()
+                self.log("cpolar 穿透入口已停止")
 
     def port(self):
         return self.server.server_address[1] if self.server else 0
@@ -1110,7 +1236,11 @@ class RemoteHost:
         addrs = global_ipv6_addresses()
         port = self.port() or c["port"]
         program = sys.executable if getattr(sys, "frozen", False) else ""
-        return {"enabled": c["enabled"], "running": bool(self.server), "port": port,
+        tport = self.tunnel.server_address[1] if self.tunnel else c["tunnel_port"]
+        return {"enabled": c["enabled"], "running": bool(self.server or self.tunnel), "port": port,
+                "ipv6_enabled": c["ipv6_enabled"], "ipv6_running": bool(self.server),
+                "tunnel_enabled": c["tunnel_enabled"], "tunnel_running": bool(self.tunnel), "tunnel_port": tport,
+                "tunnel_error": self.tunnel_error, "cpolar_local_address": cpolar_local_address(tport),
                 "username": c["username"], "has_password": bool(c["password"]),
                 "allow_download": c["allow_download"], "addresses": addrs,
                 "urls": ["https://[%s]:%d/" % (a, port) for a in addrs],
@@ -1157,7 +1287,8 @@ def _range(header, size):
     return max(0, size - n), size - 1
 
 
-def make_handler(host):
+def make_handler(host, tunnel=False):
+    """tunnel=True：cpolar 穿透入口（127.0.0.1 明文 HTTP）。来源地址永远是本机，不能拿来区分访问者。"""
     web = _web_dir()
 
     class Handler(BaseHTTPRequestHandler):
@@ -1172,6 +1303,22 @@ def make_handler(host):
         def ip(self):
             return str(self.client_address[0]).split("%", 1)[0]
 
+        @property
+        def who(self):
+            """写进审计日志的来源。经 cpolar 时来源都是 127.0.0.1；X-Forwarded-For 是浏览器那头也能伪造的，只作参考。"""
+            if not tunnel:
+                return self.ip
+            xff = re.sub(r"[^0-9A-Fa-f:., ]", "", self.headers.get("X-Forwarded-For", ""))[:80]
+            return "cpolar" + ("（X-Forwarded-For=%s，未核实）" % xff if xff else "")
+
+        def limit_key(self):
+            """登录限速 / 锁定按谁算：30 天内登录成功过的浏览器按设备算；
+            经 cpolar 的新设备共用一个桶（来源地址分不出人）；IPv6 直连照旧按来源网络算。"""
+            dev = host.guard.device_key(self.cookie_token(DEVICE_COOKIE))
+            if dev:
+                return dev
+            return SHARED_KEY if tunnel else ip_key(self.ip)
+
         def headers_common(self, extra=None):
             h = {"X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer", "X-Frame-Options": "DENY",
                  "Content-Security-Policy": CSP, "Cross-Origin-Opener-Policy": "same-origin",
@@ -1185,7 +1332,8 @@ def make_handler(host):
                 body = body.encode("utf-8")
             self.send_response(code)
             for k, v in self.headers_common(extra).items():
-                self.send_header(k, v)
+                for one in (v if isinstance(v, (list, tuple)) else [v]):
+                    self.send_header(k, one)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
@@ -1223,11 +1371,11 @@ def make_handler(host):
                 pass
             self.json(d, code, extra)
 
-        def cookie_token(self):
+        def cookie_token(self, name=COOKIE):
             c = SimpleCookie()
             try:
                 c.load(self.headers.get("Cookie") or "")
-                return c[COOKIE].value
+                return c[name].value
             except Exception:
                 return ""
 
@@ -1239,9 +1387,14 @@ def make_handler(host):
             origin = self.headers.get("Origin")
             if self.headers.get("Sec-Fetch-Site") not in (None, "same-origin", "none"):
                 return False
-            if origin is not None and origin != "https://" + hostname:
-                return False
-            return True
+            if origin is None:
+                return True
+            if origin == "https://" + hostname:
+                return True
+            # cpolar 入口在收货电脑本机用 http://127.0.0.1:端口 打开测试时，浏览器发的是 http 来源
+            if tunnel and origin == "http://" + hostname and re.match(r"^(127\.0\.0\.1|localhost)(:\d+)?$", hostname):
+                return True
+            return False
 
         def read_body(self, limit):
             if self.headers.get("Transfer-Encoding"):
@@ -1342,7 +1495,7 @@ def make_handler(host):
                     if not hmac.compare_digest(token.encode(), s["csrf"].encode()):
                         return self.fail("请求令牌无效，请刷新页面", 403)
                     host.guard.drop(s["key"])
-                    host.log("退出登录 用户=%s" % s["user"], self.ip)
+                    host.log("退出登录 用户=%s" % s["user"], self.who)
                     return self.json({"ok": True}, extra={"Set-Cookie": COOKIE + "=; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=0"})
                 return self.fail("接口不存在", 404)
             except (BrokenPipeError, ConnectionResetError, ssl.SSLError, socket.timeout, TimeoutError):
@@ -1364,14 +1517,14 @@ def make_handler(host):
             self.send(200, body, ctype)
 
         def login(self):
-            key = ip_key(self.ip)
+            key = self.limit_key()
             try:
                 body = self.read_body(LOGIN_BODY_MAX)
             except (ValueError, UnicodeError):
                 return self.fail("请求格式错误", 400)
             reason = host.guard.admit(key)
             if reason:
-                host.log("登录被拒（限速/锁定）", self.ip)
+                host.log("登录被拒（限速/锁定）", self.who)
                 return self.fail(reason, 429, {"Retry-After": "60"})
             user = body.get("username")
             password = body.get("password")
@@ -1383,14 +1536,20 @@ def make_handler(host):
             ok_user = hmac.compare_digest(user.strip().encode("utf-8"), c["username"].encode("utf-8"))
             if not (ok_pw and ok_user and c["username"]):
                 locked = host.guard.failed(key)
-                host.log("登录失败 用户=%s%s" % (user[:32], "（已触发锁定）" if locked else ""), self.ip)
+                host.log("登录失败 用户=%s%s" % (user[:32], "（已触发锁定）" if locked else ""), self.who)
                 time.sleep(0.4)
-                return self.fail("用户名或密码错误" + ("；失败次数过多，已锁定15分钟" if locked else ""), 401)
+                lock_note = ("；经 cpolar 地址登录的新设备失败次数过多，已暂停%d分钟" % (SHARED_LOCK_SECONDS // 60) if key == SHARED_KEY
+                             else "；失败次数过多，已锁定%d分钟" % (LOCK_SECONDS // 60))
+                return self.fail("用户名或密码错误" + (lock_note if locked else ""), 401)
             host.guard.succeeded(key)
-            token = host.guard.create(c["username"], c["generation"], self.ip)
-            host.log("登录成功 用户=%s" % c["username"], self.ip)
-            return self.json({"ok": True}, extra={
-                "Set-Cookie": COOKIE + "=" + token + "; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=%d" % ABSOLUTE_TIMEOUT})
+            if not tunnel and key.startswith("device:"):
+                host.guard.succeeded(ip_key(self.ip))      # IPv6 直连：这个网络照旧记为登录成功过
+            device = host.guard.trust_device(self.cookie_token(DEVICE_COOKIE))
+            token = host.guard.create(c["username"], c["generation"], self.who)
+            host.log("登录成功 用户=%s" % c["username"], self.who)
+            return self.json({"ok": True}, extra={"Set-Cookie": [
+                COOKIE + "=" + token + "; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=%d" % ABSOLUTE_TIMEOUT,
+                DEVICE_COOKIE + "=" + device + "; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=%d" % TRUSTED_SECONDS]})
 
         # ---------- 数据 ----------
         @staticmethod
@@ -1464,7 +1623,7 @@ def make_handler(host):
         def media(self, vid, q, s):
             download = q.get("download") == "1"
             if download and not host.config()["allow_download"]:
-                host.log("拒绝下载（未允许） 录像=%s" % vid, self.ip)
+                host.log("拒绝下载（未允许） 录像=%s" % vid, self.who)
                 return self.fail("电脑端未允许下载录像，仅可在线播放", 403)
             item = host.videos.get(vid)
             path = host.videos.media_path(item) if item else None
@@ -1492,7 +1651,7 @@ def make_handler(host):
                         host.viewed[marker] = now
                         if len(host.viewed) > 2000:
                             host.viewed.clear()
-                        host.log("%s 录像=%s 物流=%s 用户=%s" % ("下载" if download else "观看", vid, item["tracking"][:60], s["user"]), self.ip)
+                        host.log("%s 录像=%s 物流=%s 用户=%s" % ("下载" if download else "观看", vid, item["tracking"][:60], s["user"]), self.who)
                 self.send_response(206 if rng else 200)
                 extra = {"Accept-Ranges": "bytes", "Cache-Control": "private, no-store"}
                 if download:

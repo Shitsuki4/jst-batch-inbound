@@ -1,5 +1,7 @@
 /* 远程管理页：只读。所有文本一律 textContent 渲染，不拼接 HTML。 */
 (function(){'use strict';
+ // cpolar 的 http 地址：登录 Cookie 只在 https 下保存，先跳到同一个地址的 https 版（收货电脑本机自测除外）
+ if(location.protocol==='http:'&&!/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname)){location.replace('https://'+location.host+location.pathname+location.search+location.hash);return;}
  const $=id=>document.getElementById(id);
  const TYPES={po:'采购单收货',unplanned:'无采购单收货',joint:'联合收货',express:'快递单登记'};
  const STATES={active:'收货中',paused:'挂起',closed:'已结单'};
