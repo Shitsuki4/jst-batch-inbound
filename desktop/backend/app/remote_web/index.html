@@ -18,14 +18,14 @@
 <main>
   <section id="login-view" class="card login" hidden>
     <h1>管理员登录</h1>
-    <p class="hint">只读查看收货历史与录像。连续输错5次会锁定15分钟。</p>
+    <p class="hint">只读查看收货历史与录像。连续输错多次会暂时锁定（本浏览器登录成功过的不受别人输错影响）。</p>
     <form id="login-form" autocomplete="on">
       <label>用户名<input id="login-user" name="username" autocomplete="username" required maxlength="32" autocapitalize="off" spellcheck="false"></label>
       <label>密码<input id="login-pass" name="password" type="password" autocomplete="current-password" required maxlength="128"></label>
       <button class="btn primary" type="submit" id="login-btn">登录</button>
       <p class="msg" id="login-msg" role="alert"></p>
     </form>
-    <p class="hint small">请核对浏览器证书警告中的 SHA-256 指纹与电脑端「设置 → 远程管理页」显示的一致后再继续。</p>
+    <p class="hint small">用 IPv6 直连地址打开时，请核对浏览器证书警告中的 SHA-256 指纹与电脑端「设置 → 远程管理页」显示的一致后再继续；用 cpolar 的 https 地址打开不会有证书警告。</p>
   </section>
 
   <section id="app-view" hidden>
