@@ -1083,7 +1083,8 @@ STATE_LOCK.register_audit(lambda: _locked_connections(audit=True))
 
 def rematch_other_inbound(po_id, owner, auth):
     """新采购单在其他收货方式（无采购单 / 联合）里有没有入库记录；有则返回那种方式的名字。"""
-    sql = ("SELECT 1 FROM inbound_job j JOIN session s ON s.id=j.session_id WHERE j.status<>'rejected'"
+    # 4.1.8：只拦还没处理完的入库记录；那边已完成的入库是另一批货，换过来不会重复（同物流单号另有核对）
+    sql = ("SELECT 1 FROM inbound_job j JOIN session s ON s.id=j.session_id WHERE j.status NOT IN ('rejected','complete')"
            " AND s.po_id=? AND COALESCE(s.owner_co_id,'')=? AND COALESCE(s.auth_co_id,'')=? LIMIT 1")
     args = (str(po_id), str(owner or ""), str(auth or ""))
     for name, store in purchase_sources().items():
@@ -1106,9 +1107,18 @@ def cross_receipt_guard(store,sid):
         j=dict(row)
         if store is JOINT.store and j['session_id']==sid:continue
         if identity(j)!=identity(target):continue
-        own=JOINT.store.db.execute('SELECT group_sid FROM joint_stage WHERE sid=?',(sid,)).fetchone() if store is JOINT.store else None
-        if not own or own[0]!=j['group_sid'] or j['status']!='complete':
-            raise ValueError('此采购单在其他来源 / 联合批次已有入库或待核实记录，请核对并继续原单，禁止重复开单')
+        # 4.1.8：联合收货里已完成、物流单号不同的入库不再拦（分批到货可以换收货方式）；
+        # 还没处理完的入库记录、或同一物流单号已在联合收货入过库，照旧拦下。
+        if j['status']!='complete':
+            raise ValueError('[E-INB-2012] 此采购单在联合收货里还有没处理完的入库记录（创建中或待核实），请先处理完再生成，禁止重复开单')
+        try:
+            nos={str(b.get('tracking_no') or '').strip().upper() for b in (json.loads(j.get('snapshot_json') or '{}').get('batches') or [])}
+        except (TypeError,ValueError):
+            nos=set()
+        mine={str(b['tracking_no'] or '').strip().upper() for b in store.batches(sid)}
+        same=sorted((mine&nos)-{''})
+        if same:
+            raise ValueError('[E-INB-1001] 物流单号 %s 已在联合收货生成过入库单，同一批货不能再入库一次'%'、'.join(same))
 INBOUND.cross_guard=cross_receipt_guard
 
 def scan_step():
@@ -1316,6 +1326,25 @@ def web_session_value(token):
 
 def same_secret(given, expected):
     return bool(given) and bool(expected) and hmac.compare_digest(str(given).encode("utf-8"), str(expected).encode("utf-8"))
+
+
+def mark_draft_qty(row, items):
+    """新开一轮前读聚水潭里这张采购单还没确认的入库草稿，按商品写进 draft_qty（基线里据此扣应收）。
+
+    分批到货时上一批的草稿还没确认，ERP 已入库数不含它；不扣的话第二批会被当成「没收够」继续收。
+    读不到时标 draft_unknown，本轮页面提示应收可能偏多，不拦收货。"""
+    try:
+        api = INBOUND.context({"owner_co_id": row.get("owner_co_id"), "auth_co_id": row.get("auth_co_id")})
+        drafts = api.draft_qty(row["po_id"])
+    except Exception as e:
+        log("draft qty fail po=%s: %s" % (row.get("po_id"), e))
+        for it in items:
+            it["draft_unknown"] = True
+        return
+    for it in items:
+        q = drafts.pop(str(it.get("sku_id") or ""), None)   # 同一商品多行时只扣在第一行
+        if q:
+            it["draft_qty"] = str(q)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -2262,7 +2291,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             job = INBOUND.create(int(b.get("sid") or 0), str(b.get("fingerprint") or ""), str(b["wh_id"]), mode=b.get("mode"))
             return self._ok(job={k: v for k, v in job.items() if k != "snapshot_json"},
-                            msg="已按实收生成待入库单 %s（未自动确认入库）" % job["io_id"])
+                            msg="；".join(["已按实收生成待入库单 %s（未自动确认入库）" % job["io_id"]] + list(job.get("notes") or [])))
         except Exception as e:
             return self._fail(str(e))
 
@@ -2273,7 +2302,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             job = INBOUND.resume(int(b.get("job_id") or 0), str(b.get("io_id") or "").strip())
             return self._ok(job={k: v for k, v in job.items() if k != "snapshot_json"},
-                            msg="入库单 %s 已完成实收数量核对（未自动确认入库）" % job["io_id"])
+                            msg="；".join(["入库单 %s 已完成实收数量核对（未自动确认入库）" % job["io_id"]] + list(job.get("notes") or [])))
         except Exception as e:
             return self._fail(str(e))
 
@@ -2660,6 +2689,8 @@ class Handler(BaseHTTPRequestHandler):
                 msg="该采购单上一轮已结束。新一轮按当前ERP剩余量作为应收，历史实收不计入新一轮。请先核对上轮收货是否已在ERP处理完毕；未完成入库的旧货不要在新一轮重复扫描。")
         row["owner_co_id"] = ctx["owner"]
         row["auth_co_id"] = ctx["auth"]
+        if not existing or was_closed:
+            mark_draft_qty(row, items)
         sid = STORE.open_session(no, row["po_id"], ctx["id_type"], row, items)
         STORE.set_kv("po_refreshed_at:" + str(sid), time.strftime("%Y-%m-%d %H:%M:%S"))
         STORE.activate_session(sid)

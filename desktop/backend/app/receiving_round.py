@@ -30,8 +30,10 @@ def aggregate(items):
         sku = str(it.get("sku_id") or "")
         key = sku or "__missing_sku:" + str(it.get("poi_id") or i)
         row = rows.setdefault(key, dict(it, sku_id=sku, ordered=Decimal(0),
-            erp_received=Decimal(0), sku_codes=[], auxiliary_codes=[], row_count=0, original_index=i))
+            erp_received=Decimal(0), draft=Decimal(0), sku_codes=[], auxiliary_codes=[], row_count=0, original_index=i))
         row["row_count"] += 1
+        # 开轮时聚水潭里还没确认的入库草稿（4.1.8 起写入基线），不计入 ERP 已入库，但要从应收里扣
+        row["draft"] += number(it.get("draft_qty")) or Decimal(0)
         for field, out in (("qty", "ordered"), ("in_qty", "erp_received")):
             n = number(it.get(field)) if it.get(field + "_known") and sku else None
             row[out] = row[out] + n if row[out] is not None and n is not None else None
@@ -58,7 +60,7 @@ def round_targets(session):
         if key.startswith("__missing_sku:"):
             continue
         if start["ordered"] is not None and start["erp_received"] is not None:
-            out[key] = max(start["ordered"] - start["erp_received"], Decimal(0))
+            out[key] = max(start["ordered"] - start["erp_received"] - start["draft"], Decimal(0))
     return out
 
 
@@ -81,6 +83,12 @@ def view(store, sid):
     def warn(message):
         if message not in warnings: warnings.append(message)
     if legacy: warn("旧记录缺少本轮起始基线，应收和差额待核实；原收货记录保留。")
+    drafts = sum((r["draft"] for r in initial.values()), Decimal(0))
+    if drafts:
+        warn("开始本轮时聚水潭里还有未确认的入库草稿（共 %s 件），已从本轮应收里扣掉；草稿若被作废，请重新开一轮或在聚水潭核对。"
+             % (drafts.normalize() if drafts != drafts.to_integral_value() else int(drafts)))
+    if any(it.get("draft_unknown") for it in load(baseline)):
+        warn("开始本轮时没能读取聚水潭里未确认的入库草稿，本轮应收可能偏多；请到聚水潭核对这张采购单待入库的单据。")
     for key in keys:
         start, live, got = initial.get(key), latest.get(key), received.get(key)
         meta = live or start or got or {}
@@ -88,7 +96,7 @@ def view(store, sid):
         extra = not start and not live and bool(got)
         if not legacy:
             if start and start["ordered"] is not None and start["erp_received"] is not None:
-                target = max(start["ordered"] - start["erp_received"], Decimal(0))
+                target = max(start["ordered"] - start["erp_received"] - start["draft"], Decimal(0))
             elif extra:
                 target = Decimal(0)
             else:

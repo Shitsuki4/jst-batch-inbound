@@ -170,5 +170,37 @@ class TrackingSearchTests(unittest.TestCase):
         self.assertEqual(self.nb.registrations(self.s, '_'), [])
 
 
+
+class TrackingCaseTests(unittest.TestCase):
+    """4.1.8：同一物流单号大小写不同不再拆成两个批次；按物流单号导出转义通配符。"""
+    def setUp(self):
+        import tempfile
+        from store import Store
+        self.tmp = tempfile.TemporaryDirectory()
+        self.st = Store(os.path.join(self.tmp.name, 'jst.db'))
+        self.sid = self.st.open_session('PO-1', 'PO-1', 'po_id', {}, [{'poi_id': '1', 'sku_id': 'A', 'name': 'A', 'qty': 5}])
+
+    def tearDown(self):
+        self.st.db.close()
+        self.tmp.cleanup()
+
+    def test_case_insensitive_batch(self):
+        b1, created1 = self.st.ensure_batch(self.sid, 'SF123')
+        b2, created2 = self.st.ensure_batch(self.sid, ' sf123 ')
+        self.assertTrue(created1)
+        self.assertFalse(created2)
+        self.assertEqual(b1['id'], b2['id'])
+        other, _ = self.st.ensure_batch(self.sid, 'YT9')
+        with self.assertRaises(ValueError):
+            self.st.rename_batch(other['id'], 'sf123')
+
+    def test_export_by_tracking_escapes_wildcards(self):
+        b, _ = self.st.ensure_batch(self.sid, 'SF_1')
+        self.st.add_qty(b['id'], self.sid, {'sku_id': 'A', 'name': 'A', 'poi_id': '1'}, 1)
+        c, _ = self.st.ensure_batch(self.sid, 'SFX1')
+        self.st.add_qty(c['id'], self.sid, {'sku_id': 'A', 'name': 'A', 'poi_id': '1'}, 1)
+        rows = self.st.export_rows('tracking', ' SF_1 ')
+        self.assertEqual({r[1] for r in rows}, {'SF_1'})
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

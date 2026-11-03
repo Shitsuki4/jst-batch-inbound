@@ -6,6 +6,7 @@
 """
 import hashlib
 import json
+import re
 from decimal import Decimal, InvalidOperation
 from urllib.parse import urlencode
 from jst import CallbackRejected
@@ -96,6 +97,111 @@ class PurchaseInAPI:
             row = find(wh["id"])
             if row: return row
         raise InboundError("未能在原货主/仓储公司及附属仓下找到该入库单，请检查账号及单号")
+
+    LIVE_STATUSES = ("待入库", "已入库")
+    REMARK_TAG = "物流单号:"
+
+    def po_inbounds(self, po_id, max_pages=8):
+        """该采购单在聚水潭里的采购入库单（主仓和各附属仓），只读。
+
+        分批到货时用来核对：别的电脑是否已为同一物流单号开过单，以及还没确认的入库草稿。"""
+        po_id = text(po_id)
+        out, seen = [], set()
+
+        def scan(wh_id=""):
+            filters = [{"k": "o_id", "v": po_id, "c": "@="}]
+            fields = dict(self.fields)
+            if wh_id:
+                filters.append({"k": "wh_id", "v": wh_id, "c": "="})
+                fields["wh_id"] = wh_id
+            for page in range(1, max_pages + 1):
+                result = self.client.callback(self.list_url, "LoadDataToJSON",
+                    [str(page), json_text(filters), "{}"], fields=fields, page_size=25)
+                if not isinstance(result, dict) or not isinstance(result.get("datas", []), list):
+                    raise InboundError("入库单列表响应异常，不能核对同一采购单的其他入库单")
+                rows = result.get("datas") or []
+                for r in rows:
+                    io = text(r.get("io_id"))
+                    if io and io not in seen and text(r.get("o_id")) == po_id:
+                        seen.add(io)
+                        out.append(r)
+                if len(rows) < 25:
+                    break
+
+        scan()
+        for wh in self.warehouses():
+            scan(wh["id"])
+        return out
+
+    @classmethod
+    def remark_tracking(cls, remark):
+        """从入库单备注里取出小助手写入的物流单号（大小写不敏感，统一转大写）。"""
+        remark = text(remark)
+        i = remark.find(cls.REMARK_TAG)
+        if i < 0:
+            return set()
+        tail = remark[i + len(cls.REMARK_TAG):]
+        tail = re.split(r"[（(]", tail, 1)[0]
+        return {t.strip().upper() for t in re.split(r"[、,，;；\s]+", tail) if t.strip()}
+
+    @classmethod
+    def remark_text(cls, tracking_nos, sid=None):
+        nos = [text(t) for t in tracking_nos if text(t)]
+        if not nos:
+            return ""
+        return cls.REMARK_TAG + " " + "、".join(nos) + ("（收货小助手 #%s）" % sid if sid else "（收货小助手）")
+
+    def tracking_conflicts(self, po_id, tracking_nos, exclude=()):
+        """其他电脑已为这些物流单号开过、仍有效（待入库/已入库）的入库单：[(物流单号, 入库单号, 状态)]。"""
+        want = {text(t).upper() for t in tracking_nos if text(t)}
+        if not want:
+            return []
+        exclude = {text(x) for x in exclude}
+        hits = []
+        for r in self.po_inbounds(po_id):
+            io = text(r.get("io_id"))
+            if io in exclude or text(r.get("status")) not in self.LIVE_STATUSES:
+                continue
+            for t in sorted(want & self.remark_tracking(r.get("remark"))):
+                hits.append((t, io, text(r.get("status"))))
+        return hits
+
+    def draft_qty(self, po_id):
+        """聚水潭里该采购单还没确认（待入库）的入库草稿，按商品编码合计数量。"""
+        totals = {}
+        for r in self.po_inbounds(po_id):
+            if text(r.get("status")) != "待入库":
+                continue
+            for d in self.details(text(r.get("io_id"))):
+                sku = text(d.get("sku_id"))
+                if not sku:
+                    continue
+                try:
+                    q = quantity(d.get("qty"))
+                except InboundError:
+                    raise InboundError("入库草稿 %s 的数量无法识别" % text(r.get("io_id")))
+                totals[sku] = totals.get(sku, Decimal(0)) + q
+        return totals
+
+    def tag_remark(self, io_id, tracking_nos, sid=None):
+        """把物流单号写进入库单备注（保留原备注）。返回 None 表示已写好，否则返回没写成的原因。"""
+        tag = self.remark_text(tracking_nos, sid)
+        if not tag:
+            return None
+        row = self.row(io_id)
+        if text(row.get("status")) != "待入库":
+            return "入库单已不是待入库状态，没有改备注"
+        old = text(row.get("remark"))
+        have = self.remark_tracking(old)
+        if {text(t).upper() for t in tracking_nos if text(t)} <= have:
+            return None
+        payload = dict(row)
+        payload["remark"] = (old + " " + tag).strip() if old else tag
+        self.client.callback(self.list_url, "Save", [json_text(payload)], fields=self.fields)
+        after = self.row(io_id)
+        if not ({text(t).upper() for t in tracking_nos if text(t)} <= self.remark_tracking(after.get("remark"))):
+            return "聚水潭没有保存备注"
+        return None
 
     def details(self, io_id):
         url = self.detail_url(io_id)
@@ -415,6 +521,21 @@ class InboundService:
                     raise InboundError("商品 %s 在最新采购单中不存在或有多行，不能自动确定采购明细/成本" % p["sku_id"])
         # Check every SKU before reserving batches or creating an empty ERP draft.
         api.validate_products(snapshot)
+        # 分批到货、两台电脑各收一批时，本地账本互相看不到。开单前到聚水潭核对：
+        # 同一采购单下已有备注里写着同一物流单号、仍有效的入库单，就是别的电脑开过了，不能再开。
+        notes = []
+        tracking = [b["tracking_no"] for b in snapshot["batches"] if text(b.get("tracking_no"))]
+        if tracking:
+            own = {text(j.get("io_id")) for j in preview["jobs"] if text(j.get("io_id"))}
+            try:
+                hits = api.tracking_conflicts(snapshot["po_id"], tracking, exclude=own)
+            except Exception as e:
+                hits = None
+                notes.append("未能到聚水潭核对其他电脑是否已为这些物流单号开过入库单（%s），请人工确认没有重复入库" % e)
+            if hits:
+                raise InboundError("[E-INB-2010] 聚水潭里已有入库单登记了同一物流单号，可能是另一台电脑开的，未重复开单：" +
+                                   "；".join("%s → 入库单 %s（%s）" % h for h in hits) +
+                                   "。请先在聚水潭核对这张入库单。")
         # 以上远程核对都在锁外进行；回到锁内后确认期间没有其他终端改动本批次，再原子预留。
         if self.local_token(sid) != token:
             raise InboundError("核对期间收货明细或入库记录已变化（可能有其他终端操作），未生成入库单；请重新预览并确认")
@@ -429,7 +550,10 @@ class InboundService:
         except Exception as e:
             self.store.update_inbound(job_id, "unknown", error=str(e))
             raise InboundError("创建结果待核实，已禁止重复开单。请在聚水潭按采购单核查，找到单号后关联原单。原因：" + str(e))
-        return self.resume(job_id)
+        job = self._resume(job_id)
+        if notes:
+            job = dict(job, notes=notes + list(job.get("notes") or []))
+        return job
 
     def resume(self, job_id, bind_io_id=""):
         job = self.store.get_inbound(job_id)
@@ -478,4 +602,13 @@ class InboundService:
         except Exception as e:
             self.store.update_inbound(job_id, "pending", error=str(e))
             raise InboundError("入库单 %s 尚未完成数量核对，请继续原单（不会重复创建）。原因：%s" % (io_id, e))
-        return self.store.get_inbound(job_id)
+        job = self.store.get_inbound(job_id)
+        # 数量核对完再把物流单号写进备注，供其他电脑开单前核对；写不成不影响已完成的入库单。
+        tracking = [b["tracking_no"] for b in snapshot.get("batches", []) if text(b.get("tracking_no"))]
+        try:
+            why = api.tag_remark(io_id, tracking, snapshot.get("session_id"))
+        except Exception as e:
+            why = str(e)
+        if why:
+            job = dict(job, notes=["[E-INB-2011] 物流单号没能写进入库单 %s 的备注（%s），其他电脑开单前无法据此核对，请在聚水潭手动补上" % (io_id, why)])
+        return job

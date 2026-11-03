@@ -1110,7 +1110,7 @@
 
   function scanItem(code) {
     // 若扫到的其实是另一个已存在的物流单号，直接切过去，避免误判为未知商品
-    var hit = (S.batches || []).filter(function (b) { return b.tracking_no === code; })[0];
+    var hit = (S.batches || []).filter(function (b) { return String(b.tracking_no || '').toUpperCase() === String(code).toUpperCase(); })[0];
     if (hit) {
       return confirmPendingThen(function () {
         return switchTracking(hit.id, code);
