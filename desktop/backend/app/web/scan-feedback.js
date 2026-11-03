@@ -39,8 +39,5 @@
   const fast=gaps.filter(g=>g<50).length;
   return fast>=Math.max(3,gaps.length-1);
  }
- function fmt(v){v=Number(v);return isFinite(v)?String(Math.round(v*10000)/10000):'待核实';}
- // 扫码后本轮实收超过应收：返回提示文字（服务端给 over_receipt 时）
- function overText(o){if(!o)return '';return '超收：'+(o.name||o.sku_id||'')+' 本轮已收 '+fmt(o.recv)+' / 应收 '+fmt(o.plan)+'，多 '+fmt(o.over);}
- root.ScanFeedback={SOUNDS,tone,beep,flash,show,looksLikeScan,overText,setMuted:v=>{muted=!!v;mutedAt=Date.now();}};
+ root.ScanFeedback={SOUNDS,tone,beep,flash,show,looksLikeScan,setMuted:v=>{muted=!!v;mutedAt=Date.now();}};
 })(window);

@@ -1002,8 +1002,6 @@
       var nm = (r.item && r.item.name) ? r.item.name : p.label;
       if (r.unmatched) {
         flash((r.resolved ? '⚠ 采购单无此商品：' : '⚠ 未识别商品已记入差异：') + nm + '  →  ' + fmtNum(q), 'warn'); beep(200, 0.14);
-      } else if (r.over_receipt) {
-        flash('⚠ ' + ScanFeedback.overText(r.over_receipt), 'warn'); beep(200, 0.14);
       } else {
         flash(nm + '  →  ' + fmtNum(q), 'ok'); beep(1318, 0.06);
       }
@@ -1139,8 +1137,8 @@
         renderLines(); renderPoItems(); renderStatus();
         var sid = (r.item && r.item.sku_id) || (p.choose && p.choose.sku_id);
         if (sid) flashPoItem(sid);
-        if (r.over_receipt) { flash('⚠ ' + ScanFeedback.overText(r.over_receipt), 'warn'); beep(200, 0.14); }
-        else { flash((r.item && r.item.name ? r.item.name : p.label) + '  →  ' + fmtNum(r.added || q), 'ok'); beep(1318, 0.06); }
+        flash((r.item && r.item.name ? r.item.name : p.label) + '  →  ' + fmtNum(r.added || q), 'ok');
+        beep(1318, 0.06);
       } else if (!r.ok) {
         if (r.code === 'NATIVE_RECORDING_BLOCKED') {
           restorePending(p, q);

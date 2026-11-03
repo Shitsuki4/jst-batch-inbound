@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
-"""4.1.8：扫码入账后本轮实收超过应收时，接口要给出 over_receipt，前端据此提示「超收」。
+"""4.1.8：扫码入账后接口带回本轮数量（receiving_round），商品列表即时刷新；
+扫码超收不另行提醒（接口不再给 over_receipt）。
 
-离线运行，不碰真实聚水潭：python scan_over_test.py
+离线运行，不碰真实聚水潭：python scan_round_test.py
 """
 import json
 import unittest
@@ -10,10 +11,10 @@ import uuid
 from concurrency_fixes_test import Base
 
 
-class OverReceiptTests(Base):
+class ScanRoundTests(Base):
     def setUp(self):
         super().setUp()
-        # 起始基线：A 采购 10、ERP 已入 0 → 本轮应收 10（旧记录没有基线，应收待核实，不提示超收）
+        # 起始基线：A 采购 10、ERP 已入 0 → 本轮应收 10
         st = self.s.STORE
         items = json.loads(st.get_session(self.sid)['items_json'])
         for it in items:
@@ -26,33 +27,24 @@ class OverReceiptTests(Base):
         row = next(r for r in self.s.STORE.receiving_round(self.sid)['rows'] if r['sku_id'] == sku)
         return row['plan'], row['recv']
 
-    def test_scan_within_plan_has_no_warning(self):
+    def test_scan_returns_receiving_round(self):
         r = self.scan(qty=1, client_op_id=uuid.uuid4().hex)
         self.assertTrue(r['ok'], r)
-        self.assertIsNone(r.get('over_receipt'))
         self.assertTrue(r.get('receiving_round', {}).get('rows'), '扫码后要带回本轮数量，商品列表才会即时刷新')
 
-    def test_scan_over_plan_reports_over_receipt(self):
+    def test_scan_over_plan_has_no_over_receipt(self):
         plan, recv = self.plan_recv()
         self.assertIsNotNone(plan)
-        need = int(plan - recv)
-        r = self.scan(qty=need + 2, client_op_id=uuid.uuid4().hex)
+        r = self.scan(qty=int(plan - recv) + 2, client_op_id=uuid.uuid4().hex)
         self.assertTrue(r['ok'], r)
-        over = r.get('over_receipt')
-        self.assertIsNotNone(over, r)
-        self.assertEqual(over['sku_id'], 'A')
-        self.assertEqual(over['over'], 2)
-        self.assertEqual(over['plan'], plan)
-        # 再扫一件仍然超收，继续提示
-        r = self.scan(qty=1, client_op_id=uuid.uuid4().hex)
-        self.assertEqual(r['over_receipt']['over'], 3)
+        self.assertNotIn('over_receipt', r)
+        self.assertEqual(self.plan_recv()[1], plan + 2, '超收照常入账，不截断')
 
-    def test_replay_returns_same_over_receipt(self):
+    def test_replay_does_not_double_count(self):
         plan, recv = self.plan_recv()
         opid = uuid.uuid4().hex
-        first = self.scan(qty=int(plan - recv) + 1, client_op_id=opid)
-        again = self.scan(qty=int(plan - recv) + 1, client_op_id=opid)
-        self.assertEqual(first.get('over_receipt'), again.get('over_receipt'))
+        self.scan(qty=int(plan - recv) + 1, client_op_id=opid)
+        self.scan(qty=int(plan - recv) + 1, client_op_id=opid)
         self.assertEqual(self.plan_recv()[1], plan + 1, '同一操作编号重试不能重复入账')
 
 

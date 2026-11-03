@@ -203,7 +203,7 @@ def main():
                          ("purchase-watch-delete", "purchase_watch_delete_test.py"),
                          ("report-clipboard", "report_clipboard_test.py"),
                          ("scan-enabled", "scan_enabled_test.py"),
-                         ("scan-over", "scan_over_test.py"),
+                         ("scan-round", "scan_round_test.py"),
                          ("export-dir", "export_dir_test.py")]:
         env = dict(os.environ, PYTHONIOENCODING="utf-8", JST_DB_DIR=tempfile.gettempdir())
         rc, out = run_script([sys.executable, os.path.join(HERE, script)], name, cwd=ROOT, env=env)
