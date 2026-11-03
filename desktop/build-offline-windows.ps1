@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "4.1.7",
+    [string]$Version = "4.1.8",
     [string]$Runtime = "win-x64",
     [string]$PortableRoot = "",
     [Parameter(Mandatory = $true)][string]$WebView2Cab,

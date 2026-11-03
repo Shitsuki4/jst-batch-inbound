@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "4.1.7",
+    [string]$Version = "4.1.8",
     [Parameter(Mandatory = $true)][string]$WebView2Cab,
     [Parameter(Mandatory = $true)][string]$WebView2CabSha256,
     [string]$FfmpegArchive = "",
