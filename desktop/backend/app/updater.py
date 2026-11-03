@@ -660,10 +660,10 @@ class UpdateHost:
             if name != keep and parse_version(name) and os.path.isdir(p):
                 shutil.rmtree(p, ignore_errors=True)
 
-    def _expected_hash(self, latest, info, channel):
+    def _fetch_sums(self, channel, latest, name, attempts=3):
         sums_url = channel_url(channel, release_download_url(latest["tag"], "SHA256SUMS.txt"))
         last = None
-        for attempt in range(3):
+        for attempt in range(attempts):
             if self.cancel.is_set():
                 raise InterruptedError()
             try:
@@ -675,19 +675,55 @@ class UpdateHost:
                 finally:
                     resp.close()
                 sums = parse_sha256sums(text)
-                if info["name"] not in sums:
-                    raise ValueError("SHA256SUMS.txt 中没有 %s，无法校验，已停止下载" % info["name"])
-                expected = sums[info["name"]]
-                digest = (latest.get("assets", {}).get(info["name"]) or {}).get("digest") or ""
-                if digest and digest != expected:
-                    raise ValueError("SHA256SUMS.txt 与 GitHub 记录的文件摘要不一致，可能被篡改，已停止下载")
-                return expected
+                if name not in sums:
+                    raise ValueError("SHA256SUMS.txt 中没有 %s，无法校验，已停止下载" % name)
+                return sums[name]
             except ValueError:
                 raise
             except Exception as e:
                 last = e
-                self.sleep(min(2 * (attempt + 1), 6))
+                if attempt + 1 < attempts:
+                    self.sleep(min(2 * (attempt + 1), 6))
         raise IOError("下载 SHA256SUMS.txt 失败：%s" % _short_error(last))
+
+    def _expected_hash(self, latest, info, channel):
+        """校验值必须来自 GitHub 原链接，不能和安装包走同一个加速站。
+
+        加速站能改安装包，也就能改同一渠道下发的 SHA256SUMS.txt 和版本信息，同渠道自证没有意义。
+        顺序：直连下载 SHA256SUMS.txt → 直连 GitHub 接口时记下的文件摘要 → 再直连接口取一次摘要。
+        都拿不到就停止，不退回只用加速站的校验值。
+        """
+        name = info["name"]
+        digest = (latest.get("assets", {}).get(name) or {}).get("digest") or ""
+        try:
+            expected = self._fetch_sums("github", latest, name, attempts=3 if channel == "github" else 2)
+        except (ValueError, InterruptedError):
+            raise
+        except Exception as e:
+            direct_error = e
+        else:
+            if digest and digest != expected:
+                raise ValueError("SHA256SUMS.txt 与 GitHub 记录的文件摘要不一致，可能被篡改，已停止下载")
+            if channel != "github":
+                # 加速站的 SHA256SUMS 必须和原链接一致（不一致说明加速站内容被改过）
+                try:
+                    via = self._fetch_sums(channel, latest, name, attempts=1)
+                    if via != expected:
+                        raise ValueError("加速站下发的 SHA256SUMS.txt 和 GitHub 原链接不一致，可能被篡改，已停止下载")
+                except (IOError, OSError):
+                    pass
+            return expected
+        if digest and self.cache().get("source") == "github":
+            return digest
+        try:
+            rel = self._fetch_latest("github")
+            d = (rel.get("assets", {}).get(name) or {}).get("digest") or ""
+            if rel.get("tag") == latest.get("tag") and d:
+                return d
+        except Exception:
+            pass
+        raise ValueError("连不上 GitHub 原链接，拿不到独立的校验值（%s）。只从加速站拿到的校验值不能证明安装包没被改过，"
+                         "已停止更新。请稍后重试，或打开发布页手动下载。" % _short_error(direct_error))
 
     def _download_worker(self, latest, info, channel):
         try:

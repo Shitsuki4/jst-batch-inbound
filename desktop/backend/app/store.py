@@ -477,7 +477,9 @@ class Store(object):
         tracking_no = (tracking_no or "").strip()
         if not tracking_no:
             raise ValueError("物流单号不能为空")
-        r = self.db.execute("SELECT * FROM batch WHERE session_id=? AND tracking_no=?", (sid, tracking_no)).fetchone()
+        # 大小写不同算同一个物流单号（扫码枪开了大写锁定时会扫成小写），沿用最早建的那个批次
+        r = self.db.execute("SELECT * FROM batch WHERE session_id=? AND tracking_no=? COLLATE NOCASE ORDER BY id LIMIT 1",
+                            (sid, tracking_no)).fetchone()
         if r:
             return dict(r), False
         ts = now_str()
@@ -610,7 +612,7 @@ class Store(object):
         if not r:
             raise ValueError("找不到该物流单号")
         dup = self.db.execute(
-            "SELECT id FROM batch WHERE session_id=? AND tracking_no=? AND id<>?",
+            "SELECT id FROM batch WHERE session_id=? AND tracking_no=? COLLATE NOCASE AND id<>?",
             (r["session_id"], tracking_no, batch_id)).fetchone()
         if dup:
             raise ValueError("该收货批次下已有同名物流单号")
@@ -922,8 +924,8 @@ class Store(object):
             sql += "WHERE s.po_id=? OR s.outer_po_id=? OR s.input_no=? ORDER BY b.id, l.id"
             args = (value, value, value)
         elif mode == "tracking":
-            sql += "WHERE b.tracking_no LIKE ? ORDER BY b.id, l.id"
-            args = ("%" + value + "%",)
+            sql += "WHERE b.tracking_no LIKE ? ESCAPE '\\' ORDER BY b.id, l.id"
+            args = (_like(value),)
         elif mode == "range":
             sql += "WHERE b.first_scan_at>=? AND b.first_scan_at<=? ORDER BY b.id, l.id"
             args = (start + " 00:00:00", end + " 23:59:59")

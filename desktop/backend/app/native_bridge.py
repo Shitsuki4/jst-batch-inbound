@@ -177,7 +177,10 @@ def install(s):
  H.protocol_version="HTTP/1.0"
  oldbody=H._body;oldok=H._ok;oldget=H.do_GET;oldpost=H.do_POST
  token=os.environ.get('JST_NATIVE_TOKEN','')
- def auth(h):return bool(token) and h.headers.get('X-Native-Token')==token
+ def auth(h):
+  import hmac
+  given=h.headers.get('X-Native-Token') or ''
+  return bool(token) and bool(given) and hmac.compare_digest(given.encode('utf-8'),token.encode('utf-8'))
  def body(h):
   b=oldbody(h)
   if not hasattr(h,'_native_context') or h._native_context is not b:

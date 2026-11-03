@@ -8,6 +8,17 @@ function controls(){
  document.querySelectorAll('[data-po-choice]').forEach(b=>b.disabled=working);
 }
 function finish(result){if(working)return;$('po-link-dialog').close();const done=active;active=null;preview=null;invoke=null;if(done)done(result);}
+// 4.1.8：核对预览用和「有采购单收货」同一套进度卡 + 商品表（ReceivingSummary）；原实收商品和目标采购商品不同、
+// 以及每行的核对提醒写在商品名下方，信息和以前的五列表一致
+function linkTable(rows){
+ if(!window.ReceivingSummary)return '<div class="scroll"><table><thead><tr><th>商品编码</th><th>原实收商品 / 规格 / 条码</th><th>目标采购商品 / 规格 / 条码</th><th>实收 / 采购</th><th>核对</th></tr></thead><tbody>'+rows.map(r=>
+    '<tr><td>'+e(r.sku_id)+'</td><td>'+e(r.source.name||'—')+'<br>'+e(r.source.spec||'')+'<br>'+e(r.source.sku_code||'')+'</td><td>'+e(r.target.name||'—')+'<br>'+e(r.target.spec||'')+'<br>'+e(r.target.sku_code||'')+'</td><td>'+n(r.received)+' / '+n(r.planned)+'</td><td>'+e(r.issues.join('；')||(r.received===r.planned?'编码数量一致':'数量有差异'))+'</td></tr>').join('')+'</tbody></table></div>';
+ const list=rows.map(r=>{const t=r.target||{},src=r.source||{},inPo=Object.keys(t).length>0||Number(r.planned)>0;
+  const notes=[];if(src.name&&t.name&&(src.name!==t.name||(src.spec||'')!==(t.spec||'')))notes.push('原实收商品：'+src.name+(src.spec?' '+src.spec:''));
+  if((r.issues||[]).length)notes.push(r.issues.join('；'));
+  return {sku_id:r.sku_id,name:t.name||src.name,spec:t.name?t.spec:src.spec,sku_codes:[t.sku_code||src.sku_code].filter(Boolean),plan:inPo?r.planned:null,recv:r.received,extra:!inPo,note:notes.join('；')};});
+ return ReceivingSummary.panel(list,{linked:true,title:'核对预览 · 目标采购单应收 / 本批次实收',planTitle:'采购应收',recvTitle:'本批次实收'});
+}
 async function choose(selection){
  if(working)return;working=true;preview=null;controls();$('po-link-error').textContent='正在重新读取目标采购单并核对实收…';
  $('po-link-preview').innerHTML='';$('po-link-scope-label').hidden=true;$('po-link-scope-confirm').checked=false;
@@ -18,8 +29,7 @@ async function choose(selection){
    '<p>原采购关联：'+e(old.po_id||'未关联')+' · 货主 '+e(old.owner)+' / 分仓 '+e(old.auth)+'</p>'+
    '<p><b>目标采购单：'+e(p.head.po_id)+'</b> · 外部单号 '+e(p.head.outer_po_id||'—')+'<br>货主 '+e(p.owner)+' / 分仓 '+e(p.auth)+' · '+e(p.head.supplier||'')+'</p>'+
    '<p>本批次实收 '+n(p.received_total)+' 件。只核对，不改实收、不自动入库；同码不同商品不会自动合并。</p>'+
-   '<div class="scroll"><table><thead><tr><th>商品编码</th><th>原实收商品 / 规格 / 条码</th><th>目标采购商品 / 规格 / 条码</th><th>实收 / 采购</th><th>核对</th></tr></thead><tbody>'+p.rows.map(r=>
-    '<tr><td>'+e(r.sku_id)+'</td><td>'+e(r.source.name||'—')+'<br>'+e(r.source.spec||'')+'<br>'+e(r.source.sku_code||'')+'</td><td>'+e(r.target.name||'—')+'<br>'+e(r.target.spec||'')+'<br>'+e(r.target.sku_code||'')+'</td><td>'+n(r.received)+' / '+n(r.planned)+'</td><td>'+e(r.issues.join('；')||(r.received===r.planned?'编码数量一致':'数量有差异'))+'</td></tr>').join('')+'</tbody></table></div>';
+   linkTable(p.rows);
   $('po-link-scope-label').hidden=!p.cross_scope;
   $('po-link-error').textContent=p.blockers.length?'跨范围商品未核对通过：'+p.blockers.join('；')+'。请核对原实收或目标采购资料后重新查询。':'';
  }catch(err){$('po-link-error').textContent=err.message;}

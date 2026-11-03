@@ -174,18 +174,41 @@ def files():
     out = []
     for name in sorted(os.listdir(_dir)):
         low = name.lower()
-        if low.endswith((".jsonl", ".log", ".txt")) or re.search(r"\.log\.\d+$", low):
+        # 本机服务轮换成 diagnostic.1.jsonl；桌面程序（NativeDiag.cs）轮换成 native-diagnostic.jsonl.1
+        if low.endswith((".jsonl", ".log", ".txt")) or re.search(r"\.(log|jsonl)\.\d+$", low):
             p = os.path.join(_dir, name)
             if os.path.isfile(p):
                 out.append(p)
     return out
 
 
+def ts_key(rec):
+    """按真实时间排序：本机服务写 2026-11-03T17:15:00.123+08:00，旧版桌面程序写
+    2026-11-03 17:15:00.123 +08:00，按字符串排会把两边的记录排乱。解析不了的排最前。"""
+    s = str((rec or {}).get("ts") or "").strip()
+    if not s:
+        return 0.0
+    t = re.sub(r"\s+([+-]\d\d:?\d\d)$", r"\1", s)
+    t = re.sub(r"^(\d{4}-\d\d-\d\d)[ T]", r"\1T", t)
+    t = re.sub(r"([+-]\d\d)(\d\d)$", r"\1:\2", t)
+    if t.endswith("Z"):
+        t = t[:-1] + "+00:00"
+    try:
+        d = datetime.datetime.fromisoformat(t)
+        if d.tzinfo is None:
+            d = d.astimezone()
+        return d.timestamp()
+    except ValueError:
+        return 0.0
+
+
 def tail(limit=200, code="", rid="", level="", text=""):
     """从最新的日志往回取记录（含桌面程序写的 native-diagnostic.jsonl）。"""
     limit = max(1, min(int(limit or 200), 2000))
     want = []
-    paths = [p for p in files() if p.lower().endswith(".jsonl")]
+    # level 可写多个，逗号分隔（如 WARN,ERROR）：断网、无权限这类报错记的是 WARN 级
+    levels = {x.strip().upper() for x in str(level or "").split(",") if x.strip()}
+    paths = [p for p in files() if re.search(r"\.jsonl(\.\d+)?$", p.lower())]
     rows = []
     for p in paths:
         try:
@@ -200,13 +223,13 @@ def tail(limit=200, code="", rid="", level="", text=""):
                         continue
         except OSError:
             continue
-    rows.sort(key=lambda r: str(r.get("ts") or ""))
+    rows.sort(key=ts_key)
     for r in reversed(rows):
         if code and r.get("code") != code:
             continue
         if rid and r.get("rid") != rid:
             continue
-        if level and str(r.get("level")).upper() != level.upper():
+        if levels and str(r.get("level")).upper() not in levels:
             continue
         if text and text not in json.dumps(r, ensure_ascii=False):
             continue

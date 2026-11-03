@@ -32,6 +32,9 @@ class FakeJst:
         self.products = {s: {"sku_id": s, "name": "商品"+s} for s in ("A", "B", "X", "Y")}
         self.product_queries = []
         self.product_error = False
+        self.list_error = False
+        self.ignore_remark = False
+        self.remote_heads = []
 
     def item_search(self, field, value, owner="", limit=200, timeout=6, auth=""):
         assert field == "sku_id", "Product validation must not resolve barcodes"
@@ -48,7 +51,15 @@ class FakeJst:
         self.calls.append((url, method, args, kw))
         if method == 'LoadDataToJSON':
             assert 'call_control' not in kw
-            io_id = str(json.loads(args[1])[0]['v'])
+            f0 = json.loads(args[1])[0]
+            if f0['k'] == 'o_id':   # 按采购单列出入库单（分批到货核对）
+                wh = next((f['v'] for f in json.loads(args[1]) if f['k'] == 'wh_id'), '')
+                if self.list_error:
+                    raise TimeoutError('模拟入库单列表超时')
+                if wh or args[0] != '1':
+                    return {'datas': []}
+                return {'datas': [dict(d['head']) for d in self.docs.values() if d['head']['o_id'] == f0['v']] + [dict(h) for h in self.remote_heads]}
+            io_id = str(f0['v'])
             d = self.docs.get(io_id)
             return {'datas': [dict(d['head'])] if d else []}
         if method == 'Save':
@@ -58,9 +69,12 @@ class FakeJst:
             doc = self.docs[str(row['io_id'])]
             assert row['__KeyData'] == doc['head']['__KeyData']
             assert str(row['wh_id']) == str(doc['head']['wh_id'])
-            assert row.get('remark') == doc['head'].get('remark')
+            if row['warehouse'] != doc['head']['warehouse']:
+                assert row.get('remark') == doc['head'].get('remark'), '换仓不能改备注'
+            elif self.ignore_remark:
+                return {'data': dict(doc['head'])}
             wid = next(k for k, v in {'1':'主仓', '3':'进货仓', '4':'次品仓'}.items() if v == row['warehouse'])
-            doc['head'].update(warehouse=row['warehouse'], wh_id=wid, __KeyData='KEY-' + str(row['io_id']) + '-new')
+            doc['head'].update(warehouse=row['warehouse'], wh_id=wid, remark=row.get('remark'), __KeyData='KEY-' + str(row['io_id']) + '-new')
             return {'data': dict(doc['head'])}
         assert kw['call_control'] == '{page}'
         if method == 'LoadWarehouse':
@@ -503,6 +517,63 @@ class InboundWireTests(unittest.TestCase):
                     updates=[p['Args'] for p in sent if p['Method']=='UpQtyBatch'];self.assertEqual(updates,[['7','1'],['2','2']])
                 self.assertNotIn('ConfirmBatch',[p['Method'] for p in sent])
 
+
+class SplitDeliveryTests(InboundTests):
+    # ---- 4.1.8 分批到货：物流单号写进备注，开单前到聚水潭核对其他电脑开过的单
+    def test_remark_gets_tracking_and_keeps_original(self):
+        self.add(self.b1, 'A', 2)
+        job = self.generate()
+        remark = self.jst.docs[job['io_id']]['head']['remark']
+        self.assertTrue(remark.startswith('保留原备注'), remark)
+        self.assertIn('SF001', remark)
+        self.assertNotIn('SF002', remark, '没有实收的物流单号不写')
+        self.assertFalse(job.get('notes'))
+
+    def test_remark_failure_is_a_note_not_a_failure(self):
+        self.jst.ignore_remark = True
+        self.add(self.b1, 'A', 2)
+        job = self.generate()
+        self.assertEqual(job['status'], 'complete')
+        self.assertTrue(any('E-INB-2011' in n for n in job['notes']), job)
+
+    def test_other_computer_same_tracking_blocks_create(self):
+        self.jst.remote_heads = [{'io_id': '7001', 'o_id': '123', 'status': '待入库',
+                                  'remark': '物流单号: sf001（收货小助手 #9）'}]
+        self.add(self.b1, 'A', 2)
+        before = self.jst.creates
+        with self.assertRaisesRegex(InboundError, 'E-INB-2010.*7001'):
+            self.generate()
+        self.assertEqual(self.jst.creates, before, '不能再开单')
+        # 那张单在聚水潭作废后，可以正常开单
+        self.jst.remote_heads[0]['status'] = '作废'
+        self.assertEqual(self.generate()['status'], 'complete')
+
+    def test_similar_tracking_does_not_block(self):
+        self.jst.remote_heads = [{'io_id': '7002', 'o_id': '123', 'status': '已入库',
+                                  'remark': '物流单号: SF0011、SF00（收货小助手 #9）'}]
+        self.add(self.b1, 'A', 2)
+        self.assertEqual(self.generate()['status'], 'complete')
+
+    def test_remote_check_failure_is_a_note(self):
+        self.jst.list_error = True
+        self.add(self.b1, 'A', 2)
+        job = self.generate()
+        self.assertEqual(job['status'], 'complete')
+        self.assertTrue(any('未能到聚水潭核对' in n for n in job['notes']), job)
+
+    def test_draft_qty_sums_wait_confirm_only(self):
+        self.add(self.b1, 'A', 2)
+        self.add(self.b1, 'B', 3)
+        job = self.generate()
+        api = self.svc.context({'owner_co_id': 'OWNER', 'auth_co_id': 'WAREHOUSE'})
+        self.assertEqual(api.draft_qty('123'), {'A': Decimal(2), 'B': Decimal(3)})
+        self.jst.docs[job['io_id']]['head']['status'] = '已入库'
+        self.assertEqual(api.draft_qty('123'), {})
+
+    def test_remark_tracking_parse(self):
+        from inbound import PurchaseInAPI as P
+        self.assertEqual(P.remark_tracking('客户备注 物流单号: SF1、yt2，JD3（收货小助手 #4）'), {'SF1', 'YT2', 'JD3'})
+        self.assertEqual(P.remark_tracking('普通备注 SF1'), set())
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

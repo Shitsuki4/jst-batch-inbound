@@ -191,7 +191,20 @@ def main():
                          ("operation-log", "oplog_test.py"),
                          ("learned-codes", "learned_codes_test.py"),
                          ("updater", "updater_test.py"),
-                         ("tracking-search", "tracking_search_test.py")]:
+                         ("tracking-search", "tracking_search_test.py"),
+                         # 4.1.8 起补进 CI：之前只在本地跑过
+                         ("android6-login", "android6_login_test.py"),
+                         ("archive221", "archive221_test.py"),
+                         ("inbound-modes", "inbound_modes_test.py"),
+                         ("inbound-modes-http", "inbound_modes_http_test.py"),
+                         ("joint-receipt", "joint_receipt_test.py"),
+                         ("purchase-snapshot", "purchase_snapshot_test.py"),
+                         ("purchase-watch", "purchase_watch_test.py"),
+                         ("purchase-watch-delete", "purchase_watch_delete_test.py"),
+                         ("report-clipboard", "report_clipboard_test.py"),
+                         ("scan-enabled", "scan_enabled_test.py"),
+                         ("scan-round", "scan_round_test.py"),
+                         ("export-dir", "export_dir_test.py")]:
         env = dict(os.environ, PYTHONIOENCODING="utf-8", JST_DB_DIR=tempfile.gettempdir())
         rc, out = run_script([sys.executable, os.path.join(HERE, script)], name, cwd=ROOT, env=env)
         results.append((name, rc == 0, out))

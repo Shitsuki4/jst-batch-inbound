@@ -239,17 +239,25 @@ class PurchaseWatch:
                 self.poll();self.stop.wait(60)
         threading.Thread(target=worker,name='purchase-watch-60s',daemon=True).start()
     def cross_guard(self,store,sid):
+        """同一采购单分批到货、在不同收货方式（或不同轮次）里各收一批时：
+        别处还有没处理完（创建中 / 待核实）的入库记录 → 拦下；别处已入库的物流单号和本轮重复 → 拦下；
+        其余（别处已完成、是另一批货）→ 放行。4.1.7 及以前只要别的收货方式入过库就一律拦。"""
         s=store.get_session(sid)
         if not s:return
-        current={b['tracking_no'] for b in store.batches(sid)}
+        current={str(b['tracking_no'] or '').strip().upper() for b in store.batches(sid) if str(b['tracking_no'] or '').strip()}
+        names={id(v):k for k,v in self.stores().items()}
         for other in self.stores().values():
             for row in other.db.execute("SELECT j.*,s.po_id,s.owner_co_id,s.auth_co_id FROM inbound_job j JOIN session s ON s.id=j.session_id WHERE j.status<>'rejected'"):
                 j=dict(row)
                 if other is store and j['session_id']==sid:continue
                 if identity(j)!=identity(s):continue
-                snap=json.loads(j['snapshot_json']);nos={b['tracking_no'] for b in snap['batches']}
-                if other is not store or current.intersection(nos) or j['status'] not in ('complete','rejected'):
-                    raise InboundError('此采购单在其他来源/批次已有入库记录，请继续原单并核实，禁止跨来源重复生成')
+                snap=json.loads(j['snapshot_json']);nos={str(b.get('tracking_no') or '').strip().upper() for b in snap.get('batches') or []}
+                label='本收货方式的其他轮次' if other is store else {'unplanned':'无采购单收货','receipt':'有采购单收货'}.get(names.get(id(other)),'其他收货方式')
+                if j['status'] not in ('complete','rejected'):
+                    raise InboundError('[E-INB-2012] 此采购单在%s还有没处理完的入库记录（创建中或待核实），请先处理完再生成，禁止重复开单'%label)
+                same=sorted(current.intersection(nos)-{''})
+                if same:
+                    raise InboundError('[E-INB-1001] 物流单号 %s 已在%s生成过入库单，同一批货不能再入库一次'%('、'.join(same),label))
     def inbound(self,wid,source,sid):return WatchInbound(self,wid,source,int(sid))
 
 class WatchInbound(InboundService):

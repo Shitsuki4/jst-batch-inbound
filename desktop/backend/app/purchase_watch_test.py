@@ -90,7 +90,17 @@ class PurchaseWatchTest(unittest.TestCase):
     def test_cross_source_duplicate_guard(self):
         self.make_modified();self.create();items=[normalize_po_item(x) for x in self.j.detail_rows]
         sid=self.orig.open_session('123','123','po_id',dict(owner_co_id='OWNER',auth_co_id='WAREHOUSE'),items)
-        with self.assertRaises(InboundError):self.w.cross_guard(self.orig,sid)
+        # 4.1.8：那边的入库已完成、本轮是另一批货（物流单号不同）→ 分批到货可以换收货方式
+        self.orig.ensure_batch(sid,'NEW-BATCH-1');self.w.cross_guard(self.orig,sid)
+        job=self.u.store.inbound_jobs(self.sid)[0]
+        tn=json.loads(job['snapshot_json'])['batches'][0]['tracking_no']
+        # 同一物流单号（大小写不同也算）已在那边入过库 → 拦
+        self.orig.ensure_batch(sid,tn.lower())
+        with self.assertRaisesRegex(InboundError,'E-INB-1001'):self.w.cross_guard(self.orig,sid)
+        # 那边还有待核实的入库记录 → 拦
+        self.u.store.db.execute("UPDATE inbound_job SET status='unknown' WHERE id=?",(job['id'],));self.u.store.db.commit()
+        self.orig.db.execute("DELETE FROM batch WHERE session_id=? AND tracking_no=?",(sid,tn.lower()));self.orig.db.commit()
+        with self.assertRaisesRegex(InboundError,'E-INB-2012'):self.w.cross_guard(self.orig,sid)
     def test_account_change_discards_late_read(self):
         old=self.get()['checked_at'];read=self.w.read
         def race(w,c,j):

@@ -18,7 +18,7 @@
     if (!barcodes.length && !aux.length) meta.push('条码未提供');
     // ERP 采购 / 入库数只在有值时占位；没值时放进悬停提示，不挤占第二行
     if (row.ordered != null) meta.push('<span class="pi-erp-inline">采购 ' + num(row.ordered) + ' / 入库 ' + num(row.erp_received) + '</span>');
-    return '<div class="pi-compact" title="' + esc('采购 ' + num(row.ordered) + ' / 入库 ' + num(row.erp_received)) + '"><div class="pi-name">' + esc(row.name || '未提供商品名')
+    return '<div class="pi-compact"' + (row.ordered != null ? ' title="' + esc('采购 ' + num(row.ordered) + ' / 入库 ' + num(row.erp_received)) + '"' : '') + '><div class="pi-name">' + esc(row.name || '未提供商品名')
       + (row.spec && row.spec !== row.name ? '<span class="pi-spec-inline">' + esc(row.spec) + '</span>' : '')
       + (row.extra ? ' <span class="tag-new">本轮计划外商品</span>' : '') + '</div>'
       + '<div class="pi-meta">' + meta.join('<span class="pi-dot" aria-hidden="true"> · </span>') + '</div></div>';
@@ -76,5 +76,5 @@
       + '<div class="table-wrap"><table class="tbl round-table"><thead><tr><th>商品信息</th><th>本轮应收</th><th>本轮已收</th><th>差额</th></tr></thead><tbody>'
       + body(round, true) + '</tbody></table></div></div>';
   }
-  window.ReceivingRoundUI = {data:data,body:body,notes:notes,report:report,progress:progress,num:num,appearance:appearance,status:status};
+  window.ReceivingRoundUI = {data:data,body:body,notes:notes,report:report,progress:progress,num:num,appearance:appearance,status:status,product:product};
 }());

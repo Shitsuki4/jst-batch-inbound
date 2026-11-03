@@ -408,9 +408,10 @@ class OpLog(object):
         w.writerow(["时间", "设备", "ERP账号", "模块", "操作类型", "结果", "采购单号", "外部单号",
                     "物流单号", "商品编码", "扫描条码", "操作前数量", "操作后数量", "数量变化", "说明", "记录ID"])
 
+        from exportfiles import csv_cell
+
         def cell(v):
-            v = "" if v is None else str(v)
-            return "'" + v if v.lstrip().startswith(("=", "+", "-", "@")) or v.startswith(("\t", "\r", "\n")) else v
+            return csv_cell(v)
 
         for r in data["rows"]:
             w.writerow([cell(x) for x in (

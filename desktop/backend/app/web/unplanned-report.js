@@ -1,11 +1,16 @@
 /* Full-data rendering: no viewport truncation, no fabricated target before linking. */
 (function(){
 'use strict';
+const root=window;
 const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const num=n=>Number(n||0).toLocaleString('zh-CN',{maximumFractionDigits:6});
 const fills={good:'#a5d6a7',diff:'#fff176',extra:'#e0e0e0',unknown:'#e0e0e0',neutral:'#ffffff'};
 function table(rows,linked){return '<table><thead><tr><th>商品信息</th>'+(linked?'<th>应收</th>':'')+'<th>实收</th>'+(linked?'<th>核对结果</th>':'')+'</tr></thead><tbody>'+rows.map(r=>'<tr class="'+r.kind+'"><td><strong>'+esc(r.name)+'</strong><div class="sku">'+esc(r.sku_id)+'</div><div class="secondary">'+esc(r.spec)+'</div></td>'+(linked?'<td>'+num(r.plan)+'</td>':'')+'<td class="num">'+num(r.recv)+'</td>'+(linked?'<td>'+esc(r.reason)+'</td>':'')+'</tr>').join('')+'</tbody></table>';}
-function render(s,details){let h=s.linked?PurchasePairs.table(s.rows):table(s.rows,false);if(details)s.batches.forEach(b=>{h+='<h3>'+esc(b.tracking_no)+'</h3>'+table(b.lines.map(r=>({...r,recv:r.qty,kind:'neutral'})),false)});return h;}
+// 4.1.8：和「有采购单收货」同一套进度卡 + 商品表（ReceivingSummary）；关联采购单后的相似商品配对视图保留在折叠区
+function render(s,details){const RS=root.ReceivingSummary;if(!RS){let h=s.linked?PurchasePairs.table(s.rows):table(s.rows,false);if(details)s.batches.forEach(b=>{h+='<h3>'+esc(b.tracking_no)+'</h3>'+table(b.lines.map(r=>({...r,recv:r.qty,kind:'neutral'})),false)});return h;}
+let h=s.linked?RS.panel(s.rows,{linked:true,title:'本轮收货进度 · 采购单 '+(s.session.po_id||'')}):RS.panel(s.rows,{linked:false,batches:s.batches.length});
+if(s.linked&&root.PurchasePairs&&s.rows.some(r=>r.kind&&r.kind!=='good'))h+='<details class="rs-pairs"><summary>按相似商品配对查看差异</summary>'+PurchasePairs.table(s.rows)+'</details>';
+if(details)s.batches.forEach(b=>{h+='<h3 class="rs-section-title">物流单 '+esc(b.tracking_no)+' · '+num(b.total)+' 件</h3>'+RS.table(RS.rows(b.lines,false),{linked:false})});return h;}
 function text(s){return s.batches.map(b=>b.tracking_no).join('\n');}
 // opts.stripNames（仅快递单登记使用）：去掉商品名称里的全部空白（半角 / 全角空格、制表符、NBSP 等），便于 Excel 按空格分列。
 const NAME_SPACE=/[\s\u00a0\u3000\u200b\ufeff]+/g;

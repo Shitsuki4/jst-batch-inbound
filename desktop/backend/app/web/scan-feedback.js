@@ -28,5 +28,16 @@
  // el 为扫码框下方的提示条；kind = ok / tracking / warn / err
  function flash(el,text,kind){if(!el)return;if(kind==='err'&&text&&window.JstErr)text=JstErr.ensure(text);el.textContent=text||'';el.className=(el.dataset.base||'flash')+(kind?' '+kind:'');}
  function show(el,text,kind){flash(el,text,kind);beep(kind);}
- root.ScanFeedback={SOUNDS,tone,beep,flash,show,setMuted:v=>{muted=!!v;mutedAt=Date.now();}};
+ // 数量框里打进来的是不是扫码枪的条码：扫码枪逐字快速输入并自带回车，人手改数量慢且只有数字。
+ // text 为这一串输入，gaps 为相邻按键的间隔（毫秒）。含非数字、超过数量上限的位数（10 位以上），
+ // 或 4 位以上且几乎每个间隔都在 50ms 内，都按扫码处理。
+ function looksLikeScan(text,gaps){
+  text=String(text||'').trim();if(!text)return false;
+  if(/[^0-9]/.test(text))return true;
+  if(text.length>=11)return true;
+  gaps=gaps||[];if(text.length<4||gaps.length<text.length-1)return false;
+  const fast=gaps.filter(g=>g<50).length;
+  return fast>=Math.max(3,gaps.length-1);
+ }
+ root.ScanFeedback={SOUNDS,tone,beep,flash,show,looksLikeScan,setMuted:v=>{muted=!!v;mutedAt=Date.now();}};
 })(window);

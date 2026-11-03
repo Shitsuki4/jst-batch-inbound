@@ -409,9 +409,7 @@ class UnplannedService:
     def export(self, sid):
         state=self.state(sid)
         out=io.StringIO(newline=''); w=csv.writer(out)
-        def safe(v):
-            if isinstance(v,str) and v.startswith(('=','+','-','@',chr(9),chr(13))): return "'"+v
-            return v
+        from exportfiles import csv_cell as safe
         def row(values): w.writerow([safe(v) for v in values])
         row(['无采购单收货批次',state['session']['input_no'],'采购单',state['session']['po_id']])
         row(['批次汇总','商品编码','名称','规格','实收']+(['应收','核对结果'] if state['linked'] else []))

@@ -26,7 +26,7 @@
   #define OutputDir "..\dist\installer"
 #endif
 #ifndef AppVersion
-  #define AppVersion "4.1.7"
+  #define AppVersion "4.1.8"
 #endif
 #ifdef UpgradeOnly
   #ifndef ReqFfmpegSha
@@ -452,7 +452,7 @@ type
 
 var
   { Uninstall state, shared between InitializeUninstall and CurUninstallStepChanged }
-  DataRoot, AppDir, RuntimeRoot, RecordingDir: String;
+  DataRoot, AppDir, RuntimeRoot, RecordingDir, ExportDir: String;
   DataMode: Integer;
   KeepCat: array[0..4] of Boolean;
   CatPresent: array[0..4] of Boolean;
@@ -584,8 +584,8 @@ begin
   end;
 end;
 
-{ Recording directory saved in native-settings.json ("Directory"); empty when not set. }
-function ReadRecordingDir(): String;
+{ A string value saved in a small JSON settings file; empty when the file or key is missing. }
+function ReadJsonDir(const FileName, Key: String): String;
 var
   Raw: AnsiString;
   S, Value: String;
@@ -593,13 +593,13 @@ var
   Escaped: Boolean;
 begin
   Result := '';
-  if not LoadStringFromFile(DataRoot + '\native-settings.json', Raw) then
+  if not LoadStringFromFile(FileName, Raw) then
     exit;
   S := Raw;
-  P := Pos('"Directory"', S);
+  P := Pos('"' + Key + '"', S);
   if P = 0 then
     exit;
-  S := Copy(S, P + Length('"Directory"'), Length(S));
+  S := Copy(S, P + Length(Key) + 2, Length(S));
   P := Pos(':', S);
   if P = 0 then
     exit;
@@ -620,6 +620,19 @@ begin
     Escaped := (not Escaped) and (Copy(S, I, 1) = '\');
     Value := Value + Copy(S, I, 1);
   end;
+end;
+
+{ Recording directory saved in native-settings.json ("Directory"); empty when not set. }
+function ReadRecordingDir(): String;
+begin
+  Result := ReadJsonDir(DataRoot + '\native-settings.json', 'Directory');
+end;
+
+{ Export directory chosen in Settings (server writes data\export-settings.json, "ExportDirectory",
+  non-ASCII escaped as \uXXXX; exportfiles.py). Empty = default <app>\backend\导出. }
+function ReadExportDir(): String;
+begin
+  Result := ReadJsonDir(DataRoot + '\data\export-settings.json', 'ExportDirectory');
 end;
 
 procedure AddPath(var List: TArrayOfString; const Path: String);
@@ -655,11 +668,20 @@ begin
           AddPath(Result, RecordingDir);
       end;
     CatExports:
-      AddPath(Result, AppDir + '\backend\导出');
+      begin
+        AddPath(Result, AppDir + '\backend\导出');
+        { A custom export directory is only removed when it lives inside our own folders;
+          a folder the user picked elsewhere (D:\收货导出) is never deleted. }
+        if (ExportDir <> '') and (IsUnder(ExportDir, DataRoot) or IsUnder(ExportDir, AppDir)) and
+           (CompareText(ExportDir, AppDir + '\backend\导出') <> 0) then
+          AddPath(Result, ExportDir);
+      end;
     CatSettings:
       begin
         AddPath(Result, DataRoot + '\native-settings.json');
         AddPath(Result, DataRoot + '\native-settings.json.tmp');
+        AddPath(Result, DataRoot + '\data\export-settings.json');
+        AddPath(Result, DataRoot + '\data\export-settings.json.tmp');
         AddPath(Result, DataRoot + '\data\login-session.dpapi');
         AddPath(Result, DataRoot + '\data\.login-*');
         AddPath(Result, DataRoot + '\data\edge-login');
@@ -715,7 +737,11 @@ begin
   case Cat of
     CatDatabase: Result := DataRoot + '\data';
     CatRecordings: Result := DataRoot + '\录像';
-    CatExports: Result := AppDir + '\backend\导出';
+    CatExports:
+      if ExportDir <> '' then
+        Result := ExportDir + '（自定义导出目录）'
+      else
+        Result := AppDir + '\backend\导出';
     CatSettings: Result := DataRoot + '（native-settings.json、data\login-session.dpapi、data\edge-login、data\pda-private、data\remote-access）';
     CatCache: Result := DataRoot + '（webview-profile、video-cues、library-player、data\logs 等）';
   else
@@ -829,6 +855,8 @@ begin
   Result := '';
   if (RecordingDir <> '') and not IsUnder(RecordingDir, DataRoot) then
     Result := #13#10 + '• 录像目录已改为“' + RecordingDir + '”，不在数据目录内，卸载不会删除其中的录像（包括“完全卸载”）。';
+  if (ExportDir <> '') and not IsUnder(ExportDir, DataRoot) and not IsUnder(ExportDir, AppDir) then
+    Result := Result + #13#10 + '• 导出目录已改为“' + ExportDir + '”，不在安装或数据目录内，卸载不会删除其中的导出文件（包括“完全卸载”）。';
 end;
 
 { Shows the data options form. Returns False when the user cancels the uninstall. }
@@ -1158,7 +1186,8 @@ begin
   PurgeSwitch := HasSwitch('/PURGEDATA');
   KillAgreed := False;
   RecordingDir := ReadRecordingDir();
-  Log('Install dir: ' + AppDir + '; data root: ' + DataRoot + '; recording dir: ' + RecordingDir);
+  ExportDir := ReadExportDir();
+  Log('Install dir: ' + AppDir + '; data root: ' + DataRoot + '; recording dir: ' + RecordingDir + '; export dir: ' + ExportDir);
   for Cat := 0 to CatLast do
     KeepCat[Cat] := True;
   ScanCategories();

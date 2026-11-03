@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       publish_release_tag:
-        description: "Attach the built assets to this existing release tag, e.g. desktop-v4.1.7 (optional; main only; version must match the csproj)."
+        description: "Attach the built assets to this existing release tag, e.g. desktop-v4.1.8 (optional; main only; version must match the csproj)."
         required: false
         type: string
   push:
@@ -105,15 +105,17 @@ jobs:
       - name: Compile Python sources
         run: python -m compileall -q desktop/backend/app
 
-      - name: Run recording gate JavaScript regression
+      - name: Run JavaScript regression
         shell: pwsh
         run: |
-          node desktop/backend/app/recording_gate_test.js
-          if ($LASTEXITCODE -ne 0) { throw "Recording gate regression failed: $LASTEXITCODE" }
-          node desktop/backend/app/rename_recording_test.js
-          if ($LASTEXITCODE -ne 0) { throw "Recording rename regression failed: $LASTEXITCODE" }
-          node desktop/backend/app/errcode_test.js
-          if ($LASTEXITCODE -ne 0) { throw "Error code regression failed: $LASTEXITCODE" }
+          # 跑 app 目录下全部 *_test.js（4.1.8 起不再手工列名单，新测试不会漏进 CI）
+          $tests = Get-ChildItem desktop/backend/app -Filter *_test.js | Sort-Object Name
+          if ($tests.Count -lt 8) { throw "JavaScript tests missing: found $($tests.Count)" }
+          foreach ($t in $tests) {
+            Write-Host "== $($t.Name)"
+            node $t.FullName
+            if ($LASTEXITCODE -ne 0) { throw "$($t.Name) failed: $LASTEXITCODE" }
+          }
 
       - name: Run Python regression
         env:

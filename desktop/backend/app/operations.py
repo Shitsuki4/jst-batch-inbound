@@ -63,9 +63,9 @@ class Operations:
         f=io.StringIO(newline="")
         w=csv.writer(f)
         w.writerow(["类型","记录ID","状态","商品或单号","操作范围","数量/说明","提示","操作端","时间","核实备注"])
+        from exportfiles import csv_cell
         def cell(v):
-            v=str(v)
-            return "'"+v if v.lstrip().startswith(("=","+","-","@")) or v.startswith(("\t","\r","\n")) else v
+            return csv_cell(str(v))
         for r in self.rows():
             w.writerow([cell(r.get(k,"")) for k in ("kind","ref","status","title","scope","detail","error","actor","created")] + [cell(" | ".join(n["actor"]+": "+n["text"] for n in r["notes"]))])
         return ("\ufeff"+f.getvalue()).encode("utf-8")

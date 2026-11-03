@@ -39,7 +39,7 @@ public static class NativeDiag {
  public static string Write(string level,string code,string op,string message,Exception? ex=null){
   var rid=NewId();
   try{
-   var rec=new Dictionary<string,object?>{["ts"]=DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss.fff zzz"),["level"]=level,["code"]=code,["op"]=op,["page"]="native",["rid"]=rid,["msg"]=Redact(message),["source"]="native",["version"]=typeof(NativeDiag).Assembly.GetName().Version?.ToString()};
+   var rec=new Dictionary<string,object?>{["ts"]=DateTimeOffset.Now.ToString("yyyy-MM-dd'T'HH:mm:ss.fffzzz",System.Globalization.CultureInfo.InvariantCulture),["level"]=level,["code"]=code,["op"]=op,["page"]="native",["rid"]=rid,["msg"]=Redact(message),["source"]="native",["version"]=typeof(NativeDiag).Assembly.GetName().Version?.ToString()};
    if(ex!=null){rec["exception"]=ex.GetType().FullName;rec["trace"]=Redact(ex.ToString());}
    var line=JsonSerializer.Serialize(rec)+"\n";
    lock(Gate){Directory.CreateDirectory(LogDir);Rotate();File.AppendAllText(LogPath,line,new UTF8Encoding(false));}

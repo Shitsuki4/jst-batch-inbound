@@ -555,6 +555,22 @@ class GuardTests(unittest.TestCase):
         self.assertIsNotNone(g.admit("2001:db8:ffff::/64", now + 1))
         self.assertIsNone(g.admit("2001:db8:ffff::/64", now + remote_access.GLOBAL_LOCK_SECONDS + 2))
 
+    def test_global_throttle_spares_trusted_network(self):
+        g = Guard()
+        now = time.time()
+        home = "203.0.113.7"
+        self.assertIsNone(g.admit(home, now))
+        g.succeeded(home, now)
+        for i in range(remote_access.GLOBAL_FAIL_LIMIT):
+            key = "2001:db8:%x::/64" % i
+            g.admit(key, now + 1)
+            g.failed(key, now + 1)
+        self.assertIsNotNone(g.admit("2001:db8:ffff::/64", now + 2))   # 陌生网络被全局暂停拦住
+        self.assertIsNone(g.admit(home, now + 2))                      # 登录成功过的网络不受影响
+        for _ in range(remote_access.FAIL_LIMIT):                       # 但它自己的失败锁定照旧
+            g.failed(home, now + 3)
+        self.assertIsNotNone(g.admit(home, now + 4))
+
     def test_per_source_lock_expires(self):
         g = Guard()
         now = time.time()

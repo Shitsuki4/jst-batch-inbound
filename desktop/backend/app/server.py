@@ -6,6 +6,9 @@
 前端为原生 HTML/JS，浏览器用 Edge --app 无边框窗口打开，跨进程零冗余。
 """
 import contextlib
+import http.cookies
+import hmac
+import csv
 import hashlib
 import html
 import io
@@ -96,10 +99,13 @@ from purchase_watch import PurchaseWatch
 from inventory import InventoryService
 from backup import BackupManager, VERSION
 import restore
+import exportfiles
 from operations import Operations
 from pda import PdaHost
 from download import InstallerHost
 from remote_access import RemoteHost
+# 导出文件统一放在导出目录（设置 → 数据与备份 里可改），结构：根目录\日期\类别\文件，和录像目录一致。
+EXPORTS = exportfiles.ExportDir(DATA, EXPORT_DIR)
 from updater import UpdateHost, inbound_busy_reason
 import xlsx  # noqa: E402
 import edgecookie  # noqa: E402
@@ -1077,7 +1083,8 @@ STATE_LOCK.register_audit(lambda: _locked_connections(audit=True))
 
 def rematch_other_inbound(po_id, owner, auth):
     """新采购单在其他收货方式（无采购单 / 联合）里有没有入库记录；有则返回那种方式的名字。"""
-    sql = ("SELECT 1 FROM inbound_job j JOIN session s ON s.id=j.session_id WHERE j.status<>'rejected'"
+    # 4.1.8：只拦还没处理完的入库记录；那边已完成的入库是另一批货，换过来不会重复（同物流单号另有核对）
+    sql = ("SELECT 1 FROM inbound_job j JOIN session s ON s.id=j.session_id WHERE j.status NOT IN ('rejected','complete')"
            " AND s.po_id=? AND COALESCE(s.owner_co_id,'')=? AND COALESCE(s.auth_co_id,'')=? LIMIT 1")
     args = (str(po_id), str(owner or ""), str(auth or ""))
     for name, store in purchase_sources().items():
@@ -1100,9 +1107,18 @@ def cross_receipt_guard(store,sid):
         j=dict(row)
         if store is JOINT.store and j['session_id']==sid:continue
         if identity(j)!=identity(target):continue
-        own=JOINT.store.db.execute('SELECT group_sid FROM joint_stage WHERE sid=?',(sid,)).fetchone() if store is JOINT.store else None
-        if not own or own[0]!=j['group_sid'] or j['status']!='complete':
-            raise ValueError('此采购单在其他来源 / 联合批次已有入库或待核实记录，请核对并继续原单，禁止重复开单')
+        # 4.1.8：联合收货里已完成、物流单号不同的入库不再拦（分批到货可以换收货方式）；
+        # 还没处理完的入库记录、或同一物流单号已在联合收货入过库，照旧拦下。
+        if j['status']!='complete':
+            raise ValueError('[E-INB-2012] 此采购单在联合收货里还有没处理完的入库记录（创建中或待核实），请先处理完再生成，禁止重复开单')
+        try:
+            nos={str(b.get('tracking_no') or '').strip().upper() for b in (json.loads(j.get('snapshot_json') or '{}').get('batches') or [])}
+        except (TypeError,ValueError):
+            nos=set()
+        mine={str(b['tracking_no'] or '').strip().upper() for b in store.batches(sid)}
+        same=sorted((mine&nos)-{''})
+        if same:
+            raise ValueError('[E-INB-1001] 物流单号 %s 已在联合收货生成过入库单，同一批货不能再入库一次'%'、'.join(same))
 INBOUND.cross_guard=cross_receipt_guard
 
 def scan_step():
@@ -1265,14 +1281,14 @@ def diag_environment():
     except Exception:
         _ver = ""
     sizes = {}
-    for name in ("receiving.db", "unplanned.db", "joint.db", "express.db", "inventory.db"):
+    for name in restore.DB_NAMES:
         p = os.path.join(DATA, name)
         if os.path.isfile(p):
             sizes[name] = os.path.getsize(p)
     return {
         "app_version": _ver,
         "data_dir": DATA,
-        "export_dir": EXPORT_DIR,
+        "export_dir": EXPORTS.root(),
         "portable": os.environ.get("JST_PORTABLE", "") or None,
         "db_sizes": sizes,
         "pid": os.getpid(),
@@ -1289,8 +1305,47 @@ def diag_info():
                           "mtime": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(st.st_mtime))})
         except OSError:
             continue
-    return {"log_dir": diaglog.log_dir(), "export_dir": EXPORT_DIR, "files": files,
+    return {"log_dir": diaglog.log_dir(), "export_dir": EXPORTS.root(), "files": files,
             "max_bytes": diaglog.MAX_BYTES, "backups": diaglog.BACKUPS, "environment": diag_environment()}
+
+# ---------- 本机接口令牌 ----------
+# 桌面程序启动本机服务时设 JST_LOCAL_AUTH=1：所有 /api/ 和 /files/ 都要带桌面程序分配的令牌，
+# 本机其他程序（包括同一台电脑上的其他 Windows 账户）不带令牌直接请求端口会被拒绝。
+# 桌面程序自己的请求带 X-Native-Token；WebView2 里的页面带 HttpOnly Cookie（由桌面程序写入，值由令牌派生）。
+# 单独运行本机服务（开发、测试）时不设这个变量，不要求令牌。PDA 走自己的配对令牌，不经过这里。
+LOCAL_AUTH_COOKIE = "jst_local"
+
+
+def local_auth_required():
+    return os.environ.get("JST_LOCAL_AUTH") == "1"
+
+
+def web_session_value(token):
+    return hashlib.sha256(("jst-web-session:" + token).encode("utf-8")).hexdigest()
+
+
+def same_secret(given, expected):
+    return bool(given) and bool(expected) and hmac.compare_digest(str(given).encode("utf-8"), str(expected).encode("utf-8"))
+
+
+def mark_draft_qty(row, items):
+    """新开一轮前读聚水潭里这张采购单还没确认的入库草稿，按商品写进 draft_qty（基线里据此扣应收）。
+
+    分批到货时上一批的草稿还没确认，ERP 已入库数不含它；不扣的话第二批会被当成「没收够」继续收。
+    读不到时标 draft_unknown，本轮页面提示应收可能偏多，不拦收货。"""
+    try:
+        api = INBOUND.context({"owner_co_id": row.get("owner_co_id"), "auth_co_id": row.get("auth_co_id")})
+        drafts = api.draft_qty(row["po_id"])
+    except Exception as e:
+        log("draft qty fail po=%s: %s" % (row.get("po_id"), e))
+        for it in items:
+            it["draft_unknown"] = True
+        return
+    for it in items:
+        q = drafts.pop(str(it.get("sku_id") or ""), None)   # 同一商品多行时只扣在第一行
+        if q:
+            it["draft_qty"] = str(q)
+
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -1486,6 +1541,11 @@ class Handler(BaseHTTPRequestHandler):
             valid = valid and origin.lower() in {"http://" + h for h in hosts}
         if self.headers.get("Sec-Fetch-Site") == "cross-site":
             valid = False
+        if valid and not self._local_token_ok():
+            self._drain_body()
+            self.close_connection = True
+            self._fail("本机接口需要桌面程序授权，请从收货小助手桌面程序里操作", code=401, error_code="E-REQ-1401")
+            return False
         if valid:
             return True
         try:
@@ -1498,6 +1558,33 @@ class Handler(BaseHTTPRequestHandler):
         self.close_connection = True
         self._fail("禁止非本机地址或跨站请求", code=403, error_code="E-REQ-1403")
         return False
+
+    def _drain_body(self):
+        try:
+            size = int(self.headers.get("Content-Length") or 0)
+            if 0 < size <= 1024 * 1024:
+                self.connection.settimeout(2)
+                self.rfile.read(size)
+        except (ValueError, OSError):
+            pass
+
+    def _local_token_ok(self):
+        if not local_auth_required():
+            return True
+        path = urllib.parse.urlparse(self.path).path
+        if not (path.startswith("/api/") or path.startswith("/files/")):
+            return True  # 页面、脚本、样式是公开的静态文件，不含数据
+        token = os.environ.get("JST_NATIVE_TOKEN", "")
+        if not token:
+            return False
+        if same_secret(self.headers.get("X-Native-Token"), token):
+            return True
+        try:
+            jar = http.cookies.SimpleCookie(self.headers.get("Cookie") or "")
+        except http.cookies.CookieError:
+            return False
+        c = jar.get(LOCAL_AUTH_COOKIE)
+        return bool(c) and same_secret(c.value, web_session_value(token))
 
     def _clipboard_guard(self):
         # Never write this computer's clipboard on behalf of a LAN/PDA client.
@@ -1572,7 +1659,7 @@ class Handler(BaseHTTPRequestHandler):
     LOCK_FREE_GETS = frozenset(("/api/heartbeat", "/api/pda/download/status",
                                 "/api/report/clipboard/status", "/api/remote/status",
                                 "/api/update/status", "/api/diag/info", "/api/diag/logs",
-                                "/api/errors/codes"))
+                                "/api/errors/codes", "/api/export-dir", "/api/export-dir/target"))
 
     def do_GET(self):
         self._rid = diaglog.new_request_id()
@@ -1695,6 +1782,19 @@ class Handler(BaseHTTPRequestHandler):
             return self._ok(ts=time.time())
         if path == "/api/errors/codes":
             return self._ok(codes=errreg.registry_json())
+        if path == "/api/export-dir":
+            return self._ok(**EXPORTS.status())
+
+        if path == "/api/export-dir/target":
+            # 桌面程序把网页里的下载（联合收货、操作记录等 CSV）存进导出目录：根目录\日期\类别\文件
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            name = (q.get("name") or [""])[0]
+            try:
+                target = EXPORTS.target(name)
+            except exportfiles.ExportDirError as e:
+                return self._fail(str(e), error_code=e.error_code)
+            return self._ok(path=target, folder=os.path.dirname(target), category=exportfiles.category_of(name))
+
         if path == "/api/diag/info":
             return self._ok(**diag_info())
         if path == "/api/diag/logs":
@@ -1821,10 +1921,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._export(q)
 
         if path.startswith("/files/"):
-            name = os.path.basename(path[len("/files/"):])
-            p = os.path.join(EXPORT_DIR, name)
-            if not os.path.isfile(p):
+            p = EXPORTS.resolve(urllib.parse.unquote(path[len("/files/"):]))
+            if not p:
                 return self._send(404, b"not found")
+            name = os.path.basename(p)
             with open(p, "rb") as f:
                 data = f.read()
             fn = urllib.parse.quote(name)
@@ -1988,7 +2088,6 @@ class Handler(BaseHTTPRequestHandler):
         if not rows:
             return self._fail("所选范围内没有可导出的收货记录", hint="请确认筛选条件")
 
-        os.makedirs(EXPORT_DIR, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         tag = {"po": "采购单%s" % q.get("value", ""), "tracking": "物流单%s" % q.get("value", ""),
                "range": "%s至%s" % (q.get("start", ""), q.get("end", ""))}.get(mode, "全部")
@@ -1996,19 +2095,25 @@ class Handler(BaseHTTPRequestHandler):
         cols = ["采购单号", "对应物流单号", "扫描时间", "商品编码", "商品名称", "数量"]
         # 数据已在锁内取完；写导出文件是本地慢 I/O，放到锁外。
         with unlocked("export-file"):
-            if fmt == "xlsx":
-                name = safe_filename(base + ".xlsx")
-                path = os.path.join(EXPORT_DIR, name)
-                xlsx.write_xlsx(path, "收货明细", cols, rows)
-            else:
-                name = safe_filename(base + ".csv")
-                path = os.path.join(EXPORT_DIR, name)
-                with open(path, "w", encoding="utf-8-sig", newline="") as f:
-                    f.write(",".join(cols) + "\r\n")
-                    for r in rows:
-                        f.write(",".join('"%s"' % str(x).replace('"', '""') for x in r) + "\r\n")
-        return self._ok(name=name, rows=len(rows), url="/files/" + urllib.parse.quote(name),
-                        path=path, preview={"cols": cols, "rows": rows[:5]})
+            try:
+                path = EXPORTS.target(safe_filename(base + (".xlsx" if fmt == "xlsx" else ".csv")), "收货明细")
+                if fmt == "xlsx":
+                    # 物流单号、商品编码按文字写，Excel 打开不变科学计数
+                    xlsx.write_xlsx(path, "收货明细", cols, rows, text_cols=[0, 1, 3])
+                else:
+                    with open(path, "w", encoding="utf-8-sig", newline="") as f:
+                        w = csv.writer(f)
+                        w.writerow(cols)
+                        for r in rows:
+                            w.writerow(exportfiles.csv_row(r))
+            except exportfiles.ExportDirError as e:
+                return self._fail(str(e), error_code=e.error_code)
+            except OSError as e:
+                return self._fail("写入导出文件失败：%s" % (e.strerror or e), error_code="E-DATA-1006",
+                                  hint="请检查导出目录是否可写，或在「设置 → 数据与备份」里换一个导出目录")
+        name = os.path.basename(path)
+        return self._ok(name=name, rows=len(rows), url=EXPORTS.relative_url(path),
+                        path=path, folder=os.path.dirname(path), preview={"cols": cols, "rows": rows[:5]})
 
     # ---------- POST ----------
     def do_POST(self):
@@ -2186,7 +2291,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             job = INBOUND.create(int(b.get("sid") or 0), str(b.get("fingerprint") or ""), str(b["wh_id"]), mode=b.get("mode"))
             return self._ok(job={k: v for k, v in job.items() if k != "snapshot_json"},
-                            msg="已按实收生成待入库单 %s（未自动确认入库）" % job["io_id"])
+                            msg="；".join(["已按实收生成待入库单 %s（未自动确认入库）" % job["io_id"]] + list(job.get("notes") or [])))
         except Exception as e:
             return self._fail(str(e))
 
@@ -2197,7 +2302,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             job = INBOUND.resume(int(b.get("job_id") or 0), str(b.get("io_id") or "").strip())
             return self._ok(job={k: v for k, v in job.items() if k != "snapshot_json"},
-                            msg="入库单 %s 已完成实收数量核对（未自动确认入库）" % job["io_id"])
+                            msg="；".join(["入库单 %s 已完成实收数量核对（未自动确认入库）" % job["io_id"]] + list(job.get("notes") or [])))
         except Exception as e:
             return self._fail(str(e))
 
@@ -2252,7 +2357,7 @@ class Handler(BaseHTTPRequestHandler):
         b = self._body()
         if os.environ.get("JST_NATIVE_PORT"):
             token = os.environ.get("JST_NATIVE_TOKEN", "")
-            if not token or self.headers.get("X-Native-Token") != token:
+            if not same_secret(self.headers.get("X-Native-Token"), token):
                 return self._fail("恢复备份只能在本机应用内操作", code=403)
         if b.get("confirm") != "恢复":
             return self._fail("请输入“恢复”确认后再恢复备份", code=400)
@@ -2584,6 +2689,8 @@ class Handler(BaseHTTPRequestHandler):
                 msg="该采购单上一轮已结束。新一轮按当前ERP剩余量作为应收，历史实收不计入新一轮。请先核对上轮收货是否已在ERP处理完毕；未完成入库的旧货不要在新一轮重复扫描。")
         row["owner_co_id"] = ctx["owner"]
         row["auth_co_id"] = ctx["auth"]
+        if not existing or was_closed:
+            mark_draft_qty(row, items)
         sid = STORE.open_session(no, row["po_id"], ctx["id_type"], row, items)
         STORE.set_kv("po_refreshed_at:" + str(sid), time.strftime("%Y-%m-%d %H:%M:%S"))
         STORE.activate_session(sid)
@@ -2769,6 +2876,17 @@ class Handler(BaseHTTPRequestHandler):
             STORE.client_op_finish(op["id"], dict(ok=True, **kw))
         return self._ok(**kw)
 
+    @staticmethod
+    def _scan_round(sid):
+        """扫码入账后的本轮数量（receiving_round），商品列表据此即时刷新。
+
+        查询失败不影响已入账的结果。"""
+        try:
+            return STORE.receiving_round(sid)
+        except Exception as e:   # 只用于刷新显示，不能让已入账的扫码返回失败
+            log("receiving_round after scan fail: %s" % e)
+            return None
+
     def _recheck_target(self, s, bid, mark, op=None):
         """缺码实时查询等远程调用会在锁外进行：回锁后重新校验写入目标，并重查操作编号。
 
@@ -2942,11 +3060,12 @@ class Handler(BaseHTTPRequestHandler):
                             item={k: payload[k] for k in ("sku_id", "name", "spec")},
                             batch_id=bid, msg="已识别商品，待确认数量")
         lid, qty = STORE.add_qty(bid, s["id"], payload, add, op=op)
+        rnd = self._scan_round(s["id"])
         return self._ok_op(op, line_id=lid, qty=qty, added=add, via=res.get("via", "barcode"),
                         learned=payload["match_src"] == "learned",
                         item={k: payload[k] for k in ("sku_id", "name", "spec")},
                         lines=cur_lines(s["id"], bid), items=po_items(s["id"]),
-                        progress=STORE.progress(s["id"]))
+                        progress=STORE.progress(s["id"]), receiving_round=rnd)
 
     def _post_api_item_choose(self):
         """多候选时人工选定后继续追加"""
@@ -2990,9 +3109,10 @@ class Handler(BaseHTTPRequestHandler):
                    "sku_code": it.get("sku_code", ""), "name": it.get("name", ""),
                    "spec": it.get("spec", ""), "matched": matched, "match_src": it.get("match_src", "")}
         lid, qty = STORE.add_qty(bid, s["id"], payload, add, op=op)
+        rnd = self._scan_round(s["id"]) if matched else None
         return self._ok_op(op, line_id=lid, qty=qty, added=add, unmatched=not matched, resolved=True,
                         item=it, lines=cur_lines(s["id"], bid), items=po_items(s["id"]),
-                        progress=STORE.progress(s["id"]))
+                        progress=STORE.progress(s["id"]), receiving_round=rnd)
 
     def _post_api_line_edit(self):
         b = self._body()
@@ -3159,9 +3279,11 @@ class Handler(BaseHTTPRequestHandler):
     def _post_api_diag_export(self):
         """导出诊断包（日志 + 版本与环境 + 错误码表），放到「导出」文件夹。"""
         try:
-            path = diaglog.export_zip(EXPORT_DIR, env=diag_environment(), codes=errreg.registry_json(),
+            path = diaglog.export_zip(os.path.dirname(EXPORTS.target("诊断包.zip", "诊断包")), env=diag_environment(), codes=errreg.registry_json(),
                                       extra_files=[p for p in (os.path.join(os.path.dirname(DATA), "native-errors.log"),)
                                                    if os.path.isfile(p)])
+        except exportfiles.ExportDirError as e:
+            return self._fail(str(e), error_code=e.error_code)
         except OSError as e:
             return self._fail("诊断包导出失败：%s" % e, error_code="E-DATA-1006")
         diaglog.info("diag.export", "导出诊断包", file=os.path.basename(path))
@@ -3172,7 +3294,7 @@ class Handler(BaseHTTPRequestHandler):
                 opened = True
             except OSError:
                 opened = False
-        return self._ok(path=path, name=os.path.basename(path), folder=EXPORT_DIR, opened=opened)
+        return self._ok(path=path, name=os.path.basename(path), folder=os.path.dirname(path), opened=opened)
 
     def _post_api_diag_open_logs(self):
         folder = diaglog.log_dir()
@@ -3184,13 +3306,37 @@ class Handler(BaseHTTPRequestHandler):
             return self._fail("打开日志文件夹失败：%s" % e, error_code="E-DATA-1002")
         return self._ok(folder=folder)
 
-    def _post_api_open_folder(self):
+    def _post_api_export_dir(self):
+        """设置导出目录。空 = 恢复默认。旧目录里已经导出的文件不移动，回复里给出旧目录。"""
+        body = self._body()
         try:
-            os.makedirs(EXPORT_DIR, exist_ok=True)
-            os.startfile(EXPORT_DIR)
-        except Exception:
-            return self._fail("无法打开文件夹")
-        return self._ok()
+            r = EXPORTS.set_root(str(body.get("directory") or ""))
+        except exportfiles.ExportDirError as e:
+            return self._fail(str(e), error_code=e.error_code)
+        except OSError as e:
+            return self._fail("保存导出目录设置失败：%s" % (e.strerror or e), error_code="E-DATA-1010")
+        diaglog.info("export.dir", "导出目录已修改", old=r["old"], new=r["new"])
+        moved_note = "" if os.path.normcase(r["old"]) == os.path.normcase(r["new"]) else \
+            "以前导出的文件没有移动，仍在：%s" % r["old"]
+        return self._ok(note=moved_note, **{**EXPORTS.status(), "old": r["old"]})
+
+    def _post_api_open_folder(self):
+        body = self._body()
+        try:
+            folder = EXPORTS.root()
+            sub = str(body.get("folder") or "")
+            if sub:  # 刚导出的文件所在的子目录；只认导出目录里面的
+                real = os.path.realpath(sub)
+                if os.path.commonpath([os.path.realpath(folder), real]) == os.path.realpath(folder) and os.path.isdir(real):
+                    folder = real
+            EXPORTS.check(EXPORTS.root())
+            if os.name == "nt":
+                os.startfile(folder)  # type: ignore[attr-defined]
+        except exportfiles.ExportDirError as e:
+            return self._fail(str(e), error_code=e.error_code)
+        except Exception as e:
+            return self._fail("无法打开导出文件夹：%s" % e, error_code="E-DATA-1008")
+        return self._ok(folder=folder)
 
 
 def safe_filename(s):
@@ -3462,7 +3608,10 @@ def create_http_server(port, native):
 
 def main():
     os.makedirs(DATA, exist_ok=True)
-    os.makedirs(EXPORT_DIR, exist_ok=True)
+    try:
+        os.makedirs(EXPORTS.root(), exist_ok=True)
+    except OSError as e:  # 自定义导出目录（如拔掉的 U 盘）不在时不影响启动，导出时再带错误码提示
+        log("export dir unavailable: %s" % e)
     global PORT
     native = bool(os.environ.get("JST_NATIVE_PORT"))
     if native:
