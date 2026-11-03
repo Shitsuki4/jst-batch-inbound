@@ -47,10 +47,12 @@
   function load() {
     var pane = document.querySelector('[data-settings-pane="diagnostic"]');
     if (!pane) return;
-    var q = (pane.querySelector('#diag-q').value || '').trim(), qs = 'limit=100&level=ERROR';
-    if (/^E-[A-Z]+-\d{4}$/i.test(q)) qs += '&code=' + encodeURIComponent(q.toUpperCase());
-    else if (/^[0-9a-f]{6,}$/i.test(q)) qs += '&rid=' + encodeURIComponent(q);
-    else if (q) qs += '&q=' + encodeURIComponent(q);
+    // 弹窗里的报错大多是 WARN 级（断网、无权限、业务校验），默认列 WARN 和 ERROR；
+    // 按错误码或日志编号查时不限级别，弹窗里给的日志编号一定能查到。
+    var q = (pane.querySelector('#diag-q').value || '').trim(), qs = 'limit=100';
+    if (/^\[?E-[A-Z]+-\d{4}\]?$/i.test(q)) qs += '&code=' + encodeURIComponent(q.replace(/[\[\]]/g, '').toUpperCase());
+    else if (/^[0-9a-f]{6,}$/i.test(q)) qs += '&rid=' + encodeURIComponent(q.toLowerCase());
+    else { qs += '&level=WARN,ERROR'; if (q) qs += '&q=' + encodeURIComponent(q); }
     json('/api/diag/info').then(function (r) {
       if (!r.ok) return;
       pane.querySelector('#diag-where').innerHTML = '日志位置：' + esc(r.log_dir) + '<br>单个文件满 ' + size(r.max_bytes)
@@ -62,10 +64,10 @@
       if (!r.ok) { box.innerHTML = '<p class="hint">' + esc(msgOf(r, '读取日志失败')) + '</p>'; return; }
       var rows = r.entries || [];
       if (!rows.length) { box.innerHTML = '<p class="hint">' + (q ? '没有符合条件的报错。' : '最近没有报错。') + '</p>'; return; }
-      box.innerHTML = '<table class="tbl"><thead><tr><th>时间</th><th>错误码</th><th>内容</th><th>日志编号</th></tr></thead><tbody>'
+      box.innerHTML = '<table class="tbl"><thead><tr><th>时间</th><th>级别</th><th>错误码</th><th>内容</th><th>日志编号</th></tr></thead><tbody>'
         + rows.map(function (e) {
           var extra = [e.po ? '采购单 ' + e.po : '', e.tracking ? '物流单 ' + e.tracking : '', e.op || ''].filter(Boolean).join(' · ');
-          return '<tr><td>' + esc(e.ts) + '</td><td><b>' + esc(e.code) + '</b></td><td>' + esc(e.msg) + (extra ? '<div class="hint">' + esc(extra) + '</div>' : '')
+          return '<tr><td>' + esc(e.ts) + '</td><td>' + esc(e.level) + '</td><td><b>' + esc(e.code) + '</b></td><td>' + esc(e.msg) + (extra ? '<div class="hint">' + esc(extra) + '</div>' : '')
             + '</td><td>' + esc(e.rid) + '</td></tr>';
         }).join('') + '</tbody></table>';
     });

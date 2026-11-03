@@ -218,6 +218,52 @@ class DownloadTests(HostBase):
         self.assertEqual(dl["state"], "failed")
         self.assertIn("不一致", dl["error"])
 
+    def test_proxy_download_needs_direct_checksum(self):
+        # 安装包和 SHA256SUMS 都只能经加速站拿到、版本信息也不是直连 GitHub 拿的 → 拒绝，不退回同渠道自证
+        sums = "%s  %s\n" % (PAYLOAD_SHA, "ReceivingAssistant-3.0.4-Offline-Setup.exe")
+        routes, name = self.setup_release(sums)
+        direct_sums = release_download_url("desktop-v3.0.4", "SHA256SUMS.txt")
+        proxied = {channel_url("proxy", u): r for u, r in routes.items() if u.startswith("https://github.com/")}
+        routes.pop(direct_sums)
+        routes.update(proxied)
+        h = self.host(FakeFetch(routes))
+        h.check_now(True)
+        h.cache()["source"] = "proxy"
+        orig_cache = h.cache
+        h.cache = lambda: dict(orig_cache(), source="proxy")
+        h.start_download("proxy")
+        dl = self.wait_dl(h)
+        self.assertEqual(dl["state"], "failed", dl)
+        self.assertIn("GitHub 原链接", dl["error"])
+
+    def test_proxy_download_verified_by_direct_sums(self):
+        sums = "%s  %s\n" % (PAYLOAD_SHA, "ReceivingAssistant-3.0.4-Offline-Setup.exe")
+        routes, name = self.setup_release(sums)
+        for u in list(routes):
+            if u.startswith("https://github.com/"):
+                routes[channel_url("proxy", u)] = routes[u]
+        routes.pop(release_download_url("desktop-v3.0.4", name))          # 安装包只能走加速站
+        h = self.host(FakeFetch(routes))
+        h.check_now(True)
+        h.start_download("proxy")
+        dl = self.wait_dl(h)
+        self.assertEqual(dl["state"], "verified", dl)
+
+    def test_proxy_sums_differ_from_direct_rejected(self):
+        sums = "%s  %s\n" % (PAYLOAD_SHA, "ReceivingAssistant-3.0.4-Offline-Setup.exe")
+        routes, name = self.setup_release(sums)
+        for u in list(routes):
+            if u.startswith("https://github.com/"):
+                routes[channel_url("proxy", u)] = routes[u]
+        routes[channel_url("proxy", release_download_url("desktop-v3.0.4", "SHA256SUMS.txt"))] = (
+            200, {}, ("%s  %s\n" % ("e" * 64, "ReceivingAssistant-3.0.4-Offline-Setup.exe")).encode())
+        h = self.host(FakeFetch(routes))
+        h.check_now(True)
+        h.start_download("proxy")
+        dl = self.wait_dl(h)
+        self.assertEqual(dl["state"], "failed", dl)
+        self.assertIn("加速站", dl["error"])
+
     def test_resume_and_retry(self):
         state = {"n": 0}
         cut = 70 * 1024

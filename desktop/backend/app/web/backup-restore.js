@@ -30,6 +30,14 @@
  async function load(){var j=await api('restore/list');pending(j.pending);blockers(j.blockers);
   $('restore-list').innerHTML=j.backups.length?'<table><thead><tr><th>时间</th><th>类型</th><th>版本</th><th>大小</th><th>完整性</th><th></th></tr></thead><tbody>'+j.backups.map(function(b){var id=b.directory.split(/[\\/]/).pop();return '<tr><td>'+esc(b.time)+'</td><td>'+esc(b.reason_label)+'</td><td>'+esc(b.version)+'</td><td>'+size(b.size)+'</td><td>'+(b.complete?'完整':'<span style="color:var(--danger)">未完成</span>')+'</td><td><button class="btn btn-ghost" type="button" data-restore-preview="'+esc(id)+'" data-label="'+esc(b.time+' · '+b.reason_label)+'"'+(b.complete?'':' disabled')+'>预览</button></td></tr>';}).join('')+'</tbody></table>':'<p class="empty">暂无备份。</p>';
  }
+ // 三种收货方式（有采购单 / 无采购单 / 联合收货）各自的入库记录分别列出，写明是哪种收货方式的单。
+ function inboundWarning(p){var groups=p.missing_inbound,h='';
+  if(!groups){var all=p.missing_inbound_io_ids||[];groups=all.length?[{mode:'有采购单收货',io_ids:all}]:[];}
+  var total=groups.reduce(function(n,g){return n+(g.io_ids||[]).length;},0);
+  if(total)h+='<div class="inbound-warning" data-restore-inbound-loss style="color:var(--danger);border-color:var(--danger)"><b>警告：恢复后将丢失 '+total+' 条已生成的入库记录</b>：<ul>'+groups.map(function(g){return '<li><b>'+esc(g.mode)+'</b> '+g.io_ids.length+' 条（ERP入库单号：'+g.io_ids.map(esc).join('、')+'）</li>';}).join('')+'</ul>这些单据在聚水潭中仍然存在，恢复后本软件不再知道它们已入库，<b>有重复入库的风险</b>。恢复后请先在聚水潭按上面的收货方式逐张核对，不要重复提交。</div>';
+  var errs=p.inbound_check_errors||[];
+  if(errs.length)h+='<div class="inbound-warning" style="color:var(--danger);border-color:var(--danger)"><b>有入库记录没能核对</b>：'+errs.map(esc).join('；')+'。无法确认恢复后会不会丢失这些入库记录，请先在聚水潭核对最近的入库单。</div>';
+  return h;}
  function countsTable(dbs){var rows=[];Object.keys(dbs||{}).forEach(function(n){var d=dbs[n];var names={};Object.keys(d.backup||{}).concat(Object.keys(d.current||{})).forEach(function(t){names[t]=1;});
    if(d.kept_current){rows.push('<tr><td>'+esc(n)+'</td><td colspan="3">备份中没有此库，保留当前数据</td></tr>');return;}
    if(!d.in_backup){rows.push('<tr><td>'+esc(n)+'</td><td colspan="3" style="color:var(--danger)">备份中没有此库，恢复后当前数据将被移走</td></tr>');return;}
@@ -38,8 +46,7 @@
  async function preview(sel){selected=null;$('restore-preview').innerHTML='';$('restore-confirm').value='';msg('正在校验并预览…');
   var j=await api('restore/preview?'+param(sel));blockers(j.blockers);var h='';
   if(!j.verify.ok){$('restore-preview').innerHTML='<p class="inbound-warning">备份校验未通过，不能恢复：'+esc(j.verify.errors.join('；'))+'</p>';msg('');return;}
-  if(j.preview){var miss=j.preview.missing_inbound_io_ids||[];
-   if(miss.length)h+='<div class="inbound-warning" style="color:var(--danger);border-color:var(--danger)"><b>警告：恢复后将丢失 '+miss.length+' 条已生成的入库记录</b>（ERP入库单号：'+miss.map(esc).join('、')+'）。这些单据在聚水潭中仍然存在，恢复后本软件不再知道它们已入库，<b>有重复入库的风险</b>。恢复后请先在聚水潭核对，不要重复提交。</div>';
+  if(j.preview){h+=inboundWarning(j.preview);
    h+=countsTable(j.preview.dbs);}
   else h+='<p class="hint">压缩包会在恢复时完整校验；暂不显示行数对比。</p>';
   $('restore-preview').innerHTML=h;sel.previewed=true;selected=sel;msg('请核对上方内容；确认无误后输入「恢复」并点击恢复。');

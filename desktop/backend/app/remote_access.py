@@ -45,6 +45,7 @@ ATTEMPTS_PER_MIN = 10             # 同一来源每分钟最多尝试登录次�
 GLOBAL_FAIL_WINDOW = 10 * 60
 GLOBAL_FAIL_LIMIT = 30            # 全局 10 分钟内 30 次失败 → 全部登录暂停
 GLOBAL_LOCK_SECONDS = 5 * 60
+TRUSTED_SECONDS = 30 * 24 * 3600   # 30 天内在这个网络登录成功过 → 全局暂停不拦它（别人刷失败锁不住自己人）
 MAX_STREAMS = 3                   # 同时播放 / 下载的录像流
 STREAM_WAIT = 5.0
 MAX_CONNECTIONS = 48
@@ -710,6 +711,7 @@ class Guard:
         self.locked = {}         # key -> until
         self.global_fails = collections.deque()
         self.global_until = 0.0
+        self.trusted = {}        # key -> 最近一次登录成功的时间
         self.verify_slots = threading.BoundedSemaphore(2)
 
     def _prune(self, now):
@@ -718,6 +720,7 @@ class Guard:
         self.attempts = {k: [t for t in v if t > now - 60] for k, v in self.attempts.items()}
         self.attempts = {k: v for k, v in self.attempts.items() if v}
         self.locked = {k: v for k, v in self.locked.items() if v > now}
+        self.trusted = {k: v for k, v in self.trusted.items() if v > now - TRUSTED_SECONDS}
         while self.global_fails and self.global_fails[0] <= now - GLOBAL_FAIL_WINDOW:
             self.global_fails.popleft()
         self.sessions = {k: v for k, v in self.sessions.items()
@@ -728,7 +731,9 @@ class Guard:
         now = time.time() if now is None else now
         with self.lock:
             self._prune(now)
-            if self.global_until > now:
+            # 全局暂停只拦没登录成功过的网络：外网有人从很多地址刷密码时，仓库自己常用的网络照样能登录。
+            # 每个来源自己的失败锁定、每分钟次数限制照旧，对常用网络也生效。
+            if self.global_until > now and key not in self.trusted:
                 return "登录尝试过多，远程登录已暂时暂停，请稍后再试"
             if self.locked.get(key, 0) > now:
                 return "失败次数过多，该网络已锁定15分钟"
@@ -756,9 +761,14 @@ class Guard:
                 locked = True
             return locked
 
-    def succeeded(self, key):
+    def succeeded(self, key, now=None):
+        now = time.time() if now is None else now
         with self.lock:
             self.fails.pop(key, None)
+            self.trusted[key] = now
+            if len(self.trusted) > 256:  # 只留最近的
+                for k in sorted(self.trusted, key=self.trusted.get)[:len(self.trusted) - 256]:
+                    self.trusted.pop(k, None)
 
     def create(self, user, generation, ip, now=None):
         now = time.time() if now is None else now

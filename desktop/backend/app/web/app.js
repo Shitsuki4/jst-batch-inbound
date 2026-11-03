@@ -2020,9 +2020,13 @@
       $('#exp-preview').innerHTML = r.preview.rows.map(function (row) {
         return '<tr>' + row.map(function (c) { return '<td>' + esc(c) + '</td>'; }).join('') + '</tr>';
       }).join('');
-      var a = document.createElement('a');
-      a.href = r.url; a.download = r.name;
-      document.body.appendChild(a); a.click(); a.remove();
+      lastExportFolder = r.folder || '';
+      // 桌面程序里文件已经存进导出目录，不再走浏览器下载（否则会多存一份）；浏览器里照常下载一份。
+      if (!(window.chrome && window.chrome.webview)) {
+        var a = document.createElement('a');
+        a.href = r.url; a.download = r.name;
+        document.body.appendChild(a); a.click(); a.remove();
+      }
       toast('已导出 ' + r.rows + ' 行', 'ok');
     }).catch(function (e) { netAlert('', e); });
   }
@@ -2039,7 +2043,12 @@
     if (m === 'range' && (!$('#exp-from').value || !$('#exp-to').value)) return toast('请选择时间范围', 'warn');
     exportNow(m);
   };
-  $('#btn-open-folder').onclick = function () { api('/api/open-folder', { method: 'POST' }); };
+  var lastExportFolder = '';
+  $('#btn-open-folder').onclick = function () {
+    api('/api/open-folder', { method: 'POST', body: { folder: lastExportFolder } }).then(function (r) {
+      if (!r.ok) { $('#exp-msg').className = 'hint err'; $('#exp-msg').textContent = r.msg || '打开导出文件夹失败'; }
+    }).catch(function (e) { netAlert('', e); });
+  };
 
   /* -------------------- 设置 -------------------- */
   function loadSettingsView() {

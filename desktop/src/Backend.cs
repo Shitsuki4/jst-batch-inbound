@@ -9,6 +9,8 @@ public sealed class Backend : IAsyncDisposable {
  Process? proc;readonly HttpClient client=new(){Timeout=TimeSpan.FromSeconds(20)}; public string Url{get;private set;}=""; public string Token{get;private set;}=Guid.NewGuid().ToString("N");
  public int? ProcessId=>proc?.Id;public bool Alive=>proc!=null&&!proc.HasExited;public long Cursor{get;set;}
  internal async Task AttachForAcceptance(string url,string token,int pid){if(!url.StartsWith("http://127.0.0.1:"))throw new Exception("仅允许本机测试fixture");Url=url;Token=token;proc=Process.GetProcessById(pid);client.DefaultRequestHeaders.Add("X-Native-Token",token);using var h=await Get("/api/native/health");Cursor=h.RootElement.GetProperty("last").GetInt64();}
+ // WebView2 页面访问本机接口用的 HttpOnly Cookie：值由令牌派生（和 server.py web_session_value 一致），页面脚本读不到令牌本身
+ public string WebSessionCookie=>Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes("jst-web-session:"+Token))).ToLowerInvariant();
  public async Task Start(string root,string data){
   var connection=Path.Combine(data,"native-connection.json");
   if(System.IO.File.Exists(connection)){
@@ -23,7 +25,7 @@ public sealed class Backend : IAsyncDisposable {
   for(int attempt=1;;attempt++){
    var port=PickFreePort();Url=$"http://127.0.0.1:{port}";
    var p=new ProcessStartInfo(exe){UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true,WorkingDirectory=Path.GetDirectoryName(exe)!};
-   p.Environment["JST_DB_DIR"]=data;p.Environment["JST_NO_BROWSER"]="1";p.Environment["JST_NATIVE_PORT"]=port.ToString();p.Environment["JST_NATIVE_TOKEN"]=Token;p.Environment["JST_APP_VERSION"]=AppUpdate.AppVersion;p.Environment["JST_INSTALL_MODE"]=AppUpdate.InstallMode;
+   p.Environment["JST_DB_DIR"]=data;p.Environment["JST_NO_BROWSER"]="1";p.Environment["JST_NATIVE_PORT"]=port.ToString();p.Environment["JST_NATIVE_TOKEN"]=Token;p.Environment["JST_LOCAL_AUTH"]="1";p.Environment["JST_APP_VERSION"]=AppUpdate.AppVersion;p.Environment["JST_INSTALL_MODE"]=AppUpdate.InstallMode;
    // The runtime the installed app really uses (bundled runtime\ or the deps installer's shared one); the updater compares it with the
    // next release's pinned runtime to decide between the slim upgrade installer and the full offline installer.
    if(AppPaths.Installed){p.Environment["JST_RUNTIME_WEBVIEW2"]=AppPaths.BrowserFolder??"";p.Environment["JST_RUNTIME_FFMPEG"]=Dependencies.Resolve("ffmpeg.exe");p.Environment["JST_RUNTIME_FFPROBE"]=Dependencies.Resolve("ffprobe.exe");}

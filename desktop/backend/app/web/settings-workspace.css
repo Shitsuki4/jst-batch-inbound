@@ -3,3 +3,10 @@
 @media(max-width:720px){.settings-workspace{grid-template-columns:minmax(0,1fr)}.settings-nav{position:static;flex-direction:row;overflow-x:auto;padding:7px}.settings-nav button{white-space:nowrap;padding:9px}.settings-heading{align-items:flex-start}.settings-content .form-row>label:first-child{width:100%}.settings-content .form-row .input{width:100%;flex-basis:100%}}
 
 .settings-advanced .setting-switch input{width:auto}.settings-advanced summary{font-weight:600;padding:4px 0}.settings-advanced[open] summary{margin-bottom:16px}.video-check-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px}.video-sounds>div{display:flex;gap:16px;align-items:center;justify-content:space-between;margin:8px 0}.video-hardware-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:12px}.video-hardware-row .input{max-width:120px}.video-save-row{position:sticky;bottom:0;background:#fff;padding:14px 0;border-top:1px solid var(--c-line);z-index:1}.settings-content input:disabled,.settings-content button:disabled{opacity:.55;cursor:not-allowed}#video-alerts{white-space:pre-line;color:var(--c-warn)}#video-hotkey-status{overflow-wrap:anywhere;font-size:13px;color:var(--c-primary)}
+/* 输入框 + 按钮同一行（录像保存目录、导出保存目录、摄像头）；说明文字和输入框左边对齐 */
+.form-row .input-action{display:flex;gap:8px;flex:1;min-width:0;align-items:center}.form-row .input-action .input{flex:1;min-width:0}.form-row .input-action .btn{flex:none;white-space:nowrap}
+.settings-content .hint.form-hint{margin:-6px 0 14px calc(175px + 12px)}
+.settings-content .export-dir-status{margin:0 0 12px calc(175px + 12px);font-size:13px;line-height:1.5;word-break:break-all}.settings-content .export-dir-status.err{color:var(--danger)}
+.settings-content .export-dir-actions{display:flex;flex-wrap:wrap;gap:8px;margin-left:calc(175px + 12px)}
+@media(max-width:1000px){.settings-content .hint.form-hint,.settings-content .export-dir-status,.settings-content .export-dir-actions{margin-left:calc(145px + 12px)}}
+@media(max-width:720px){.settings-content .hint.form-hint,.settings-content .export-dir-status,.settings-content .export-dir-actions{margin-left:0}}

@@ -320,7 +320,8 @@ class JointService:
 
     def export(self,sid):
         d=self.state(sid);out=io.StringIO(newline='');w=csv.writer(out)
-        def row(v):w.writerow(["'"+x if isinstance(x,str) and x.startswith(('=','+','-','@','\t','\r')) else x for x in v])
+        from exportfiles import csv_row
+        def row(v):w.writerow(csv_row(v))
         row(['联合批次',d['session']['input_no'],'母单',d['group']['mother']]);row(['编码','商品','本轮合计应收','实收','差异','采购来源'])
         for r in d['rows']:row([r['sku_id'],r['name'],r['plan'] if r['plan'] is not None else '待核实',r['recv'],r['delta'] if r['delta'] is not None else '待核实',' / '.join(p['po_id'] for p in r['sources'])])
         row([]);row(['物流单','扫描登记时间','编码','实收','已占用','未分配'])

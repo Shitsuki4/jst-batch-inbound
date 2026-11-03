@@ -37,11 +37,33 @@ public sealed partial class MainWindow:Window {
  }
  static string FindTool(string name,string preferred)=>Dependencies.Resolve(name,preferred);
  Button Add(Panel p,string text,Func<Task> fn,string level=Theme.Secondary){var b=ShellChrome.Action(text,level);b.Click+=async(_,_)=>{b.IsEnabled=false;try{await Safe(fn);}finally{b.IsEnabled=true;}};p.Children.Add(b);return b;}
+ // 网页里的导出（联合收货、无采购单、操作记录等 CSV）统一存进导出目录：根目录\日期\类别\文件，和录像目录结构一致。
+ // 目录由本机服务按「设置 → 数据与备份 → 导出保存目录」给出；取不到（目录失效等）时按 WebView2 默认位置保存并记日志，不丢文件。
+ // 本机接口令牌：写入只在本机服务地址上有效的 HttpOnly Cookie，页面里的 fetch 自动带上
+ void SetLocalSessionCookie(){
+  try{var uri=new Uri(backend.Url);var cm=web.CoreWebView2.CookieManager;var cookie=cm.CreateCookie("jst_local",backend.WebSessionCookie,uri.Host,"/");
+   cookie.IsHttpOnly=true;cookie.SameSite=CoreWebView2CookieSameSiteKind.Strict;cm.AddOrUpdateCookie(cookie);}
+  catch(Exception ex){NativeDiag.Error("E-REQ-1401","local.cookie","本机接口授权写入失败："+ex.Message,ex);}
+ }
+ async void OnDownloadStarting(object? sender,CoreWebView2DownloadStartingEventArgs e){
+  var deferral=e.GetDeferral();
+  try{
+   var uri=new Uri(e.DownloadOperation.Uri);
+   if(uri.IsLoopback&&uri.AbsolutePath.StartsWith("/files/",StringComparison.Ordinal)){e.Cancel=true;return;}// 本机服务已经写进导出目录，不再存第二份
+   var name=Path.GetFileName(e.ResultFilePath);if(name=="")name="导出文件";
+   using var target=await backend.Get("/api/export-dir/target?name="+Uri.EscapeDataString(name));
+   e.ResultFilePath=target.RootElement.GetProperty("path").GetString()!;
+  }catch(Exception ex){var code=NativeDiag.CodeOf(ex,"E-DATA-1008");NativeDiag.Error(code,"export.download",NativeDiag.Format(code,"导出目录不可用，本次下载存到默认下载位置："+ex.Message),ex);}
+  finally{deferral.Complete();}
+ }
+
  async Task Safe(Func<Task> f){try{await f();}catch(Exception ex){var code=NativeDiag.CodeOf(ex,"E-NAT-1003");status.Text=NativeDiag.Format(code,ex.Message);NativeDiag.Show(this,code,"action",ex.Message,ex:ex);}}
  async Task Start(){
   var data=Path.Combine(root,"data");if(UiTest.Active)await backend.AttachForAcceptance(UiTest.Url,UiTest.Token,UiTest.Pid);else{try{await backend.Start(AppContext.BaseDirectory,data);}catch(Exception ex)when(ex is not CodedException){throw new CodedException("E-NAT-1001",ex.Message,ex);}}
   try{var env=await CoreWebView2Environment.CreateAsync(AppPaths.BrowserFolder,Path.Combine(root,"webview-profile"));webEnvironment.TrySetResult(env);await web.EnsureCoreWebView2Async(env);}catch(Exception ex)when(ex is not CodedException){throw new CodedException("E-NAT-1002","页面组件初始化失败："+ex.Message,ex);}
   web.CoreWebView2.WebMessageReceived+=ReceiveCommand;
+  web.CoreWebView2.DownloadStarting+=OnDownloadStarting;
+  web.CoreWebView2.NavigationStarting+=(_,e)=>{if(e.Uri.StartsWith(backend.Url,StringComparison.OrdinalIgnoreCase))SetLocalSessionCookie();};
   if(UiTest.Active){
    web.CoreWebView2.AddWebResourceRequestedFilter("*",CoreWebView2WebResourceContext.All);
    web.CoreWebView2.WebResourceRequested+=(_,e)=>{
@@ -59,6 +81,7 @@ public sealed partial class MainWindow:Window {
   if(UiTest.Active)await web.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync("window.__uiErrors=[];addEventListener('error',e=>__uiErrors.push(e.message));addEventListener('unhandledrejection',e=>__uiErrors.push(String(e.reason))); window.__uiFetch=[];const diagnosticFetch=window.fetch.bind(window);window.fetch=async function(url,options){const row={url:String(url)};window.__uiFetch.push(row);try{const r=await diagnosticFetch(url,options);row.status=r.status;if(String(url).startsWith('/api/state'))row.data=await r.clone().text();return r;}catch(e){row.error=String(e);throw e;}}; ");
   rec.Changed+=()=>Dispatcher.InvokeAsync(async()=>await PublishVideo());
   web.CoreWebView2.ProcessFailed+=(_,_)=>status.Text="业务界面异常。录像不会随页面销毁；请先结束录像，再重开软件，核对原单。";
+  SetLocalSessionCookie();
   web.CoreWebView2.Navigate(backend.Url+"/");
   if(settings.ShowPreviewOnStartup&&!UiTest.Active)preview.Show();
   timer.Start();if(UiTest.Active)_=UiTest.HttpOnly?AcceptanceHttpUi():UiTest.SettingsOnly?AcceptanceSettingsUi():AcceptanceUi();await PublishVideo();status.Text=settingsLoadFailed?settingsLoadWarning:!settings.DiskConfigured?"自动录像设置已恢复；请先在视频设置保存磁盘预警和停止GB，未配置不能开始录像。":enabled.IsChecked==true?"自动录像已启用，等待确认物流单号。":"自动录像已关闭，已保留本机设置。";
@@ -99,7 +122,9 @@ public sealed partial class MainWindow:Window {
  UIElement ExportPanel(){var p=new DockPanel{Margin=new Thickness(16),Background=Palette.Bg};var controls=new StackPanel();DockPanel.SetDock(controls,Dock.Top);p.Children.Add(controls);controls.Children.Add(new TextBlock{Text="组合模糊筛选｜时间格式 yyyy-MM-dd HH:mm:ss（本地时间），留空不限；旧6列模板在原导出页。",TextWrapping=TextWrapping.Wrap,Margin=new Thickness(4)});var f=new WrapPanel();controls.Children.Add(f);
  foreach(var x in new[]{("start","开始时间"),("end","结束时间"),("po","采购单包含"),("outer","外部单号包含"),("tracking","物流单号包含"),("sku","商品编码包含")}){var v=new StackPanel{Margin=new Thickness(4)};v.Children.Add(new TextBlock{Text=x.Item2});var t=new TextBox{Width=190,Padding=new Thickness(6)};filters[x.Item1]=t;v.Children.Add(t);f.Children.Add(v);}
  exportMode.Items.Add("逐次扫码/修改流水");exportMode.Items.Add("商品实收汇总");exportMode.SelectedIndex=0;f.Children.Add(exportMode);
- Add(f,"查询预览",LoadExport,Theme.Primary);Add(f,"按当前条件导出CSV",async()=>{await LoadExport();if(exportResult==null)return;var save=new Microsoft.Win32.SaveFileDialog{Filter="CSV|*.csv",FileName="收货精细导出_"+DateTime.Now.ToString("yyyyMMdd_HHmmss")+".csv"};if(save.ShowDialog(this)!=true)return;var sb=new StringBuilder();string Cell(JsonElement c){var s=c.ValueKind==JsonValueKind.Null?"":c.ToString();if(c.ValueKind==JsonValueKind.String && s.Length>0 && "=+-@\t\r".Contains(s[0]))s="'"+s;return "\""+s.Replace("\"","\"\"")+"\"";}var j=exportResult.Value;sb.AppendLine(string.Join(",",j.GetProperty("columns").EnumerateArray().Select(Cell)));foreach(var row in j.GetProperty("rows").EnumerateArray())sb.AppendLine(string.Join(",",row.EnumerateArray().Select(Cell)));await System.IO.File.WriteAllTextAsync(save.FileName,sb.ToString(),new UTF8Encoding(true));status.Text="已导出 "+j.GetProperty("count")+" 行："+save.FileName;});
+ Add(f,"查询预览",LoadExport,Theme.Primary);Add(f,"按当前条件导出CSV",async()=>{await LoadExport();if(exportResult==null)return;var fileName="收货精细导出_"+DateTime.Now.ToString("yyyyMMdd_HHmmss")+".csv";var save=new Microsoft.Win32.SaveFileDialog{Filter="CSV|*.csv",FileName=fileName};
+ try{using var target=await backend.Get("/api/export-dir/target?name="+Uri.EscapeDataString(fileName));var folder=target.RootElement.GetProperty("folder").GetString();if(!string.IsNullOrEmpty(folder))save.InitialDirectory=folder;}catch(Exception ex){NativeDiag.Error(NativeDiag.CodeOf(ex,"E-DATA-1008"),"export.fine",ex.Message,ex);}// 默认打开导出目录\日期\精细导出
+ if(save.ShowDialog(this)!=true)return;var sb=new StringBuilder();string Cell(JsonElement c){var s=c.ValueKind==JsonValueKind.Null?"":c.ToString();if(c.ValueKind==JsonValueKind.String && s.Length>0 && "=+-@\t\r\n＝＋－＠".Contains(s.TrimStart(' ','\u3000').FirstOrDefault()))s="'"+s;else if(c.ValueKind==JsonValueKind.String && s.All(char.IsAsciiDigit) && (s.Length>=11||(s.Length>1&&s[0]=='0')))return "\"=\"\""+s+"\"\"\"";// 长单号按文字：Excel 不变科学计数return "\""+s.Replace("\"","\"\"")+"\"";}var j=exportResult.Value;sb.AppendLine(string.Join(",",j.GetProperty("columns").EnumerateArray().Select(Cell)));foreach(var row in j.GetProperty("rows").EnumerateArray())sb.AppendLine(string.Join(",",row.EnumerateArray().Select(Cell)));await System.IO.File.WriteAllTextAsync(save.FileName,sb.ToString(),new UTF8Encoding(true));status.Text="已导出 "+j.GetProperty("count")+" 行："+save.FileName;});
  controls.Children.Add(new TextBlock{Text="时间按确认/修改时间筛选。汇总显示当前累计实收，不是时间范围内新增数量。流水保留删除与修改；旧数据没有的时间留空。",Margin=new Thickness(4,10,4,10),TextWrapping=TextWrapping.Wrap});p.Children.Add(exportGrid);return p;}
  async Task LoadExport(){string q="?mode="+(exportMode.SelectedIndex==0?"events":"summary");foreach(var f in filters){var value=f.Value.Text.Trim();if(value!=""&&f.Key is "start" or "end"){if(!DateTime.TryParseExact(value,"yyyy-MM-dd HH:mm:ss",null,System.Globalization.DateTimeStyles.None,out var dt))throw new Exception("时间格式应为 yyyy-MM-dd HH:mm:ss");value=new DateTimeOffset(dt).ToString("O");}q+="&"+f.Key+"="+Uri.EscapeDataString(value);}using var d=await backend.Get("/api/native/export"+q);exportResult=d.RootElement.Clone();var table=new DataTable();foreach(var c in d.RootElement.GetProperty("columns").EnumerateArray())table.Columns.Add(c.GetString()!);foreach(var r in d.RootElement.GetProperty("rows").EnumerateArray().Take(1000))table.Rows.Add(r.EnumerateArray().Select(c=>(object)c.ToString()).ToArray());exportGrid.ItemsSource=table.DefaultView;status.Text="命中 "+d.RootElement.GetProperty("count")+" 行，预览最多1000行；导出包含全部命中行。";}
  UIElement LibraryPanel()=>VideoLibraryPanel();

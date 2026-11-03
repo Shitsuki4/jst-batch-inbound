@@ -16,18 +16,20 @@
  const check=(key,label)=>`<label class="setting-switch"><input type="checkbox" id="${vid(key)}"> ${label}</label>`;
  const row=(label,html)=>`<div class="form-row"><label>${label}</label>${html}</div>`;
  const input=(key,label,type='text',attrs='')=>row(label,`<input class="input" id="${vid(key)}" type="${type}" aria-label="${label}" ${attrs}>`);
+ // 输入框 + 右侧按钮放在同一行，和输入框对齐（录像保存目录、导出保存目录、摄像头共用这一种排版）
+ const inputAction=(key,label,btnId,btnText,attrs='')=>row(label,`<div class="input-action"><input class="input" id="${vid(key)}" type="text" aria-label="${label}" ${attrs}><button class="btn btn-ghost" id="${btnId}" type="button">${btnText}</button></div>`);
  const select=(key,label,items,numeric=false)=>row(label,`<select class="select" id="${vid(key)}" aria-label="${label}" ${numeric?'data-number="true"':''}>${items.map(([v,t])=>`<option value="${v}">${t}</option>`).join('')}</select>`);
  const detail=(label,html)=>`<details class="settings-advanced"><summary>${label}</summary>${html}</details>`;
  pane('video').innerHTML=`<div class="card"><div class="card-hd">视频举证</div><div id="video-state" class="video-state" role="status">正在读取桌面录像状态…</div><p id="video-alerts" class="hint" role="status"></p><p class="hint">只采集视频，不使用麦克风；本机保存，不上传、不自动删除。</p>
  ${row('启动监控窗口',check('showPreviewOnStartup','启动软件时打开监控窗口'))}
  ${row('扫码自动录像',check('enabled','扫到物流后开始，换物流切为新片段'))}
- ${input('camera','摄像头','text','list="video-camera-options" autocomplete="off"')}<datalist id="video-camera-options"></datalist><button class="btn btn-ghost" id="video-enumerate">枚举设备</button>
+ ${inputAction('camera','摄像头','video-enumerate','枚举设备','list="video-camera-options" autocomplete="off"')}<datalist id="video-camera-options"></datalist>
  <div class="row"><button class="btn btn-ghost" id="video-modes">检测设备可用档位</button><select class="select" id="video-mode-choice" aria-label="设备可用录像档位" disabled><option value="">请先检测设备可用档位</option></select></div><p class="hint" id="video-modes-result">按设备报告列出分辨率、帧率、格式组合，含设备支持的2K、4K等高档位；不凭空增加。高分辨率可能降低帧率，请先做30秒测试。</p>
  ${select('resolution','分辨率',[['640x480','640×480'],['1280x720','1280×720'],['1920x1080','1920×1080']])}
  ${select('frameRate','帧率',[15,24,25,30,60].map(n=>[n,n+' fps']),true)}
  <p class="hint" id="video-effective">以设备报告的兼容模式和录像实际参数为准，不支持不会假报成功。</p>
- ${input('directory','录像保存目录')}<button class="btn btn-ghost" id="video-choose-directory">选择目录</button>
- <p class="hint">新录像：日期 / 采购-外部单号 / 物流 / 物流.mp4；续录不覆盖，多采购单份媒体、多关联检索。改目录不搬动历史录像。</p>
+ ${inputAction('directory','录像保存目录','video-choose-directory','选择目录')}
+ <p class="hint form-hint">新录像：日期 / 采购单号-外部单号 / 物流单号 / 物流单号.mp4；续录不覆盖，一段录像对应多张采购单时只存一份、每张采购单都能检索到。改目录不搬动以前的录像。</p>
  ${detail('摄像头高级 · 格式 / 旋转 / 镜像 / 硬件控制',
  select('captureFormat','输入格式',[['auto','自动协商'],['mjpeg','MJPEG'],['yuyv422','YUYV422'],['nv12','NV12']])+
  select('rotation','画面旋转',[0,90,180,270].map(n=>[n,n+'°']),true)+row('画面镜像',check('mirror','水平镜像（影响录像）'))+
@@ -37,7 +39,7 @@
  ${detail('浮窗工具 · 按需显示', '<div class="video-check-grid">'+[['photoEnabled','拍照'],['notesEnabled','本段备注'],['protectionEnabled','售后保护'],['zoomEnabled','局部放大']].map(x=>check(...x)).join('')+'</div><p class="hint">拍照保存当前480×270预览图，不是全分辨率照片。局部放大仅影响预览，不裁录像。关闭保护功能不会解除已保护片段。</p>')}
  ${detail('全过程提示音 · 各项可关闭', '<div class="video-sounds">'+[['soundStart','开始','start'],['soundStop','停止','stop'],['soundSaved','保存成功','saved'],['soundDuplicate','重复物流','duplicate'],['soundError','异常 / 磁盘提醒','error']].map(([k,l,c])=>'<div>'+check(k,l)+`<button class="btn btn-ghost" data-sound-cue="${c}">试听</button></div>`).join('')+'</div>'+input('soundVolume','提示音音量','number','min="0" max="100" step="1"')+'<p class="hint">试听使用已保存的音量；只由扬声器播放，不录入录像。普通商品扫码音在“收货与扫码”中独立设置。</p>')}
  ${detail('磁盘阈值与清理提醒 · 在软件内自定义',input('warningGb','剩余空间预警 GB','number','min="0.001" max="1000000" step="any" placeholder="由你填写"')+input('stopGb','剩余空间停止 GB','number','min="0.001" max="1000000" step="any" placeholder="由你填写"')+'<p class="hint">必须满足：预警 GB &gt; 停止 GB &gt; 0。预警只提醒；达到停止值正常收尾并验证文件，不开始新录像。未配置不能开始录像。</p>'+select('cleanupDays','超龄清理提醒',[[0,'不按天数提醒'],[90,'90天以上'],[180,'180天以上']],true)+'<button class="btn btn-ghost" data-native-action="cleanup">预览清理候选</button><p class="hint">只提醒，不自动删除；进入列表后默认不勾选，删除前再次确认。在录、异常、售后保护录像排除。</p>')}
- ${detail('单段录像上限 · 填0不限制',input('maxSegmentMinutes','单段时长上限（分钟）','number','min="0" max="1440" step="1" placeholder="0 = 不限制"')+input('maxSegmentGb','单段大小上限（GB）','number','min="0" max="1024" step="0.01" placeholder="0 = 不限制，可填0.5"')+'<p class="hint">时长填整数分钟（最多1440）；大小按 GB 填写，可带最多两位小数（如 0.5、1.5，1 GB = 1024 MB），范围 0.01～1024 GB。0 或留空表示不限制（默认）。两项都填时先到先分段。达到上限时当前片段像手动结束一样正常收尾、验证并写入索引，然后为同一物流单自动续录新片段，不会停录；录像状态和诊断会显示已自动分段次数。</p>')}}
+ ${detail('单段录像上限 · 填0不限制',input('maxSegmentMinutes','单段时长上限（分钟）','number','min="0" max="1440" step="1" placeholder="0 = 不限制"')+input('maxSegmentGb','单段大小上限（GB）','number','min="0" max="1024" step="0.01" placeholder="0 = 不限制，可填0.5"')+'<p class="hint">时长填整数分钟（最多1440）；大小按 GB 填写，可带最多两位小数（如 0.5、1.5，1 GB = 1024 MB），范围 0.01～1024 GB。0 或留空表示不限制（默认）。两项都填时先到先分段。达到上限时当前片段像手动结束一样正常收尾、验证并写入索引，然后为同一物流单自动续录新片段，不会停录；录像状态和诊断会显示已自动分段次数。</p>')}
  ${detail('全局录像快捷键 · 自定义组合键',row('启用快捷键',check('hotkeysEnabled','只注册以下指定组合键'))+[['hotkeyPreview','显示 / 隐藏浮窗'],['hotkeyStop','结束本单录像'],['hotkeyContinue','继续本单新一段']].map(([key,label])=>input(key,label,'text','data-hotkey="true" autocomplete="off" placeholder="按组合键录入；Backspace清空"')).join('')+'<p class="hint">至少包含 Ctrl / Alt / Win 之一，可搭配 Shift 与字母、数字或F1–F24。留空停用该动作；冲突时保留旧设置。无键盘钩子，不拦截普通扫码。</p><p id="video-hotkey-status" role="status"></p>')}
  ${detail('物流格式规则 · 默认不限',row('可选规则',check('trackingRuleEnabled','启用前缀 / 长度校验（即使自动录像关闭也生效）'))+input('trackingPrefixes','允许的物流前缀','text','placeholder="逗号分隔，空白不限"')+input('trackingMinLength','最小长度','number','min="1" max="200" step="1" placeholder="空白不限"')+input('trackingMaxLength','最大长度','number','min="1" max="200" step="1" placeholder="空白不限"')+'<p class="hint">只校验物流，不限制商品条码；不截断、不补位、不改原单号。</p>')}
  ${detail('高级 · 内置录像引擎','<p class="hint">安装版自带FFmpeg / ffprobe，无需额外安装；非必要不修改路径。</p>'+input('engine','FFmpeg程序路径'))}

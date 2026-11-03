@@ -48,6 +48,11 @@ public sealed partial class MainWindow {
    case "directory":case "currentDirectory":
     var directory=action=="currentDirectory"&&rec.Current!=null?Path.GetDirectoryName(rec.Current.File)!:rec.DirectoryPath;
     directory=ArchiveLayout.Checked(rec.DirectoryPath,directory,true);Directory.CreateDirectory(directory);Process.Start(new ProcessStartInfo(directory){UseShellExecute=true});return new{message="已打开录像目录"};
+   case "chooseExportDirectory":{
+    // 导出保存目录：和录像保存目录一样用系统的选择文件夹窗口；路径由本机服务校验并保存
+    var picker=new Microsoft.Win32.OpenFolderDialog{Title="选择导出保存目录"};var initial="";try{initial=Arg(args,"initial");}catch(Exception){}
+    if(initial!=""&&Directory.Exists(initial))picker.InitialDirectory=initial;
+    return new{directory=picker.ShowDialog(this)==true?picker.FolderName:""};}
    case "diagnostics":Clipboard.SetText(rec.Diagnostics);return new{message="已复制录像诊断（不含视频），可粘贴反馈"};
    case "export":case "library":case "cleanup":
     if(await HasPending(false))throw new Exception("请先完成商品数量确认 / 保存后再打开此模块");

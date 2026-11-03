@@ -68,6 +68,47 @@ def main():
     pv = restore.preview(bdir, data)
     check("preview missing io_ids", pv["missing_inbound_io_ids"] == ["IO3"])
     check("preview counts", pv["dbs"]["jst.db"]["backup"]["inbound_job"] == 2 and pv["dbs"]["jst.db"]["current"]["inbound_job"] == 3)
+    check("preview groups jst.db loss by mode", pv["missing_inbound"] == [
+        {"db": "jst.db", "mode": "有采购单收货", "io_ids": ["IO3"]}] and pv["inbound_check_errors"] == [])
+
+    # --- 三个收货库都核对：无采购单、联合收货的入库记录丢了也要提醒，并写明收货方式 ---
+    def inbound_db(d, db, io_ids):
+        with closing(sqlite3.connect(Path(d) / db)) as c:
+            c.execute("CREATE TABLE IF NOT EXISTS inbound_job (id INTEGER PRIMARY KEY, io_id TEXT NOT NULL DEFAULT '')")
+            c.execute("DELETE FROM inbound_job")
+            c.executemany("INSERT INTO inbound_job(io_id) VALUES (?)", [(i,) for i in io_ids])
+            c.commit()
+    d3 = root / "three"
+    make_data(d3, [], marker="old")
+    inbound_db(d3, "unplanned.db", ["U1"])
+    inbound_db(d3, "joint_receipts.db", [])
+    b3 = take_backup(d3)
+    make_data(d3, ["9001"], marker="new")
+    inbound_db(d3, "unplanned.db", ["U1", "9002"])
+    inbound_db(d3, "joint_receipts.db", ["9003", ""])
+    pv3 = restore.preview(b3, d3)
+    check("preview: all three receiving dbs checked", pv3["missing_inbound"] == [
+        {"db": "jst.db", "mode": "有采购单收货", "io_ids": ["9001"]},
+        {"db": "unplanned.db", "mode": "无采购单收货", "io_ids": ["9002"]},
+        {"db": "joint_receipts.db", "mode": "联合收货", "io_ids": ["9003"]}])
+    check("preview: combined io_ids kept for old UI", pv3["missing_inbound_io_ids"] == ["9001", "9002", "9003"])
+    # 备份里没有某个收货库：恢复会把当前库移走，当前全部入库记录都算会丢
+    m3 = json.loads((b3 / "manifest.json").read_text(encoding="utf-8"))
+    m3["files"] = [f for f in m3["files"] if f["name"] != "unplanned.db"]
+    (b3 / "manifest.json").write_text(json.dumps(m3), encoding="utf-8")
+    (b3 / "unplanned.db").unlink()
+    pv3b = restore.preview(b3, d3)
+    check("preview: receiving db absent from backup -> all current io_ids lost",
+          {"db": "unplanned.db", "mode": "无采购单收货", "io_ids": ["9002", "U1"]} in pv3b["missing_inbound"])
+    # 当前库读不出来不能当成「不会丢」
+    (d3 / "joint_receipts.db").write_bytes(b"not a sqlite database" * 100)
+    pv3c = restore.preview(b3, d3)
+    check("preview: unreadable receiving db reported", any("联合收货" in e for e in pv3c["inbound_check_errors"])
+          and all(g["db"] != "joint_receipts.db" for g in pv3c["missing_inbound"]))
+    # 没有 inbound_job 表（如刚建的库）算没有入库记录，不报错
+    with closing(sqlite3.connect(d3 / "empty.db")) as c:
+        c.execute("CREATE TABLE t (v TEXT)")
+    check("no inbound_job table is not an error", restore._read_io_ids(d3 / "empty.db") == (set(), ""))
 
     # --- integrity failure (corrupt bytes, fix sha so only integrity_check catches it) ---
     bad = root / "bad"

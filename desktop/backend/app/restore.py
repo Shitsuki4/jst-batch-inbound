@@ -26,6 +26,9 @@ SIDECARS = ("-wal", "-shm", "-journal")
 ZIP_WHITELIST = set(ALLOWED_NAMES) | {"manifest.json"}
 REASON_LABELS = {"manual": "手动备份", "daily": "每日自动", "pre-upgrade": "升级前自动",
                  "pre-restore": "恢复前自动备份"}
+# 三种会生成聚水潭入库单的收货方式，各自的入库记录（inbound_job）在不同的库里。
+# 恢复预览要逐个核对：哪个库的入库记录会因恢复而丢失，都要提醒，并写明是哪种收货方式。
+INBOUND_DBS = (("jst.db", "有采购单收货"), ("unplanned.db", "无采购单收货"), ("joint_receipts.db", "联合收货"))
 PENDING = "restore-pending"
 PENDING_TMP = "restore-pending.tmp"
 JOURNAL = "restore-journal.json"
@@ -155,18 +158,62 @@ def _counts(path):
         return {t: c.execute('SELECT COUNT(*) FROM "%s"' % t.replace('"', '""')).fetchone()[0] for t in tables}
 
 
-def _io_ids(path):
+def _read_io_ids(path):
+    """(io_id 集合, 读取错误)。库或 inbound_job 表不存在算没有入库记录，不算错误。"""
     if not Path(path).is_file():
-        return set()
+        return set(), ""
     try:
         with closing(sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True)) as c:
-            return {r[0] for r in c.execute("SELECT io_id FROM inbound_job WHERE io_id<>''")}
-    except sqlite3.Error:
-        return set()
+            if not c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='inbound_job'").fetchone():
+                return set(), ""
+            return {str(r[0]).strip() for r in c.execute("SELECT io_id FROM inbound_job WHERE io_id<>''")
+                    if str(r[0]).strip()}, ""
+    except sqlite3.Error as e:
+        return set(), str(e) or type(e).__name__
+
+
+def _io_ids(path):
+    return _read_io_ids(path)[0]
+
+
+def missing_inbound(backup_dir, data_dir, names):
+    """逐个收货库核对：当前有、恢复后会丢的入库单号。
+
+    names：备份里实际带的库。备份里没有某个收货库时，恢复会把当前库整个移走
+    （这三个库都不在 KEEP_IF_ABSENT 里），所以当前库的全部入库记录都算会丢。
+    返回 (按收货方式分组的列表, 读取失败的提醒)。
+    """
+    b, d = Path(backup_dir), Path(data_dir)
+    groups, errors = [], []
+    for db, mode in INBOUND_DBS:
+        current, err = _read_io_ids(d / db)
+        if err:
+            errors.append("%s（%s）的当前入库记录读取失败：%s" % (mode, db, err))
+            continue
+        if not current:
+            continue
+        if db in names:
+            kept, err = _read_io_ids(b / db)
+            if err:
+                errors.append("%s（%s）在备份里的入库记录读取失败：%s" % (mode, db, err))
+                continue
+        elif db in KEEP_IF_ABSENT:
+            kept = current
+        else:
+            kept = set()
+        lost = sorted(current - kept)
+        if lost:
+            groups.append({"db": db, "mode": mode, "io_ids": lost})
+    return groups, errors
 
 
 def preview(backup_dir, data_dir):
-    """Row counts (backup vs current) and inbound io_ids that a restore would drop."""
+    """Row counts (backup vs current) and inbound io_ids that a restore would drop.
+
+    missing_inbound：按收货方式（有采购单 / 无采购单 / 联合收货）分组的会丢失入库单号；
+    missing_inbound_io_ids：三种合在一起，兼容旧界面；
+    inbound_check_errors：某个库读不出来时的提醒（读不出来不能当成「不会丢」）。
+    """
     b, d = Path(backup_dir), Path(data_dir)
     m = _load_manifest(b)
     names = [f.get("name") for f in m.get("files") or [] if f.get("name") in DB_NAMES]
@@ -179,8 +226,10 @@ def preview(backup_dir, data_dir):
                   "kept_current": (not in_backup and n in KEEP_IF_ABSENT),
                   "backup": _counts(b / n) if in_backup else None,
                   "current": _counts(d / n)}
-    missing = sorted(_io_ids(d / "jst.db") - _io_ids(b / "jst.db")) if "jst.db" in names else sorted(_io_ids(d / "jst.db"))
-    return {"dbs": dbs, "missing_inbound_io_ids": missing}
+    groups, errors = missing_inbound(b, d, names)
+    missing = sorted({i for g in groups for i in g["io_ids"]})
+    return {"dbs": dbs, "missing_inbound": groups, "missing_inbound_io_ids": missing,
+            "inbound_check_errors": errors}
 
 
 def _safe_zip_members(zf):

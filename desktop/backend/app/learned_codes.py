@@ -194,7 +194,7 @@ class LearnedCodes:
     def export_csv(self, company):
         out = io.StringIO()
         w = csv.writer(out)
-        safe = lambda v: "'" + v if isinstance(v, str) and v.startswith(('=', '+', '-', '@', '\t', '\r')) else v
+        from exportfiles import csv_cell as safe
         w.writerow(['条码', '商品编码', '商品名称', '商品条码', '规格', '货主', '仓储公司', '状态',
                     '商品资料对应编码', '学习时间', '最近使用', '使用次数', '来源'])
         for r in self.rows(company, limit=10 ** 7):

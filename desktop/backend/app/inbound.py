@@ -31,6 +31,17 @@ def text(value):
     return str(value if value is not None else "").strip()
 
 
+def json_qty(q):
+    """数量写进 JSON：整数写整数；小数只有能用浮点精确往返（如 1.5）时才写，否则停止，绝不让数量被悄悄舍入。"""
+    q = quantity(q)
+    if q == q.to_integral_value():
+        return int(q)
+    f = float(q)
+    if Decimal(repr(f)) != q.normalize():
+        raise InboundError("数量 %s 的小数位太多，聚水潭无法精确记录，已停止，请核对数量" % q)
+    return f
+
+
 def json_text(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
@@ -146,7 +157,7 @@ class PurchaseInAPI:
                 outside = {p['sku_id'] for p in snapshot['items'] if p.get('outside_purchase')}
                 inside = [sku for sku in missing if sku not in outside]
                 if inside:
-                    additions = [{"sku_id": sku, "in_qty": str(desired[sku]), "qty": float(desired[sku])} for sku in inside]
+                    additions = [{"sku_id": sku, "in_qty": str(desired[sku]), "qty": json_qty(desired[sku])} for sku in inside]
                     if self.call("CheckAndChoose", [json_text(additions), row["__KeyData"]]) is not True:
                         raise InboundError("采购行添加校验未通过，请核对原单")
                     self.call("AddItemsUnify", [row["__KeyData"], json_text(additions), "true", "false"])
@@ -160,7 +171,7 @@ class PurchaseInAPI:
             elif snapshot.get("warehouse") and snapshot.get("validate_purchase_details", True):
                 # 当前界面抓包确认的按明细数量添加流程；旧记录仍走原协议。
                 additions = [{"sku_id": sku, "in_qty": str(desired[sku]),
-                              "qty": int(desired[sku]) if desired[sku] == desired[sku].to_integral_value() else float(desired[sku])}
+                              "qty": json_qty(desired[sku])}
                              for sku in missing]
                 if self.call("CheckAndChoose", [json_text(additions), row["__KeyData"]]) is not True:
                     raise InboundError("添加实收商品的前置检查未通过，已停止，请核对原单")
