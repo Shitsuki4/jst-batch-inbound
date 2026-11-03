@@ -141,7 +141,7 @@ class PurchaseInAPI:
         if i < 0:
             return set()
         tail = remark[i + len(cls.REMARK_TAG):]
-        tail = re.split(r"[（(]", tail, 1)[0]
+        tail = re.split(r"[（(]", tail, maxsplit=1)[0]
         return {t.strip().upper() for t in re.split(r"[、,，;；\s]+", tail) if t.strip()}
 
     @classmethod

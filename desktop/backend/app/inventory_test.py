@@ -204,12 +204,13 @@ class WarehouseTests(unittest.TestCase):
     def test_target_warehouse_keeps_all_context_and_fields(self):
         j=self.create();h=self.c.docs[j['io_id']]['head']
         self.assertEqual(h['wh_id'],'4');self.assertEqual(h['owner_co_id'],'1200');self.assertEqual(h['wms_co_id'],'1500')
-        self.assertEqual(h['remark'],'保留原备注');self.assertEqual(j['status'],'complete')
+        self.assertTrue(h['remark'].startswith('保留原备注'),h['remark']);self.assertEqual(j['status'],'complete')
         self.assertNotIn('ConfirmBatch',[c[1] for c in self.c.calls])
         self.assertTrue(any(c[1]=='Save' and 'call_control' not in c[3] for c in self.c.calls))
         added=next(c for c in self.c.calls if c[1]=='AddItemsUnify');self.assertTrue(added[2][0].endswith('-new'))
     def test_main_warehouse_needs_no_save(self):
-        self.create('1');self.assertNotIn('Save',[c[1] for c in self.c.calls])
+        # 4.1.8 起数量核对完会用 Save 把物流单号写进备注；这里只要求没有换仓的 Save
+        self.create('1');self.assertEqual([c for c in self.c.calls if c[1]=='Save' and '物流单号' not in str(c[2])],[])
     def test_warehouse_in_fingerprint(self):
         a=self.svc.preview(self.sid,'1');b=self.svc.preview(self.sid,'4');self.assertNotEqual(a['fingerprint'],b['fingerprint'])
         with self.assertRaises(InboundError):self.svc.create(self.sid,a['fingerprint'],'4')
