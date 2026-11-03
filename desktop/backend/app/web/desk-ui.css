@@ -46,13 +46,21 @@ body[data-desk] .desk-batch.desk-dup{background:var(--c-warn-soft);border-color:
 .desk-toast strong{font-size:18px}
 .desk-toast span{font-size:14px;color:#fff;opacity:.95}
 /* 汇总：一行一个商品（编码 | 名称·规格 | 数量），隔行底色 */
-.desk-summary #report table{width:100%;border-collapse:collapse;table-layout:auto}
-.desk-summary #report th,.desk-summary #report td{padding:5px 8px;line-height:1.35;vertical-align:middle}
-.desk-summary #report tbody tr:nth-child(even) td{background:var(--c-panel-2)}
-.desk-summary #report td:first-child{max-width:0;width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.desk-summary #report td:first-child .sku{display:inline-block;vertical-align:middle;line-height:1.35;width:7.5em;margin:0 8px 0 0;padding:0;font-family:var(--mono);font-size:12px;color:var(--c-text-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.desk-summary #report td:first-child strong{font-weight:500;vertical-align:middle;line-height:1.35}
-.desk-summary #report td:first-child .secondary{display:inline;vertical-align:middle;line-height:1.35;margin:0 0 0 6px;color:var(--c-text-3);font-size:12px}
-.desk-summary #report td:first-child .secondary:not(:empty)::before{content:'· '}
-.desk-summary #report td:first-child>*{float:none}
-.desk-summary #report td.num{text-align:right;font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap}
+.desk-summary #report table:not(.rs-table):not(.pair-table){width:100%;border-collapse:collapse;table-layout:auto}
+.desk-summary #report table:not(.rs-table):not(.pair-table) th,.desk-summary #report table:not(.rs-table):not(.pair-table) td{padding:5px 8px;line-height:1.35;vertical-align:middle}
+.desk-summary #report table:not(.rs-table):not(.pair-table) tbody tr:nth-child(even) td{background:var(--c-panel-2)}
+.desk-summary #report table:not(.rs-table):not(.pair-table) td:first-child{max-width:0;width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.desk-summary #report table:not(.rs-table):not(.pair-table) td:first-child .sku{display:inline-block;vertical-align:middle;line-height:1.35;width:7.5em;margin:0 8px 0 0;padding:0;font-family:var(--mono);font-size:12px;color:var(--c-text-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.desk-summary #report table:not(.rs-table):not(.pair-table) td:first-child strong{font-weight:500;vertical-align:middle;line-height:1.35}
+.desk-summary #report table:not(.rs-table):not(.pair-table) td:first-child .secondary{display:inline;vertical-align:middle;line-height:1.35;margin:0 0 0 6px;color:var(--c-text-3);font-size:12px}
+.desk-summary #report table:not(.rs-table):not(.pair-table) td:first-child .secondary:not(:empty)::before{content:'· '}
+.desk-summary #report table:not(.rs-table):not(.pair-table) td:first-child>*{float:none}
+.desk-summary #report table:not(.rs-table):not(.pair-table) td.num{text-align:right;font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap}
+/* 4.1.8 统一汇总（进度卡+商品表）：用 .rs-table 自己的固定列宽，不套用上面旧汇总表的「首列占满、单行省略」规则 */
+.desk-summary #report .rs-table{table-layout:fixed;width:100%}
+.desk-summary #report .rs-table th:first-child{width:52%}
+.desk-summary #report .rs-table th:not(:first-child){width:16%;text-align:center}
+.desk-summary #report .rs-table td{padding:6px 8px;vertical-align:middle}
+.desk-summary #report .rs-table td.pi-product{white-space:normal;overflow-wrap:anywhere}
+.desk-summary #report .rs-table td.pi-plan,.desk-summary #report .rs-table td.pi-recv{font-size:16px;white-space:nowrap!important}
+.desk-summary #report .rs-pairs{max-width:100%;overflow-x:auto}

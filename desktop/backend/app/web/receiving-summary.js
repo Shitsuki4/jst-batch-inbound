@@ -47,7 +47,9 @@
       if (linked) c[status(r)]++;
     });
     recv = Math.round(recv * 10000) / 10000; plan = Math.round(plan * 10000) / 10000;
-    var pct = known && plan > 0 ? Math.min(100, Math.round(recv / plan * 100)) : 0;
+    // 向下取整：还有短收/未收时不显示 100%（例如 379/380 不能显示成 100%）
+    var pct = known && plan > 0 ? Math.min(100, Math.floor(recv / plan * 100)) : 0;
+    if (pct === 100 && (c.short || c.none)) pct = 99;
     var legend = linked
       ? [['已齐', 'c-ok', c.done], ['短收', 'c-warn', c.short], ['超收', 'c-danger', c.over], ['未收', 'c-none', c.none]]
       : [['商品', 'c-ok', list.length], ['物流单', 'c-none', opts.batches == null ? '—' : opts.batches]];

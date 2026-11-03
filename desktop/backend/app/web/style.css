@@ -688,4 +688,6 @@ body, .view, .card, .tbl, .tbl td, .tbl th, .pi-code, .pi-barcode, .pi-name, .sc
 .rs-table:has(td.rs-extra) th:first-child{width:40%}
 .rs-note{margin-top:4px;font-size:12px;color:var(--c-warn,#b45309);white-space:normal}
 .rs-empty{margin:8px 0}
+.rs-pairs{max-width:100%;overflow-x:auto}
+.rs-pairs .pair-table{min-width:0}
 .rs-section-title{margin:10px 0 6px;font-size:14px;font-weight:600}
