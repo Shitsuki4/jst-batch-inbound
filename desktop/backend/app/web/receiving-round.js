@@ -4,6 +4,19 @@
   function num(v) { if (v == null || !isFinite(Number(v))) return '待核实'; return String(Math.round(Number(v) * 10000) / 10000); }
   function copy(code, label) { return '<span class="pi-code-token"><span>' + esc(code) + '</span> <button type="button" class="copy-code" data-copy="' + esc(code) + '" aria-label="复制' + esc(label + ' ' + code) + '">复制</button></span>'; }
   function unique(list) { return list.filter(function (s, i) { return s && list.indexOf(s) === i; }); }
+  // 商品名称和规格（款式名 / 商品简称）常常是同一段文字，或一个包含另一个，例如
+  // 「发之食谱洗发水530ml无花果（清爽蓬松）」+「发之食谱洗发水530ml无花果」。内容重复时只显示一次：
+  // 规格已包含在名称里就不再显示；规格包含整个名称时用规格当名称。比较时忽略空白、全半角和大小写。
+  // 只有规格带来名称里没有的信息时，才作为副标题显示。
+  function textKey(v) { var s = String(v == null ? '' : v); if (s.normalize) s = s.normalize('NFKC'); return s.replace(/\s+/g, '').toLowerCase(); }
+  function nameSpec(name, spec) {
+    var n = String(name == null ? '' : name).trim(), s = String(spec == null ? '' : spec).trim();
+    var kn = textKey(n), ks = textKey(s);
+    if (!ks || kn.indexOf(ks) >= 0) return {name: n, spec: ''};
+    if (!kn || ks.indexOf(kn) >= 0) return {name: s, spec: ''};
+    return {name: n, spec: s};
+  }
+  function fullName(row) { var ns = nameSpec(row && row.name, row && row.spec); return ns.name + (ns.spec ? ' ' + ns.spec : ''); }
   // 收货工作区用两行紧凑版：第一行商品名（+ 规格），第二行灰字「编码 · 条码 · 采购/入库」，点编码即复制。
   // 差异报告（reportMode）仍用完整版，打印 / 核对时信息不省略。
   // 紧凑版里编码本身就是复制按钮（不额外占宽度），鼠标移上去显示下划线和「点击复制」
@@ -18,8 +31,9 @@
     if (!barcodes.length && !aux.length) meta.push('条码未提供');
     // ERP 采购 / 入库数只在有值时占位；没值时放进悬停提示，不挤占第二行
     if (row.ordered != null) meta.push('<span class="pi-erp-inline">采购 ' + num(row.ordered) + ' / 入库 ' + num(row.erp_received) + '</span>');
-    return '<div class="pi-compact"' + (row.ordered != null ? ' title="' + esc('采购 ' + num(row.ordered) + ' / 入库 ' + num(row.erp_received)) + '"' : '') + '><div class="pi-name">' + esc(row.name || '未提供商品名')
-      + (row.spec && row.spec !== row.name ? '<span class="pi-spec-inline">' + esc(row.spec) + '</span>' : '')
+    var ns = nameSpec(row.name, row.spec);
+    return '<div class="pi-compact"' + (row.ordered != null ? ' title="' + esc('采购 ' + num(row.ordered) + ' / 入库 ' + num(row.erp_received)) + '"' : '') + '><div class="pi-name" title="' + esc(fullName(row)) + '">' + esc(ns.name || '未提供商品名')
+      + (ns.spec ? '<span class="pi-spec-inline">' + esc(ns.spec) + '</span>' : '')
       + (row.extra ? ' <span class="tag-new">本轮计划外商品</span>' : '') + '</div>'
       + '<div class="pi-meta">' + meta.join('<span class="pi-dot" aria-hidden="true"> · </span>') + '</div></div>';
   }
@@ -28,8 +42,9 @@
     var barcodes = unique(row.sku_codes || (row.sku_code ? [row.sku_code] : []));
     var aux = unique(row.auxiliary_codes || String(row.aux_codes || '').split(/[,，;；\s]+/)).filter(function (s) { return barcodes.indexOf(s) < 0; });
     var html = '<div class="pi-code"><span class="pi-label">编码</span> ' + (row.sku_id ? copy(row.sku_id, '商品编码') : '未提供') + '</div>';
-    html += '<div class="pi-name"><span class="pi-label">商品</span> ' + esc(row.name || '未提供商品名')
-      + (row.spec && row.spec !== row.name ? '<span class="pi-spec-inline">' + esc(row.spec) + '</span>' : '') + '</div>';
+    var ns = nameSpec(row.name, row.spec);
+    html += '<div class="pi-name"><span class="pi-label">商品</span> ' + esc(ns.name || '未提供商品名')
+      + (ns.spec ? '<span class="pi-spec-inline">' + esc(ns.spec) + '</span>' : '') + '</div>';
     if (barcodes.length) html += '<div class="pi-barcode">69码 / 条码 ' + barcodes.map(function (c) { return copy(c, '条码'); }).join(' · ') + '</div>';
     if (aux.length) html += '<div class="pi-barcode">辅助码 ' + aux.map(function (c) { return copy(c, '辅助码'); }).join(' · ') + '</div>';
     if (!barcodes.length && !aux.length) html += '<div class="pi-barcode">69码 / 辅助码：未提供</div>';
@@ -76,5 +91,7 @@
       + '<div class="table-wrap"><table class="tbl round-table"><thead><tr><th>商品信息</th><th>本轮应收</th><th>本轮已收</th><th>差额</th></tr></thead><tbody>'
       + body(round, true) + '</tbody></table></div></div>';
   }
-  window.ReceivingRoundUI = {data:data,body:body,notes:notes,report:report,progress:progress,num:num,appearance:appearance,status:status,product:product};
+  window.ReceivingRoundUI = {data:data,body:body,notes:notes,report:report,progress:progress,num:num,appearance:appearance,status:status,product:product,nameSpec:nameSpec,fullName:fullName};
+  // 其他脚本（当前物流单表格、配对表、差异单、各收货页）共用同一套去重规则
+  window.ProductText = {nameSpec:nameSpec, fullName:fullName, key:textKey};
 }());

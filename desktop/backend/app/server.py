@@ -927,53 +927,13 @@ def po_order(sid):
 def cur_lines(sid, bid):
     """当前物流单号明细，已按「采购单顺序优先、采购单没有的沉底」排好。
 
-    额外：本采购单里「已经在别的物流单号收满」的商品，作为灰色只读行
-    （done_elsewhere=True）追加到明细表最底部 —— 扫了下一个单号后，上一个
-    单号已收满的商品不会凭空消失，而是自动沉到下面，方便一眼核对还差什么。
+    只返回这个物流单号下实际扫到的商品。以前会把「已在别的物流单号收满」的商品
+    作为灰色只读行追加到底部，仓管反馈会和当前单号混在一起，4.1.10 起不再返回；
+    各商品收了多少看左侧采购单明细。
     """
     if not bid:
         return []
-    lines = STORE.batch_lines(bid, order=po_order(sid))
-    # 当前单号已出现的商品 key（含计划外）
-    present = {str(l.get("key")) for l in lines}
-    try:
-        base = json.loads((STORE.get_session(sid) or {}).get("items_json") or "[]")
-    except Exception:
-        base = []
-    planned, _ = STORE.sku_comparison(sid, base)   # 同一 SKU 多行按合计判断是否收满
-    seq = 0
-    for it in base:
-        key = "sku:" + str(it.get("sku_id"))
-        if key in present:
-            continue                       # 本单号已经有这一行，不重复
-        present.add(key)                   # 同一 SKU 多行只沉底展示一次
-        plan, got = planned[key]["plan"], planned[key]["recv"]
-        if plan <= 0 or abs(got - plan) > 1e-6:
-            continue                       # 只在别的单号正好收满时才沉底展示
-        lines.append({
-            "id": 0, "batch_id": bid, "session_id": sid,
-            "key": key, "poi_id": it.get("poi_id"), "sku_id": it.get("sku_id"),
-            "i_id": it.get("i_id"), "sku_code": it.get("sku_code"),
-            "name": it.get("name"), "spec": it.get("spec"),
-            "qty": got, "matched": 1, "done_elsewhere": True,
-            "from_batch": _done_batch_label(sid, key), "_seq": seq,
-        })
-        seq += 1
-    return lines
-
-
-def _done_batch_label(sid, key):
-    """某商品是在哪个物流单号收满的（用于灰色行的「已在 XX 收满」提示）。"""
-    try:
-        row = STORE.db.execute(
-            "SELECT b.tracking_no FROM line l JOIN batch b ON b.id=l.batch_id "
-            "WHERE l.session_id=? AND l.key=? AND l.qty>0 ORDER BY l.id DESC LIMIT 1",
-            (sid, key)).fetchone()
-        return row["tracking_no"] if row else ""
-    except Exception:
-        return ""
-
-
+    return STORE.batch_lines(bid, order=po_order(sid))
 
 
 def api_state(q=None):

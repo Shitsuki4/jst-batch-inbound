@@ -129,20 +129,21 @@ def main():
     check(all(i.get("sku_code") for i in items), "每条 items 都有 sku_code",
           str([i.get("sku_code") for i in items]))
 
-    print("== 10. 换物流单号后，上一单号收满的商品沉底显示（不消失） ==")
-    # H1100 此刻已在本单号收满 100；开一个新物流单号，它应作为 done_elsewhere 出现
+    print("== 10. 换物流单号后，当前单号明细只显示本单号扫到的商品 ==")
+    # H1100 此刻已在上一个单号收满 100；开新物流单号后，它不应再以「已在其他物流单号收满」出现在当前明细里
     r = call("/api/tracking/scan", {"tracking_no": "JD-NEXT-2", "sid": sid})
     check(r.get("ok") and r.get("batch_id"), "新建第二个物流单号", str(r.get("batch_id")))
     bid2 = r["batch_id"]
     call("/api/item/scan", {"code": codes["H2298"], "batch_id": bid2, "sid": sid, "qty": 2})
     st2 = call("/api/state?batch_id=%d" % bid2)
-    de = [l for l in st2["lines"] if l.get("done_elsewhere")]
-    check(len(de) == 1 and de[0]["sku_id"] == "H1100",
-          "第二个单号里 H1100 以 done_elsewhere 沉底出现", str([(l["sku_id"], l.get("done_elsewhere")) for l in st2["lines"]]))
-    check(st2["lines"][-1].get("done_elsewhere"), "沉底行确实在最后", str(st2["lines"][-1].get("sku_id")))
-    check(de[0].get("from_batch") == "JD1000001", "沉底行标注是在哪个单号收满的", str(de[0].get("from_batch")))
-    check(all(l.get("id") for l in st2["lines"] if not l.get("done_elsewhere")),
-          "正常明细行仍带真实 line id（可改可删）")
+    check([l["sku_id"] for l in st2["lines"]] == ["H2298"],
+          "第二个单号的明细只有本单号扫到的 H2298", str([(l["sku_id"], l.get("done_elsewhere")) for l in st2["lines"]]))
+    check(not any(l.get("done_elsewhere") for l in st2["lines"]), "不再返回 done_elsewhere 沉底行")
+    check(all(l.get("id") and l.get("batch_id") == bid2 for l in st2["lines"]),
+          "明细行都带真实 line id，且都属于当前物流单号")
+    h1100 = [i for i in st2["items"] if i.get("sku_id") == "H1100"]
+    check(h1100 and num(h1100[0]["recv"]) == 100 and h1100[0]["done"],
+          "H1100 的收满状态仍在左栏 items 里", str(h1100))
 
     print("== 11. 记录查询带采购单维度实收汇总 po_summary ==")
     r = call("/api/query/po?no=PO-TEST-1")
