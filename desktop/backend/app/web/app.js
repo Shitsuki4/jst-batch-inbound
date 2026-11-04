@@ -3,6 +3,11 @@
   'use strict';
 
   var $ = function (s) { return document.querySelector(s); };
+  // 名称 / 规格去重（规则在 receiving-round.js 的 ProductText 里，各页面共用）
+  function nsOf(r) {
+    r = r || {};
+    return window.ProductText ? window.ProductText.nameSpec(r.name, r.spec) : {name: String(r.name || ''), spec: r.spec && r.spec !== r.name ? String(r.spec) : ''};
+  }
   var $$ = function (s) { return Array.prototype.slice.call(document.querySelectorAll(s)); };
   var stateEpoch = 0, writesPending = 0, syncRunning = false;
   var poRefreshing = false, poRefreshNotice = null;
@@ -687,7 +692,7 @@
   }
   function rematchView(p, note) {
     var n = p.new || {}, o = p.old || {};
-    var name = function (r) { return (r.name || r.sku_code || r.sku_id || '') + (r.spec ? '（' + r.spec + '）' : ''); };
+    var name = function (r) { var ns = nsOf(r); return (ns.name || r.sku_code || r.sku_id || '') + (ns.spec ? '（' + ns.spec + '）' : ''); };
     return (note ? '<p class="warn">' + esc(note) + '</p>' : '')
       + '<p><b>' + esc(o.po_id) + (o.outer_po_id ? '（外部单号 ' + esc(o.outer_po_id) + '）' : '') + ' → '
       + esc(n.po_id) + (n.outer_po_id ? '（外部单号 ' + esc(n.outer_po_id) + '）' : '') + '</b>'
@@ -1354,8 +1359,29 @@
   /* -------------------- 右栏②：当前物流单号明细 -------------------- */
   // 明细已由服务端排好：采购单里有的在上（按采购单顺序），采购单没有的沉底。
   // 这里再插一条分隔行，把两类视觉上隔开。
+  // 商品单元格：第一行商品名（最多两行，超出省略，悬停看全名），规格只在和名称不重复时作副标题，
+  // 第三行灰字「编码 · 条码」、标签和「编辑资料」。编码 / 条码不再单独占列，商品列始终有足够宽度。
+  function lineNameSpec(l) {
+    return nsOf(l);
+  }
+  function lineProduct(l, bad) {
+    var ns = lineNameSpec(l);
+    var title = ns.name + (ns.spec ? ' ' + ns.spec : '');
+    var meta = [l.sku_id ? '<span class="ln-code" title="商品编码">' + esc(l.sku_id) + '</span>' : '<span>编码未提供</span>'];
+    if (l.sku_code && l.sku_code !== l.sku_id) meta.push('<span class="ln-code" title="单位条码">' + esc(l.sku_code) + '</span>');
+    var tags = (bad ? '<span class="tag-new">采购单无此商品</span>' : '')
+      + (window.BarcodeLearn ? window.BarcodeLearn.tag(l) : '')
+      // 「编辑资料」改商品资料，跟着商品走；不再占操作列，操作列只剩删除，宽度都留给商品名
+      + (window.ReceiptEditor ? window.ReceiptEditor.button(l) : '');
+    return '<div class="ln-product">'
+      + '<div class="ln-name" title="' + esc(title || l.sku_id || '') + '">' + esc(ns.name || l.sku_id || '未提供商品名') + '</div>'
+      + (ns.spec ? '<div class="ln-spec" title="' + esc(ns.spec) + '">' + esc(ns.spec) + '</div>' : '')
+      + '<div class="ln-meta">' + meta.join('<span class="pi-dot" aria-hidden="true"> · </span>') + tags + '</div>'
+      + '</div>';
+  }
   function renderLines() {
-    var lines = S.lines || [];
+    // 这里只显示当前物流单号下扫到的商品；旧版服务端带的 done_elsewhere 只读行一律不显示。
+    var lines = (S.lines || []).filter(function (l) { return !l.done_elsewhere; });
     var tb = $('#line-body');
     $('#line-empty').hidden = lines.length > 0;
     var cur = (S.batches || []).filter(function (b) { return b.id === S.current_batch; })[0];
@@ -1364,45 +1390,22 @@
     var cbn = $('#cur-batch-name');
     if (cbn) cbn.textContent = '物流单号：' + (cur ? cur.tracking_no : '—');
 
-    var html = '', sep = false, dsep = false;
+    var html = '', sep = false;
     lines.forEach(function (l) {
-      // 已在别的物流单号收满的商品：灰色只读行，沉在明细表最底部
-      if (l.done_elsewhere) {
-        if (!dsep) {
-          dsep = true;
-          html += '<tr class="line-sep"><td colspan="5">'
-            + '<span class="line-sep-txt">以下商品已在其他物流单号收满（无需再扫）</span></td></tr>';
-        }
-        html += '<tr class="tr-done-elsewhere" data-done="1">'
-          + '<td>' + esc(l.name)
-          + (l.spec ? '<div class="pi-spec">' + esc(l.spec) + '</div>' : '') + '</td>'
-          + '<td class="sku">' + esc(l.sku_id) + '</td>'
-          + '<td class="sku">' + esc(l.sku_code) + '</td>'
-          + '<td class="de-qty">' + fmtNum(l.qty) + '</td>'
-          + '<td style="text-align:right"><span class="de-tag">✓ 已收满'
-          + (l.from_batch ? ' · ' + esc(l.from_batch) : '') + '</span></td>'
-          + '</tr>';
-        return;
-      }
       var bad = !l.matched;
       if (bad && !sep) {
         sep = true;
-        html += '<tr class="line-sep"><td colspan="5">'
+        html += '<tr class="line-sep"><td colspan="3">'
           + '<span class="line-sep-txt">以下为采购单里没有的商品</span></td></tr>';
       }
       html += '<tr class="' + (bad ? 'tr-bad' : '') + '" data-id="' + l.id + '" data-sku="' + esc(l.sku_id || '') + '">'
-        + '<td>' + esc(l.name)
-        + (bad ? '<span class="tag-new">采购单无此商品</span>' : '')
-        + (window.BarcodeLearn ? window.BarcodeLearn.tag(l) : '')
-        + (l.spec ? '<div class="pi-spec">' + esc(l.spec) + '</div>' : '') + '</td>'
-        + '<td class="sku">' + esc(l.sku_id) + '</td>'
-        + '<td class="sku">' + esc(l.sku_code) + '</td>'
-        + '<td><div class="qty-ctl">'
+        + '<td class="ln-prod-cell">' + lineProduct(l, bad) + '</td>'
+        + '<td class="ln-qty"><div class="qty-ctl">'
         + '<button data-act="dec" data-id="' + l.id + '">−</button>'
         + '<input class="qty-input" data-id="' + l.id + '" value="' + fmtNum(l.qty) + '">'
         + '<button data-act="inc" data-id="' + l.id + '">＋</button>'
         + '</div></td>'
-        + '<td style="text-align:right">' + window.ReceiptEditor.button(l) + '<button class="icon-btn icon-del" data-act="del" data-id="' + l.id + '" title="删除这一行" aria-label="删除 ' + esc(l.name || l.sku_id || '') + '">✕</button></td>'
+        + '<td class="ln-act"><button class="icon-btn icon-del" data-act="del" data-id="' + l.id + '" title="删除这一行" aria-label="删除 ' + esc(l.name || l.sku_id || '') + '">✕</button></td>'
         + '</tr>';
     });
     tb.innerHTML = html;
@@ -1650,8 +1653,8 @@
     var rows = lines.length ? lines.map(function (l) {
       return '<tr class="' + (l.matched ? '' : 'tr-bad') + '">'
         + '<td class="sku">' + esc(l.sku_id) + '</td>'
-        + '<td>' + esc(l.name) + (l.matched ? '' : ' <span class="tag-new">采购单无此商品</span>')
-        + (l.spec ? '<div style="color:#6b7a8d;font-size:12px">' + esc(l.spec) + '</div>' : '') + '</td>'
+        + '<td>' + esc(nsOf(l).name) + (l.matched ? '' : ' <span class="tag-new">采购单无此商品</span>')
+        + (nsOf(l).spec ? '<div style="color:#6b7a8d;font-size:12px">' + esc(nsOf(l).spec) + '</div>' : '') + '</td>'
         + '<td class="sku">' + esc(l.sku_code) + '</td>'
         + '<td style="width:104px"><input class="qty-input js-rec-qty" data-id="' + l.id + '" value="'
         + fmtNum(l.qty) + '"' + (l.inbound_job_id ? ' disabled' : '') + '></td>'
@@ -1678,8 +1681,8 @@
     var rows = (g.lines || []).length ? g.lines.map(function (l) {
       return '<tr class="' + (l.matched ? '' : 'tr-bad') + '">'
         + '<td class="sku">' + esc(l.sku_id) + '</td>'
-        + '<td>' + esc(l.name) + (l.matched ? '' : ' <span class="tag-new">采购单无此商品</span>')
-        + (l.spec ? '<div style="color:#6b7a8d;font-size:12px">' + esc(l.spec) + '</div>' : '') + '</td>'
+        + '<td>' + esc(nsOf(l).name) + (l.matched ? '' : ' <span class="tag-new">采购单无此商品</span>')
+        + (nsOf(l).spec ? '<div style="color:#6b7a8d;font-size:12px">' + esc(nsOf(l).spec) + '</div>' : '') + '</td>'
         + '<td style="width:104px"><input class="qty-input js-rec-qty" data-id="' + l.id + '" value="'
         + fmtNum(l.qty) + '"' + (g.inbound_job_id ? ' disabled' : '') + '></td>'
         + '<td style="text-align:right">' + window.ReceiptEditor.button(l) + '<button class="icon-btn icon-del js-del-line" data-id="' + l.id + '" title="删除这一行" aria-label="删除 ' + esc(l.name || l.sku_id || '') + '">✕</button></td>'
@@ -1730,9 +1733,9 @@
         var diffCls = d.diff === 0 ? '' : ' class="bad-rec"';
         return '<tr class="' + cls + '">'
           + '<td class="sku">' + esc(d.sku_id || d.sku_code) + '</td>'
-          + '<td>' + esc(d.name || '')
+          + '<td>' + esc(nsOf(d).name)
           + (d.extra ? ' <span class="tag-new">采购单无此商品</span>' : '')
-          + (d.spec ? '<div style="color:#6b7a8d;font-size:12px">' + esc(d.spec) + '</div>' : '')
+          + (nsOf(d).spec ? '<div style="color:#6b7a8d;font-size:12px">' + esc(nsOf(d).spec) + '</div>' : '')
           + '</td>'
           + '<td>' + fmtNum(d.plan) + '</td>'
           + '<td>' + fmtNum(d.recv) + '</td>'
@@ -1747,9 +1750,9 @@
       + ((rows || []).length ? rows.map(function (d) {
         var status = d.extra ? '采购单外' : (d.plan == null ? '待核实' : (d.done ? '收齐' : (d.diff > 0 ? '多收' : '少收')));
         return '<tr data-sku="' + esc(d.sku_id) + '" class="' + (d.extra || d.plan == null ? 'total-unknown' : (d.done ? 'total-done' : 'total-diff')) + '">'
-          + '<td class="sku">' + esc(d.sku_id || d.sku_code || '待核实') + '</td><td>' + esc(d.name || '')
+          + '<td class="sku">' + esc(d.sku_id || d.sku_code || '待核实') + '</td><td>' + esc(nsOf(d).name)
           + (d.extra ? ' <span class="tag-new">采购单无此商品</span>' : '')
-          + (d.spec ? '<div class="hint">' + esc(d.spec) + '</div>' : '') + '</td>'
+          + (nsOf(d).spec ? '<div class="hint">' + esc(nsOf(d).spec) + '</div>' : '') + '</td>'
           + '<td class="total-plan">' + ReceivingRoundUI.num(d.plan) + '</td><td class="total-recv">' + ReceivingRoundUI.num(d.recv) + '</td>'
           + '<td class="total-delta"><span class="total-delta-value">' + (d.diff == null ? '—' : (d.diff > 0 ? '+' : '') + ReceivingRoundUI.num(d.diff))
           + '</span><span class="total-status">' + esc(status) + '</span></td></tr>';

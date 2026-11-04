@@ -255,12 +255,22 @@ main{padding:14px}
 .tr-bad{background:var(--danger-soft) !important}
 .tr-bad:hover{background:#fce2e2 !important}
 .tr-ok{background:var(--ok-soft) !important}
-/* 已在别的物流单号收满 → 灰色只读行，沉在明细表最底部 */
-.tr-done-elsewhere{background:var(--c-panel-2) !important;color:var(--muted)}
-.tr-done-elsewhere:hover{background:#f2f5f9 !important}
-.tr-done-elsewhere td{opacity:.72}
-.de-qty{font-weight:600;color:var(--muted)}
-.de-tag{font-size:11px;font-weight:600;color:var(--ok);white-space:nowrap}
+/* 当前物流单号明细：商品 | 数量 | 操作。数量和操作列按内容收紧，其余宽度都给商品列；
+   商品列至少 200px，名称最多两行（超出省略，悬停看全名），不会再被挤成逐字换行或被裁掉。 */
+.ln-table{width:100%;table-layout:auto}
+.ln-table th.ln-qty-col,.ln-table td.ln-qty,.ln-table th.ln-act-col,.ln-table td.ln-act{width:1%;white-space:nowrap}
+.ln-table td.ln-act{text-align:right}
+.ln-table td.ln-prod-cell{vertical-align:middle}
+.ln-product{min-width:200px}
+.ln-name{font-weight:700;font-size:15px;line-height:1.45;color:var(--c-text,var(--text));word-break:normal;overflow-wrap:anywhere;
+  display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden}
+.ln-spec{font-size:13px;line-height:1.4;color:var(--c-text-2,var(--muted));overflow-wrap:anywhere;
+  display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:1;line-clamp:1;overflow:hidden}
+.ln-meta{margin-top:2px;display:flex;flex-wrap:wrap;align-items:center;column-gap:2px;row-gap:2px;
+  font-size:13px;line-height:1.5;color:var(--c-text-2,var(--muted))}
+.ln-meta .ln-code{font-family:var(--mono,Consolas,monospace);white-space:nowrap}
+.ln-meta .tag-new{margin-left:6px}
+.ln-meta .js-edit-receipt{margin-left:8px;min-height:24px;height:24px;padding:0 8px;font-size:12px;line-height:22px}
 .tbl .sku{font-family:Consolas,monospace}
 .bad-rec{color:var(--danger);font-size:12px;font-weight:600}
 .tag-new{display:inline-block;background:var(--danger-soft);color:var(--danger);

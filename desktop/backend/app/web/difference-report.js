@@ -51,8 +51,9 @@
   }
   function label(p,only) { if(p.isPurchaseTotal)return '采购总量对照（实时采购 / 本条记录实收）'; return '差异校验结果 · '+(only?'仅差异（含待核实）':'完整结果（含已收满）'); }
   function productLines(r,total) {
-    var list=['编码：'+(r.sku_id||'未提供'),'商品：'+(r.name||'未提供商品名')];
-    if(r.spec && r.spec!==r.name)list.push('规格：'+r.spec);
+    var ns=window.ProductText?ProductText.nameSpec(r.name,r.spec):{name:r.name||'',spec:r.spec&&r.spec!==r.name?r.spec:''};
+    var list=['编码：'+(r.sku_id||'未提供'),'商品：'+(ns.name||'未提供商品名')];
+    if(ns.spec)list.push('规格：'+ns.spec);
     var bars=r.sku_codes || (r.sku_code?[r.sku_code]:[]),aux=r.auxiliary_codes || [];
     if(bars.length)list.push('69码 / 条码：'+bars.join(' · '));
     if(aux.length)list.push('辅助码：'+aux.join(' · '));
