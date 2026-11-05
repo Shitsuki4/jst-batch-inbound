@@ -247,10 +247,11 @@ powershell -ExecutionPolicy Bypass -File desktop/verify-offline-installer.ps1 `
 
 用手机或另一台电脑的浏览器只读查看下面这些内容。有两种访问方式，可以同时开：
 
-- **cpolar 穿透（4.1.9 起，推荐）**：收货电脑上装 cpolar 免费版，把远程管理页的本机入口映射成一个公网 https 地址。访问的人什么都不用装，浏览器直接打开；收货电脑不需要公网 IP / IPv6，也不用改防火墙和光猫。见下面「cpolar 穿透（免费版）」。
+- **cpolar 穿透（4.1.9 起；4.1.11 起内置，推荐）**：在设置页填 cpolar 的 Authtoken，小助手自己运行 cpolar，把远程管理页映射成一个公网 https 地址并显示在设置页。访问的人什么都不用装，浏览器直接打开；收货电脑不需要公网 IP / IPv6，不用另装 cpolar，也不用改防火墙和光猫。见下面「cpolar 穿透（免费版）」。
+- **Tailscale（4.1.11 起，内置）**：小助手自带 Tailscale 入口，在设置页用 Tailscale 账号授权一次即可。要看的设备装 Tailscale 并登录同一账号，地址固定、没有 cpolar 免费版的带宽限制。见下面「Tailscale（内置）」。
 - **IPv6 直连**：通过本机公网 IPv6 直连（不经过中转），步骤见「启用步骤」。
 
-两种方式看到的内容一样：
+几种方式看到的内容一样：
 
 - **收货历史**：采购单收货、无采购单收货、联合收货；按日期范围、类型、单号 / 物流 / 商品搜索；详情含物流批次明细、按商品对单（应收 / 实收 / 状态）、入库单状态。
 - **录像查询**：按物流 / 采购 / 外部单号 / 商品 / 备注搜索，今天 / 近 7 / 30 / 90 天 / 自定义日期；浏览器内 HTML5 播放（HTTP Range 流式，可拖动）；旁注里有扫码时间点时可点击跳转；电脑端允许时可下载。
@@ -271,20 +272,20 @@ IPv6 地址会因重新拨号 / 隐私地址轮换而变化，打不开时回设
 
 只穿透远程管理页这一个入口：它只绑 `127.0.0.1:18480`（端口可在设置页改），明文 HTTP，只接受本机连接，局域网和外网都连不上，给本机的 cpolar 客户端转发用；公网那一段由 cpolar 的 https 地址负责。**不要**把本机收货服务的端口（默认 `127.0.0.1:8765`，那是完整的收货界面，没有远程登录保护）或 cpolar 自己的管理页（9200）穿透出去。
 
-1. 电脑端「设置 → 远程管理页」：勾选「启用」和「cpolar 穿透」，填管理员用户名和至少 10 位的密码，保存。只用 cpolar 的话把「IPv6 直连」取消勾选。设置页会显示要填进 cpolar 的本地地址（默认 `127.0.0.1:18480`）。
-2. 在 [cpolar 官网](https://www.cpolar.com/) 注册免费账号，下载 Windows 版安装。Windows 版装好后默认是系统服务，开机自动运行，不用登录 Windows 也会跑；不需要另做开机自启。
-3. 浏览器打开 `http://127.0.0.1:9200`，用 cpolar 账号登录。「隧道管理 → 创建隧道」：
-   - 隧道名称：随便，例如 `shouhuo-web`
-   - 协议：`http`
-   - 本地地址：设置页显示的那串，默认 `127.0.0.1:18480`
-   - 域名类型：随机域名（免费版只有这个）
-   - 地区：任选，不要选 China NAS（那是 NAS 套餐专用）
-4. 「状态 → 在线隧道列表」里会列出这个隧道的公网地址，复制 **`https://` 开头**的那个发到手机打开，用管理员账号登录。用 cpolar 地址打开不会有证书警告。打开的是 `http://` 地址时，页面会自动跳到同一个地址的 https 版（登录 Cookie 只在 https 下保存）。
-5. 重启电脑后到「在线隧道列表」看一眼隧道是否在线。
+1. 在 [cpolar 官网](https://www.cpolar.com/) 注册免费账号，登录 [dashboard.cpolar.com](https://dashboard.cpolar.com/) 的「验证」页复制 Authtoken。
+2. 电脑端「设置 → 远程管理页」：勾选「启用」和「cpolar 穿透」，填管理员用户名和至少 10 位的密码，把 Authtoken 粘进「cpolar Authtoken」，保存。只用 cpolar 的话把「IPv6 直连」取消勾选。
+3. 小助手会自己运行 cpolar（`cpolar http 127.0.0.1:18480`），几秒后「公网地址」一栏显示 **`https://` 开头**的地址，点「复制」发到手机打开，用管理员账号登录。用 cpolar 地址打开不会有证书警告；打开 `http://` 地址时会自动跳到 https 版。
+4. 不用另装 cpolar，也不用打开 `http://127.0.0.1:9200` 建隧道。小助手开着、远程管理页启用时 cpolar 才运行，开机自启跟着小助手走；cpolar 掉线或退出会自动重连（最长间隔 60 秒），也可以点「重新连接」。
+
+**cpolar 客户端为什么不在安装包里**：cpolar 客户端是 cpolar 公司的闭源免费软件，[服务条款](https://www.cpolar.com/tos) 没有授权第三方再分发，所以安装包 / 升级安装程序 / 便携版都不带它。第一次启用时小助手从官网下载固定版本的 Windows 便携版（`https://www.cpolar.com/static/downloads/releases/3.3.12/cpolar-stable-windows-amd64.zip`），核对 zip 的 SHA-256 `92af567efb1b10038da742dff872da99a7cc277e22b804d55762e67bdeceb25e` 和其中 `cpolar.exe` 的 SHA-256 `ae4a871c33f8cd3a6ad118247b6205219b2008425d018f56cb9feec8aca90cea`，都对上才运行（每次启动前再核对一次 exe），存在 `v3\data\tools\cpolar\3.3.12\`。电脑要能访问 www.cpolar.com；连不上时报 [E-RMT-1110]，校验值不对报 [E-RMT-1111] 并删除下载内容。
+
+**Authtoken 怎么保存**：用 Windows DPAPI 加密存在 `v3\data\remote-access\config.json`（只有当前 Windows 账户能解开），状态接口不返回；运行时写进 `remote-access\cpolar-run\cpolar.yml` 给 cpolar 读（不放命令行），cpolar 停止时删除。被 cpolar 拒绝时报 [E-RMT-1112]，不会反复重试。
+
+不填 Authtoken 也可以照旧自己安装 cpolar，把设置页显示的本机入口（默认 `127.0.0.1:18480`）穿透出去。如果这台电脑以前单独装过 cpolar 并建过这条隧道，改用内置以后请在 9200 页面停掉那条隧道（或卸载 cpolar），免得同一个免费账号两处在线。
 
 免费版的限制（以 cpolar 官网为准）：
 
-- **地址会变**：随机域名 24 小时内会变化。打不开时到收货电脑的 `http://127.0.0.1:9200`「状态 → 在线隧道列表」，或在任意电脑登录 `https://dashboard.cpolar.com/status` 复制新地址，再发给要看的人。旧地址失效后手机上的登录也随之失效（Cookie 跟着网址走），换地址后每台手机都要重新登录一次。
+- **地址会变**：随机域名 24 小时内会变化。小助手每 5 秒读一次 cpolar 本机接口里的当前地址，设置页「公网地址」始终是最新的，变化会记进远程访问日志；打不开时回设置页复制新地址（或在任意电脑登录 `https://dashboard.cpolar.com/status`），再发给要看的人。旧地址失效后手机上的登录也随之失效（Cookie 跟着网址走），换地址后每台手机都要重新登录一次。
 - **带宽 1 Mbps**：查历史没问题，在线看录像会卡，必要时开「允许下载录像」下载后再看。
 - 一个免费账号同时只能在一台电脑上运行 cpolar；有几台收货电脑都要穿透，就各注册一个账号。
 
@@ -298,13 +299,31 @@ IPv6 地址会因重新拨号 / 隐私地址轮换而变化，打不开时回设
 - **没登录成功过的浏览器共用一个限速桶**：10 分钟内失败 10 次，所有新设备暂停 5 分钟，每分钟最多 20 次尝试；全局 10 分钟失败 30 次的暂停照旧拦它们。代价：有人在刷密码时，新设备（包括换了地址后第一次登录的手机）可能要等 5 分钟。
 - 审计日志里来源记为 `cpolar`；请求里带的 `X-Forwarded-For` 只照抄进日志作参考，浏览器那头可以伪造，不用于限速。
 
+### Tailscale（内置）
+
+小助手自带 `backend\ra-tailnet.exe`：用 Tailscale 开源的 [tsnet](https://pkg.go.dev/tailscale.com/tsnet) 库（BSD-3-Clause，许可证随包附在 `backend\LICENSE-tailscale.txt`）从源码编译（源码在 `desktop/tailnet/`，CI 每次构建时编译，`go.sum` 固定并校验 `tailscale.com v1.104.5` 模块的哈希）。它在小助手进程旁边加入你自己的 tailnet，**不装 Tailscale 客户端、不建虚拟网卡、不需要管理员权限**，只在 tailnet 上开放一个 HTTPS 入口（443 端口），收到的连接原样转给本机 `127.0.0.1:18481`（远程管理页的 Tailscale 入口，只接受本机连接）。收货服务 8765 和这台电脑的其他端口都不会出现在 tailnet 里。
+
+1. 电脑端「设置 → 远程管理页」：勾选「启用」和「Tailscale」，设好管理员账号密码，保存。
+2. 状态显示「需要登录」时点「打开 Tailscale 登录链接」，用你的 Tailscale 账号授权这台电脑；或者先在 [login.tailscale.com/admin/settings/keys](https://login.tailscale.com/admin/settings/keys) 生成授权密钥（`tskey-auth-…`）填进「授权密钥」再保存。登录成功后节点身份存在 `remote-access\tailscale\`，保存的授权密钥会自动删除。
+3. 设置页列出 `https://设备名.xxx.ts.net/` 和 `https://100.x.y.z/` 地址。要看的手机 / 电脑装 Tailscale、登录同一个 tailnet，浏览器打开即可，用管理员账号登录。
+4. tailnet 开了 HTTPS 证书（Tailscale 后台 DNS → HTTPS Certificates）时，用设备名地址访问是 Tailscale 签发的正式证书；没开时（或用 100.x 地址）是 ra-tailnet 自己生成的证书，浏览器会提示，核对设置页显示的 SHA-256 一致后再继续。
+5. 「退出 Tailscale 登录」会从 tailnet 注销这台电脑并删除本机节点状态。
+
+Tailscale 入口和 cpolar 入口一样按「隧道入口」做登录保护（设备 Cookie 单独计数、新设备共用限速桶），但两个入口的新设备桶互相独立。ra-tailnet 不向 Tailscale 上传运行日志（`TS_NO_LOGS_NO_SUPPORT`）。
+
+### 内置穿透的运行方式
+
+- cpolar 和 ra-tailnet 都是小助手的子进程，放在 Windows「关闭即结束」的作业对象里：小助手退出、崩溃，或卸载 / 升级程序结束小助手时，它们跟着退出，不留后台进程，也不注册系统服务。开机自启跟着小助手：小助手启动且远程管理页已启用，就自动拉起已配置的穿透。
+- 体积：安装包、升级安装程序、便携版都多了 ra-tailnet.exe（约 22 MB，压缩后约 9 MB）；cpolar（cpolar.exe 约 19 MB）不在包里，首次启用时下载。
+- 卸载：选择删除「设置」时连同 Tailscale 节点状态和 cpolar Authtoken 一起删除；选择删除「缓存」时删除下载的 cpolar。
+
 ### 架构
 
 - `backend/app/remote_access.py`：独立的 `RemoteHost`，自己的 `ThreadingHTTPServer`（`AF_INET6`、`IPV6_V6ONLY=1`，只在启用时绑定 `[::]:端口`，改设置自动重启监听）。**不继承**本机服务的 `Handler`，只实现一个最小只读路由：`/`、`/assets/*`、`/api/login`、`/api/logout`、`/api/me`、`/api/receipts`、`/api/receipts/detail`、`/api/videos`、`/api/videos/detail`、`/media/<录像ID>.mp4`；其余一律 404（未登录 401）。
 - 数据只读：每个请求独立打开 SQLite `mode=ro` + `PRAGMA query_only` 连接（WAL 下与收货写入并发安全），**不拿 `state_lock`、不碰共享连接**，因此不会阻塞本机收货。
 - 录像：只读 C# 端写的 `*.mp4.json` 旁注和录像根目录下的 `video-associations.json`（录像根目录取 `v3\native-settings.json` 的 `Directory`，默认 `v3\录像`）。客户端只能传录像 ID；旁注里的路径必须与旁注同名同目录、在根目录内、逐级不经过链接 / 联接点，播放前再校验一次。分块读取（64 KB），同时最多 3 路流。
 - cpolar 入口：`TunnelServer`（`AF_INET`，只绑 `127.0.0.1:tunnel_port`，`verify_request` 只放行回环地址），和 IPv6 直连共用同一套只读路由，`make_handler(host, tunnel=True)`。
-- 本机设置接口（仅 127.0.0.1，受原有 Host / Origin 防护）：`GET /api/remote/status`、`POST /api/remote/config`、`POST /api/remote/firewall`；界面在 `web/remote-settings.js`。
+- 本机设置接口（仅 127.0.0.1，受原有 Host / Origin 防护）：`GET /api/remote/status`、`POST /api/remote/config`、`POST /api/remote/firewall`、`POST /api/remote/cpolar_restart`、`POST /api/remote/tailscale_logout`；界面在 `web/remote-settings.js`。内置穿透的进程管理在 `backend/app/tunnels.py`。
 - 配置：`v3\data\remote-access\config.json`（只存 scrypt 加盐哈希）；证书：`v3\data\remote-access\remote-cert.pem` / `remote-key.pem`（每台电脑首次启用时生成，ECDSA P-256，825 天）；审计日志：`v3\data\logs\remote-access.log`（1 MB × 5 轮转）。
 
 ### 安全说明

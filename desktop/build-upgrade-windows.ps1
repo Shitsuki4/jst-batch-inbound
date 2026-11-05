@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "4.1.10",
+    [string]$Version = "4.1.11",
     [string]$PortableRoot = "",
     [string]$ReferenceRuntime = "",
     [string]$InstallerName = "",

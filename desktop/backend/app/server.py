@@ -1307,6 +1307,11 @@ def mark_draft_qty(row, items):
             it["draft_qty"] = str(q)
 
 
+def remote_access_tunnels():
+    import tunnels
+    return tunnels
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "jst-scan/1.0"
@@ -2402,6 +2407,26 @@ class Handler(BaseHTTPRequestHandler):
             return self._fail(str(e))
         except OSError as e:
             return self._fail("远程管理页设置未保存：%s" % e)
+
+    def _post_api_remote_tailscale_logout(self):
+        """内置 Tailscale：从 tailnet 注销这台电脑，删掉本机节点状态（之后可以换账号重新登录）。"""
+        self._body()
+        try:
+            note = REMOTE.tailscale_logout()
+        except OSError as e:
+            return self._fail("Tailscale 退出登录失败：%s" % e)
+        return self._ok(msg=note or "已退出 Tailscale 登录", **REMOTE.status())
+
+    def _post_api_remote_cpolar_restart(self):
+        """内置 cpolar：手动重连（换一个新的免费地址，或下载失败后重试）。"""
+        self._body()
+        c = REMOTE.config()
+        if not (c["enabled"] and c["tunnel_enabled"] and c["cpolar_token"] and REMOTE.tunnel):
+            return self._fail("内置 cpolar 没有在用：请先启用远程管理页、勾选 cpolar 穿透并填好 Authtoken")
+        REMOTE.cpolar.stop()
+        REMOTE.cpolar.configure(remote_access_tunnels().unprotect(c["cpolar_token"]), REMOTE.tunnel.server_address[1], c["cpolar_region"])
+        REMOTE.cpolar.start()
+        return self._ok(msg="cpolar 正在重新连接", **REMOTE.status())
 
     def _post_api_remote_firewall(self):
         self._body()

@@ -266,7 +266,7 @@ try {
     foreach ($stale in $staleFiles) {
         if (Test-Path -LiteralPath $stale) { throw "Stale file survived reinstall: $stale" }
     }
-    foreach ($relative in @("backend\Receiving.Service.exe", "runtime\webview2\msedgewebview2.exe")) {
+    foreach ($relative in @("backend\Receiving.Service.exe", "backend\ra-tailnet.exe", "runtime\webview2\msedgewebview2.exe")) {
         $source = Join-Path $PayloadRoot $relative
         $installed = Join-Path $Target $relative
         if (-not (Test-Path -LiteralPath $installed -PathType Leaf)) { throw "Reinstall is missing $relative" }

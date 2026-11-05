@@ -36,6 +36,9 @@ Assert-File $nativeDll
 Assert-File $nativeDeps
 Assert-File $nativeRuntime
 Assert-File $backendExe
+# 4.1.11: built-in Tailscale entry, built from Tailscale's open-source tsnet (BSD-3-Clause), with its license.
+Assert-File (Join-Path $package "backend\ra-tailnet.exe")
+Assert-File (Join-Path $package "backend\LICENSE-tailscale.txt")
 Assert-Directory $backendInternal
 # Remote management page (IPv6, read-only) static assets must ship with the backend.
 foreach ($asset in @("index.html", "remote.js", "remote.css", "icon.svg")) {
