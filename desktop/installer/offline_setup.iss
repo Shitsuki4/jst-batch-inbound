@@ -26,7 +26,7 @@
   #define OutputDir "..\dist\installer"
 #endif
 #ifndef AppVersion
-  #define AppVersion "4.1.10"
+  #define AppVersion "4.1.11"
 #endif
 #ifdef UpgradeOnly
   #ifndef ReqFfmpegSha
@@ -689,6 +689,8 @@ begin
         { Remote admin page: enabled switch, admin password hash, TLS key. Deleting settings must not
           leave the page able to re-open itself with the old password after a reinstall. }
         AddPath(Result, DataRoot + '\data\remote-access');
+        { 4.1.11: remote-access also holds the built-in Tailscale node state (tailscale\) and the
+          DPAPI-protected cpolar Authtoken, so deleting settings signs this PC out of both. }
       end;
     CatCache:
       begin
@@ -697,6 +699,8 @@ begin
         AddPath(Result, DataRoot + '\library-player');
         AddPath(Result, DataRoot + '\native-errors.log');
         AddPath(Result, DataRoot + '\data\logs');
+        { cpolar client downloaded from the official site on first use (re-downloaded and re-verified when needed). }
+        AddPath(Result, DataRoot + '\data\tools');
         AddPath(Result, DataRoot + '\data\report-clipboard');
         AddPath(Result, DataRoot + '\data\native-connection.json');
         AddPath(Result, DataRoot + '\data\native-connection.json.tmp');
@@ -725,8 +729,8 @@ begin
     CatDatabase: Result := '收货记录、对单/联合收货/采购监控数据、操作记录、业务设置';
     CatRecordings: Result := '默认录像目录';
     CatExports: Result := 'Excel/CSV 导出';
-    CatSettings: Result := '录像设置、保持登录、PDA 配对、远程管理页';
-    CatCache: Result := '浏览器缓存、日志，可自动重建';
+    CatSettings: Result := '录像设置、保持登录、PDA 配对、远程管理页（含 Tailscale 登录与 cpolar Authtoken）';
+    CatCache: Result := '浏览器缓存、日志、自动下载的 cpolar，可自动重建';
   else
     Result := '';
   end;
@@ -1082,6 +1086,8 @@ begin
     Result := '收货小助手主程序（Receiving.Native.exe）'
   else if L = 'receiving.service.exe' then
     Result := '业务服务，负责读写 ERP（Receiving.Service.exe）'
+  else if L = 'ra-tailnet.exe' then
+    Result := '内置 Tailscale 入口（ra-tailnet.exe）'
   else if L = 'ffmpeg.exe' then
     Result := '录像进程（ffmpeg.exe）'
   else if L = 'ffprobe.exe' then

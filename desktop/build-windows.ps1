@@ -1,7 +1,7 @@
 param(
     [string]$Configuration = "Release",
     [string]$Runtime = "win-x64",
-    [string]$Version = "4.1.10",
+    [string]$Version = "4.1.11",
     [string]$Python = "",
     [string]$Dotnet = "",
     [switch]$SkipTests,
@@ -170,6 +170,27 @@ $builtBackend = Join-Path $backendDist "backend"
 if (-not (Test-Path -LiteralPath $builtBackend -PathType Container)) {
     throw "PyInstaller backend output was not produced: $builtBackend"
 }
+
+Write-Host "== Build built-in Tailscale entry (ra-tailnet.exe) =="
+# 用 Tailscale 开源的 tsnet 库（BSD-3-Clause）从源码编译；go.sum 固定并校验 tailscale.com 模块的哈希。
+$tailnetSrc = Join-Path $desktopRoot "tailnet"
+$tailnetExe = Join-Path $builtBackend "ra-tailnet.exe"
+if (-not (Get-Command go -ErrorAction SilentlyContinue)) {
+    throw "Go toolchain not found: install the Go version in desktop/tailnet/go.mod to build ra-tailnet.exe"
+}
+$tsModule = (Select-String -LiteralPath (Join-Path $tailnetSrc "go.mod") -Pattern '^require tailscale\.com (v[0-9.]+)').Matches[0].Groups[1].Value
+$savedGo = @{ GOOS = $env:GOOS; GOARCH = $env:GOARCH; CGO_ENABLED = $env:CGO_ENABLED; GOFLAGS = $env:GOFLAGS }
+Push-Location $tailnetSrc
+try {
+    $env:GOOS = "windows"; $env:GOARCH = "amd64"; $env:CGO_ENABLED = "0"; $env:GOFLAGS = "-mod=readonly"
+    & go build -trimpath -ldflags "-s -w -X main.version=$tsModule-ra$Version" -o $tailnetExe .
+    if ($LASTEXITCODE -ne 0) { throw "go build ra-tailnet failed with exit code $LASTEXITCODE" }
+} finally {
+    Pop-Location
+    foreach ($k in $savedGo.Keys) { Set-Item -Path "env:$k" -Value $savedGo[$k] -ErrorAction SilentlyContinue; if (-not $savedGo[$k]) { Remove-Item "env:$k" -ErrorAction SilentlyContinue } }
+}
+if (-not (Test-Path -LiteralPath $tailnetExe -PathType Leaf)) { throw "ra-tailnet.exe was not produced" }
+Copy-Item -LiteralPath (Join-Path $tailnetSrc "LICENSE-tailscale.txt") -Destination (Join-Path $builtBackend "LICENSE-tailscale.txt") -Force
 
 Write-Host "== Assemble portable package =="
 Copy-Item -Path (Join-Path $nativeOut "*") -Destination $portableRoot -Recurse -Force

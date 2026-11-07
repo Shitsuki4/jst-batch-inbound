@@ -219,7 +219,7 @@ try {
     if (Test-Path -LiteralPath $staleBackend) { throw "Upgrade did not purge stale backend\_internal files" }
     $runtimeAfter = Get-TreeHashes $runtimeDir
     if (Compare-Object $runtimeBefore $runtimeAfter) { throw "Upgrade changed the installed runtime\" }
-    foreach ($relative in @("Receiving.Native.exe", "Receiving.Native.dll", "backend\Receiving.Service.exe", "installed-mode.txt")) {
+    foreach ($relative in @("Receiving.Native.exe", "Receiving.Native.dll", "backend\Receiving.Service.exe", "backend\ra-tailnet.exe", "installed-mode.txt")) {
         $installed = Join-Path $Target $relative
         if (-not (Test-Path -LiteralPath $installed -PathType Leaf)) { throw "Upgrade is missing $relative" }
         if ((Get-Sha $installed) -ne (Get-Sha (Join-Path $PayloadRoot $relative))) { throw "Upgrade did not install the payload's $relative" }

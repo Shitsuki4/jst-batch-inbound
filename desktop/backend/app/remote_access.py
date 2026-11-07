@@ -37,6 +37,8 @@ from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from logging.handlers import RotatingFileHandler
 
+import tunnels
+
 DEFAULT_PORT = 18443
 DEFAULT_TUNNEL_PORT = 18480       # cpolar 穿透入口：只绑 127.0.0.1，明文 HTTP，给本机 cpolar 客户端转发
 IDLE_TIMEOUT = 30 * 60            # 30 分钟无操作退出
@@ -53,6 +55,8 @@ TRUSTED_SECONDS = 30 * 24 * 3600   # 30 天内在这个网络登录成功过 →
 # 经过 cpolar 的请求来源全是 127.0.0.1，没登录成功过的浏览器只能共用一个限速桶。
 # 门槛比单个来源宽一点、锁得短一点：一个人输错几次不至于把所有新设备都关在外面 15 分钟。
 SHARED_KEY = "cpolar:新设备"
+TAILNET_SHARED_KEY = "tailscale:新设备"   # Tailscale 入口单独一个桶：cpolar 那边有人刷密码不影响 tailnet 里的新设备
+SHARED_KEYS = (SHARED_KEY, TAILNET_SHARED_KEY)
 SHARED_FAIL_LIMIT = 10
 SHARED_LOCK_SECONDS = 5 * 60
 SHARED_ATTEMPTS_PER_MIN = 20      # 共用桶里有好几个人同时登录（比如交班时），成功的也算次数，放宽一些
@@ -750,13 +754,14 @@ class Guard:
             if self.global_until > now and not self._trusted(key):
                 return "登录尝试过多，远程登录已暂时暂停，请稍后再试"
             if self.locked.get(key, 0) > now:
-                if key == SHARED_KEY:
-                    return "经 cpolar 地址登录的新设备失败次数过多，已暂停%d分钟；本浏览器30天内登录成功过的不受影响" % (SHARED_LOCK_SECONDS // 60)
+                if key in SHARED_KEYS:
+                    return "经%s地址登录的新设备失败次数过多，已暂停%d分钟；本浏览器30天内登录成功过的不受影响" % (
+                        " Tailscale " if key == TAILNET_SHARED_KEY else " cpolar ", SHARED_LOCK_SECONDS // 60)
                 if key.startswith("device:"):
                     return "这个浏览器失败次数过多，已锁定%d分钟" % (LOCK_SECONDS // 60)
                 return "失败次数过多，该网络已锁定15分钟"
             mine = self.attempts.setdefault(key, [])
-            if len(mine) >= (SHARED_ATTEMPTS_PER_MIN if key == SHARED_KEY else ATTEMPTS_PER_MIN):
+            if len(mine) >= (SHARED_ATTEMPTS_PER_MIN if key in SHARED_KEYS else ATTEMPTS_PER_MIN):
                 return "登录请求过于频繁，请一分钟后再试"
             mine.append(now)
             return None
@@ -801,7 +806,7 @@ class Guard:
 
     def failed(self, key, now=None):
         now = time.time() if now is None else now
-        limit, lock_for = (SHARED_FAIL_LIMIT, SHARED_LOCK_SECONDS) if key == SHARED_KEY else (FAIL_LIMIT, LOCK_SECONDS)
+        limit, lock_for = (SHARED_FAIL_LIMIT, SHARED_LOCK_SECONDS) if key in SHARED_KEYS else (FAIL_LIMIT, LOCK_SECONDS)
         with self.lock:
             self._prune(now)
             mine = self.fails.setdefault(key, [])
@@ -821,10 +826,10 @@ class Guard:
     def succeeded(self, key, now=None):
         now = time.time() if now is None else now
         with self.lock:
-            if key == SHARED_KEY or key.startswith("device:"):
+            if key in SHARED_KEYS or key.startswith("device:"):
                 # 共用桶：一个人登录成功不能替别人清零失败次数，也不能让整个 cpolar 入口变成"登录成功过的网络"。
                 # 设备键：信任记在 devices 里（trust_device），这里只清它自己的失败次数。
-                if key != SHARED_KEY:
+                if key not in SHARED_KEYS:
                     self.fails.pop(key, None)
                 return
             self.fails.pop(key, None)
@@ -944,6 +949,10 @@ class TunnelServer(RemoteServer):
             return False
 
 
+def _port_or(v, default):
+    return v if isinstance(v, int) and not isinstance(v, bool) and 1024 <= v <= 65535 else default
+
+
 def cpolar_local_address(port):
     return "127.0.0.1:%d" % port
 
@@ -961,6 +970,11 @@ class RemoteHost:
         self.thread = None
         self.tunnel = None
         self.tunnel_error = ""
+        self.tailnet = None           # 127.0.0.1:18481 给 ra-tailnet 转发的入口
+        self.tailnet_error = ""
+        self.cpolar = tunnels.CpolarAgent(self.log, os.path.join(data_dir, "tools"), os.path.join(self.dir, "cpolar-run"))
+        self.ts = tunnels.TailnetAgent(self.log, tunnels.default_tailnet_exe(), os.path.join(self.dir, "tailscale"))
+        self.ts.on_logged_in = self._forget_ts_authkey
         self.error = ""
         self.fingerprint = ""
         self.bound = ""
@@ -991,7 +1005,15 @@ class RemoteHost:
                 "username": c.get("username", "") if isinstance(c.get("username"), str) else "",
                 "password": c.get("password") if isinstance(c.get("password"), dict) else None,
                 "allow_download": bool(c.get("allow_download", False)),
-                "generation": c.get("generation", "") if isinstance(c.get("generation"), str) else ""}
+                "generation": c.get("generation", "") if isinstance(c.get("generation"), str) else "",
+                # 4.1.11 内置穿透：cpolar 填了 Authtoken 才由小助手自己运行；Tailscale 用随包的 ra-tailnet
+                "cpolar_token": c.get("cpolar_token") if isinstance(c.get("cpolar_token"), str) else "",
+                "cpolar_region": c.get("cpolar_region") if c.get("cpolar_region") in ("", "cn", "cn_vip", "cn_top", "us", "hk", "eu") else "",
+                "tailscale_enabled": bool(c.get("tailscale_enabled", False)),
+                "tailscale_authkey": c.get("tailscale_authkey") if isinstance(c.get("tailscale_authkey"), str) else "",
+                "tailscale_hostname": c.get("tailscale_hostname") if isinstance(c.get("tailscale_hostname"), str)
+                                      and tunnels.HOSTNAME.match(c.get("tailscale_hostname")) else "receiving-assistant",
+                "tailscale_port": _port_or(c.get("tailscale_port"), tunnels.DEFAULT_TAILNET_LOCAL_PORT)}
 
     def _write_config(self, c):
         os.makedirs(self.dir, exist_ok=True)
@@ -1039,8 +1061,49 @@ class RemoteHost:
                 raise ValueError("cpolar 入口端口不能和 IPv6 直连端口相同")
             if self.service_port and tport == self.service_port:
                 raise ValueError("cpolar 入口端口不能用本机收货服务的端口（%d）：那是完整的收货界面，不能穿透出去" % self.service_port)
-            if enabled and not ipv6 and not tunnel:
-                raise ValueError("请至少选一种访问方式：IPv6 直连或 cpolar 穿透")
+            tse = body.get("tailscale_enabled", c["tailscale_enabled"])
+            if not isinstance(tse, bool):
+                raise ValueError("访问方式开关格式无效")
+            if enabled and not ipv6 and not tunnel and not tse:
+                raise ValueError("请至少选一种访问方式：cpolar 穿透、Tailscale 或 IPv6 直连")
+            ctoken = c["cpolar_token"]
+            if body.get("cpolar_token_clear") is True:
+                ctoken = ""
+            raw = body.get("cpolar_token") or ""
+            if not isinstance(raw, str):
+                raise ValueError("cpolar Authtoken 格式无效")
+            raw = re.sub(r"^\s*(cpolar(\.exe)?\s+)?authtoken\s+", "", raw.strip(), flags=re.I).strip()
+            if raw:
+                if not tunnels.CPOLAR_TOKEN.match(raw):
+                    raise ValueError("cpolar Authtoken 格式不对：请到 dashboard.cpolar.com 的“验证”页复制那一串（只要字母数字那串）")
+                ctoken = tunnels.protect(raw)
+            region = body.get("cpolar_region", c["cpolar_region"])
+            if region not in ("", "cn", "cn_vip", "cn_top", "us", "hk", "eu"):
+                raise ValueError("cpolar 地区无效")
+            tskey = c["tailscale_authkey"]
+            raw = body.get("tailscale_authkey") or ""
+            if not isinstance(raw, str):
+                raise ValueError("Tailscale 授权密钥格式无效")
+            raw = raw.strip()
+            if raw:
+                if not tunnels.TS_AUTHKEY.match(raw):
+                    raise ValueError("Tailscale 授权密钥应以 tskey- 开头：在 login.tailscale.com/admin/settings/keys 生成")
+                tskey = tunnels.protect(raw)
+            tsname = body.get("tailscale_hostname", c["tailscale_hostname"])
+            if not isinstance(tsname, str) or not tunnels.HOSTNAME.match(tsname.strip().lower()):
+                raise ValueError("Tailscale 设备名只能用小写字母、数字和 -（最多63位）")
+            tsname = tsname.strip().lower()
+            tsport = body.get("tailscale_port", c["tailscale_port"])
+            if isinstance(tsport, bool):
+                raise ValueError("Tailscale 入口端口必须是1024到65535的整数")
+            try:
+                tsport = int(tsport)
+            except (TypeError, ValueError):
+                raise ValueError("Tailscale 入口端口必须是1024到65535的整数")
+            if not 1024 <= tsport <= 65535:
+                raise ValueError("Tailscale 入口端口必须是1024到65535的整数")
+            if tsport in (port, tport) or (self.service_port and tsport == self.service_port):
+                raise ValueError("Tailscale 入口端口不能和其他入口或本机收货服务的端口相同")
             username = body.get("username", c["username"])
             if not isinstance(username, str) or not USERNAME.match(username.strip()):
                 raise ValueError("管理员用户名需为1～32位字母、数字或 _ . @ -")
@@ -1062,19 +1125,24 @@ class RemoteHost:
                 generation = secrets.token_hex(8)
             new = {"enabled": enabled, "port": port, "username": username, "password": record,
                    "allow_download": allow, "generation": generation,
-                   "ipv6_enabled": ipv6, "tunnel_enabled": tunnel, "tunnel_port": tport}
+                   "ipv6_enabled": ipv6, "tunnel_enabled": tunnel, "tunnel_port": tport,
+                   "cpolar_token": ctoken, "cpolar_region": region, "tailscale_enabled": tse, "tailscale_authkey": tskey,
+                   "tailscale_hostname": tsname, "tailscale_port": tsport}
             self._write_config(new)
             if generation != c["generation"]:
                 self.guard.clear()
                 self.guard.forget_devices()
-            changes = [k for k in ("enabled", "port", "username", "allow_download", "ipv6_enabled", "tunnel_enabled", "tunnel_port")
-                       if old[k] != new[k]]
+            changes = [k for k in ("enabled", "port", "username", "allow_download", "ipv6_enabled", "tunnel_enabled", "tunnel_port",
+                                   "cpolar_token", "cpolar_region", "tailscale_enabled", "tailscale_authkey", "tailscale_hostname",
+                                   "tailscale_port") if old[k] != new[k]]
             if password:
                 changes.append("password")
             self.log("设置已更新：%s" % (",".join(changes) or "无变化"))
             restart = (old["enabled"] != enabled or old["port"] != port or bool(password) or username != old["username"]
-                       or old["ipv6_enabled"] != ipv6 or old["tunnel_enabled"] != tunnel or old["tunnel_port"] != tport)
-            if restart or (enabled and not self.server and not self.tunnel):
+                       or old["ipv6_enabled"] != ipv6 or old["tunnel_enabled"] != tunnel or old["tunnel_port"] != tport
+                       or any(old[k] != new[k] for k in ("cpolar_token", "cpolar_region", "tailscale_enabled", "tailscale_authkey",
+                                                         "tailscale_hostname", "tailscale_port")))
+            if restart or (enabled and not self.server and not self.tunnel and not self.tailnet):
                 self.stop()
                 if enabled:
                     self.start()
@@ -1170,12 +1238,12 @@ class RemoteHost:
 
     def start(self):
         with self.lock:
-            if self.server or self.tunnel:
+            if self.server or self.tunnel or self.tailnet:
                 return self.status()
             c = self.config()
             if not c["enabled"] or not c["password"] or not c["username"]:
                 return self.status()
-            self.error = self.tunnel_error = ""
+            self.error = self.tunnel_error = self.tailnet_error = ""
             if c["ipv6_enabled"]:
                 try:
                     ctx = self.certificate()
@@ -1202,9 +1270,52 @@ class RemoteHost:
                     threading.Thread(target=tsrv.serve_forever, kwargs={"poll_interval": 0.3},
                                      daemon=True, name="remote-cpolar").start()
                     self.log("cpolar 穿透入口已启动 127.0.0.1:%d（只接受本机连接）" % tsrv.server_address[1])
-            if not self.error and self.tunnel_error and not c["ipv6_enabled"]:
-                self.error = self.tunnel_error
+                    token = tunnels.unprotect(c["cpolar_token"])
+                    if token:      # 填了 Authtoken：小助手自己运行内置的 cpolar（第一次会从官网下载并核对校验值）
+                        self.cpolar.configure(token, tsrv.server_address[1], c["cpolar_region"])
+                        self.cpolar.start()
+            if c["tailscale_enabled"]:
+                try:
+                    nsrv = TunnelServer(("127.0.0.1", c["tailscale_port"]), make_handler(self, entry="tailscale"), self)
+                except Exception as e:
+                    self.tailnet_error = "Tailscale 入口未能启动（127.0.0.1:%d）：%s" % (c["tailscale_port"], e)
+                    self.log(self.tailnet_error)
+                else:
+                    self.tailnet = nsrv
+                    threading.Thread(target=nsrv.serve_forever, kwargs={"poll_interval": 0.3},
+                                     daemon=True, name="remote-tailnet").start()
+                    self.ts.configure(tunnels.unprotect(c["tailscale_authkey"]), c["tailscale_hostname"],
+                                      tunnels.DEFAULT_TAILNET_LISTEN, nsrv.server_address[1])
+                    self.ts.start()
+                    self.log("Tailscale 入口已启动 127.0.0.1:%d（只接受本机 ra-tailnet 转发）" % nsrv.server_address[1])
+            if not self.error and not c["ipv6_enabled"]:
+                errs = [e for e, on in ((self.tunnel_error, c["tunnel_enabled"]), (self.tailnet_error, c["tailscale_enabled"])) if on and e]
+                if errs and not (self.tunnel or self.tailnet):
+                    self.error = "；".join(errs)
             return self.status()
+
+    def _forget_ts_authkey(self):
+        """Tailscale 登录成功后节点身份已存在状态目录里：删掉保存的 auth key，免得一直留着。"""
+        with self.lock:
+            try:
+                with open(self.config_path, encoding="utf-8") as f:
+                    raw = json.load(f)
+            except (OSError, ValueError):
+                return
+            if isinstance(raw, dict) and raw.get("tailscale_authkey"):
+                raw["tailscale_authkey"] = ""
+                self._write_config(raw)
+                self.ts.authkey = ""
+                self.log("Tailscale 已登录，保存的授权密钥已删除")
+
+    def tailscale_logout(self):
+        with self.lock:
+            msg = self.ts.logout()
+            c = self.config()
+            if c["tailscale_enabled"] and self.tailnet:
+                self.ts.configure("", c["tailscale_hostname"], tunnels.DEFAULT_TAILNET_LISTEN, self.tailnet.server_address[1])
+                self.ts.start()       # 重新出现“需要登录”和新的登录链接
+            return msg
 
     def start_if_enabled(self):
         try:
@@ -1217,6 +1328,9 @@ class RemoteHost:
         with self.lock:
             srv, self.server = self.server, None
             tsrv, self.tunnel = self.tunnel, None
+            nsrv, self.tailnet = self.tailnet, None
+            self.cpolar.stop()
+            self.ts.stop()
             self.guard.clear()
             if srv:
                 srv.shutdown()
@@ -1227,6 +1341,10 @@ class RemoteHost:
                 tsrv.shutdown()
                 tsrv.server_close()
                 self.log("cpolar 穿透入口已停止")
+            if nsrv:
+                nsrv.shutdown()
+                nsrv.server_close()
+                self.log("Tailscale 入口已停止")
 
     def port(self):
         return self.server.server_address[1] if self.server else 0
@@ -1237,7 +1355,12 @@ class RemoteHost:
         port = self.port() or c["port"]
         program = sys.executable if getattr(sys, "frozen", False) else ""
         tport = self.tunnel.server_address[1] if self.tunnel else c["tunnel_port"]
-        return {"enabled": c["enabled"], "running": bool(self.server or self.tunnel), "port": port,
+        return {"enabled": c["enabled"], "running": bool(self.server or self.tunnel or self.tailnet), "port": port,
+                "cpolar": dict(self.cpolar.status(), builtin=bool(c["cpolar_token"]), region=c["cpolar_region"]),
+                "tailscale_enabled": c["tailscale_enabled"], "tailscale_running": bool(self.tailnet),
+                "tailscale_error": self.tailnet_error, "tailscale_hostname": c["tailscale_hostname"],
+                "tailscale_port": self.tailnet.server_address[1] if self.tailnet else c["tailscale_port"],
+                "tailscale": dict(self.ts.status(), authkey_saved=bool(c["tailscale_authkey"])),
                 "ipv6_enabled": c["ipv6_enabled"], "ipv6_running": bool(self.server),
                 "tunnel_enabled": c["tunnel_enabled"], "tunnel_running": bool(self.tunnel), "tunnel_port": tport,
                 "tunnel_error": self.tunnel_error, "cpolar_local_address": cpolar_local_address(tport),
@@ -1287,8 +1410,13 @@ def _range(header, size):
     return max(0, size - n), size - 1
 
 
-def make_handler(host, tunnel=False):
-    """tunnel=True：cpolar 穿透入口（127.0.0.1 明文 HTTP）。来源地址永远是本机，不能拿来区分访问者。"""
+def make_handler(host, tunnel=False, entry=None):
+    """tunnel=True：cpolar 穿透入口（127.0.0.1 明文 HTTP）。来源地址永远是本机，不能拿来区分访问者。
+    entry="tailscale"：内置 ra-tailnet 转发来的 Tailscale 入口（TLS 在 ra-tailnet 里做完），同样只接受本机连接。"""
+    if entry == "tailscale":
+        tunnel = True
+    entry = entry or ("cpolar" if tunnel else "ipv6")
+    shared_key = TAILNET_SHARED_KEY if entry == "tailscale" else SHARED_KEY
     web = _web_dir()
 
     class Handler(BaseHTTPRequestHandler):
@@ -1308,6 +1436,8 @@ def make_handler(host, tunnel=False):
             """写进审计日志的来源。经 cpolar 时来源都是 127.0.0.1；X-Forwarded-For 是浏览器那头也能伪造的，只作参考。"""
             if not tunnel:
                 return self.ip
+            if entry == "tailscale":
+                return "tailscale"
             xff = re.sub(r"[^0-9A-Fa-f:., ]", "", self.headers.get("X-Forwarded-For", ""))[:80]
             return "cpolar" + ("（X-Forwarded-For=%s，未核实）" % xff if xff else "")
 
@@ -1317,7 +1447,7 @@ def make_handler(host, tunnel=False):
             dev = host.guard.device_key(self.cookie_token(DEVICE_COOKIE))
             if dev:
                 return dev
-            return SHARED_KEY if tunnel else ip_key(self.ip)
+            return shared_key if tunnel else ip_key(self.ip)
 
         def headers_common(self, extra=None):
             h = {"X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer", "X-Frame-Options": "DENY",
@@ -1538,7 +1668,8 @@ def make_handler(host, tunnel=False):
                 locked = host.guard.failed(key)
                 host.log("登录失败 用户=%s%s" % (user[:32], "（已触发锁定）" if locked else ""), self.who)
                 time.sleep(0.4)
-                lock_note = ("；经 cpolar 地址登录的新设备失败次数过多，已暂停%d分钟" % (SHARED_LOCK_SECONDS // 60) if key == SHARED_KEY
+                lock_note = ("；经%s地址登录的新设备失败次数过多，已暂停%d分钟" % (" Tailscale " if entry == "tailscale" else " cpolar ", SHARED_LOCK_SECONDS // 60)
+                             if key in (SHARED_KEY, TAILNET_SHARED_KEY)
                              else "；失败次数过多，已锁定%d分钟" % (LOCK_SECONDS // 60))
                 return self.fail("用户名或密码错误" + (lock_note if locked else ""), 401)
             host.guard.succeeded(key)

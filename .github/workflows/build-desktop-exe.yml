@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       publish_release_tag:
-        description: "Attach the built assets to this existing release tag, e.g. desktop-v4.1.10 (optional; main only; version must match the csproj)."
+        description: "Attach the built assets to this existing release tag, e.g. desktop-v4.1.11 (optional; main only; version must match the csproj)."
         required: false
         type: string
   push:
@@ -96,6 +96,12 @@ jobs:
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: "24"
+
+      - name: Set up Go (内置 Tailscale 入口 ra-tailnet.exe 从开源源码编译)
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: desktop/tailnet/go.mod
+          cache-dependency-path: desktop/tailnet/go.sum
 
       - name: Install build dependencies
         run: |
@@ -203,6 +209,21 @@ jobs:
         shell: pwsh
         run: |
           ./desktop/build-windows.ps1 -SkipTests -NoClean -Version $env:APP_VERSION
+
+      - name: Verify built-in Tailscale entry (ra-tailnet.exe)
+        shell: pwsh
+        env:
+          PYTHONIOENCODING: utf-8:replace
+          PYTHONUTF8: "1"
+        run: |
+          $ErrorActionPreference = "Stop"
+          $exe = (Resolve-Path -LiteralPath "desktop/dist/portable/backend/ra-tailnet.exe").Path
+          Write-Host "ra-tailnet.exe $((Get-Item $exe).Length) bytes, version $(& $exe --version)"
+          # 真二进制：不给授权密钥启动应报 NeedsLogin 并给出 login.tailscale.com 登录链接；stdin 关闭后自行退出；拒绝转发到非 127.0.0.1
+          $env:JST_TAILNET_EXE = $exe
+          python desktop/backend/app/remote_tunnels_test.py RealTailnetBinaryTest -v
+          if ($LASTEXITCODE -ne 0) { throw "ra-tailnet verification failed: $LASTEXITCODE" }
+          Get-ChildItem desktop/dist -Recurse -Filter ra-tailnet.exe | ForEach-Object { Write-Host "$($_.FullName) $((Get-FileHash -Algorithm SHA256 $_.FullName).Hash)" }
 
       - name: Run video library UI acceptance (录像查询)
         shell: pwsh

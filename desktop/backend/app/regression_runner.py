@@ -185,6 +185,7 @@ def main():
                          ("lock-refactor", "lock_refactor_test.py"),
                          ("remote-access", "remote_access_test.py"),
                          ("remote-cpolar", "remote_cpolar_test.py"),
+                         ("remote-tunnels", "remote_tunnels_test.py"),   # 4.1.11 内置 cpolar / Tailscale
                          ("unplanned-hint", "unplanned_hint_test.py"),
                          ("unplanned-hint-http", "unplanned_hint_http_test.py"),
                          ("restore", "restore_test.py"),
