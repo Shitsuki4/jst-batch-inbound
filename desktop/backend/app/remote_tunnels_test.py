@@ -315,6 +315,8 @@ class RemoteSettingsTest(unittest.TestCase):
             f.write(FAKE_TAILNET)
         self.host.ts.exe = fake
         self.host.ts.launcher = [sys.executable]
+        # 不让测试真的去 cpolar 官网下载：Windows 上下载线程还开着临时 zip 时，tearDown 删目录会失败
+        self.host.cpolar.spec["url"] = "http://127.0.0.1:9/cpolar-test.zip"
 
     def tearDown(self):
         self.host.stop()
