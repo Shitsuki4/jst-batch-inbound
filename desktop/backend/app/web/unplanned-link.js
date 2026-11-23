@@ -32,7 +32,7 @@ async function choose(selection){
    linkTable(p.rows);
   $('po-link-scope-label').hidden=!p.cross_scope;
   $('po-link-error').textContent=p.blockers.length?'跨范围商品未核对通过：'+p.blockers.join('；')+'。请核对原实收或目标采购资料后重新查询。':'';
- }catch(err){$('po-link-error').textContent=err.message;}
+ }catch(err){$('po-link-error').textContent=window.UnplannedRelogin?window.UnplannedRelogin(err.message):err.message;}
  finally{working=false;controls();}
 }
 $('po-link-cancel').onclick=()=>finish(null);

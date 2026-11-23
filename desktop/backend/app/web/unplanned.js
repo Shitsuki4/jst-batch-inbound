@@ -8,7 +8,10 @@ function wholeQty(v,allowZero){const s=String(v??'').trim();if(!/^\d+$/.test(s)|
 function guardQtyInput(el,allowZero){if(!el)return;const check=()=>{const s=el.value.trim(),bad=el.validity&&el.validity.badInput;el.setCustomValidity(!bad&&(s===''||/^\d+$/.test(s)&&Number(s)<=1e9&&(allowZero||Number(s)>0))?'':(allowZero?QTY_MSG0:QTY_MSG));};el.addEventListener('input',check);el.addEventListener('change',check);}
 function message(s,error=false){if(error&&s&&window.JstErr)s=JstErr.ensure(s);$('message').textContent=s;$('message').classList.toggle('error',error);}
 async function api(url,body){const r=await fetch(url,body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:undefined);const data=await r.json();if(!r.ok||!data.ok)throw Error(data.msg||'请求失败');return data;}
-async function run(fn){if(busy)return message('正在加载或保存，请稍候再试');busy=true;$('new').disabled=true;window.ReceivingDesk?.setBusy(true);try{await fn()}catch(err){message(err.message,true);window.ReceivingDesk?.feedback?.(err.message,'err')}finally{busy=false;$('new').disabled=false;window.ReceivingDesk?.setBusy(false)}}
+// 4.1.12：聚水潭登录确实失效（E-JST-1101）时说清楚怎么办，并确认已扫数据不会丢
+function reloginText(m){m=String(m||'');return m.indexOf('E-JST-1101')<0?m:m+'\n请点右上角「退出登录」后重新登录聚水潭，再用上方「按物流查询」或「按采购资料查询」找到本批次继续匹配。已扫的物流单、实收数量和录像都存在本机，退出登录不会删除。'}
+window.UnplannedRelogin=reloginText;
+async function run(fn){if(busy)return message('正在加载或保存，请稍候再试');busy=true;$('new').disabled=true;window.ReceivingDesk?.setBusy(true);try{await fn()}catch(err){const msg=reloginText(err.message);message(msg,true);window.ReceivingDesk?.feedback?.(msg,'err')}finally{busy=false;$('new').disabled=false;window.ReceivingDesk?.setBusy(false)}}
 function body(extra){return {sid:state?.session.id,revision:state?.meta.revision,batch_id:bid,...extra};}
 async function action(action,extra={}){return api(API+'/action',body({action,...extra}));}
  $('copy-previous').onclick=()=>run(async()=>{if(pending||document.querySelector('dialog[open]'))throw Error('请先确认或取消当前商品');if(!bid)throw Error('请先扫描目标物流单');const result=await ReceiptCopy.run(action,'本收货批次不再提示');if(result){state=result;bid=result.current_batch;render();await history();message('已从 '+result.copy_source+' 复制 '+R.num(result.copy_total)+' 件；未生成入库单');}else message('已取消复制，未登记数量');$('code').focus();});

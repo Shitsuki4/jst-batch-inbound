@@ -186,6 +186,7 @@ def main():
                          ("remote-access", "remote_access_test.py"),
                          ("remote-cpolar", "remote_cpolar_test.py"),
                          ("remote-tunnels", "remote_tunnels_test.py"),   # 4.1.11 内置 cpolar / Tailscale
+                         ("unplanned-link-session", "unplanned_link_session_test.py"),   # 4.1.12 匹配采购单遇到登录页
                          ("unplanned-hint", "unplanned_hint_test.py"),
                          ("unplanned-hint-http", "unplanned_hint_http_test.py"),
                          ("restore", "restore_test.py"),
