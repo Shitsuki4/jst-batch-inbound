@@ -1,7 +1,7 @@
 param(
     [string]$Configuration = "Release",
     [string]$Runtime = "win-x64",
-    [string]$Version = "4.1.11",
+    [string]$Version = "4.1.12",
     [string]$Python = "",
     [string]$Dotnet = "",
     [switch]$SkipTests,

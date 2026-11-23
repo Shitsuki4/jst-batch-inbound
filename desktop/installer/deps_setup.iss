@@ -13,7 +13,7 @@
   #define OutputDir "..\dist\deps-installer"
 #endif
 #ifndef AppVersion
-  #define AppVersion "4.1.11"
+  #define AppVersion "4.1.12"
 #endif
 #ifndef OutputBaseFilename
   #define OutputBaseFilename "收货小助手-" + AppVersion + "-运行依赖安装程序"

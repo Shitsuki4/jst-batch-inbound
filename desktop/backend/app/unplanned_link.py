@@ -14,7 +14,7 @@ import unicodedata
 from decimal import Decimal
 
 from inbound import json_text
-from jst import BizError, normalize_po_item, normalize_po_row
+from jst import BizError, SessionExpired, normalize_po_item, normalize_po_row
 from store import now_str
 
 _KEY = secrets.token_bytes(32)
@@ -23,8 +23,17 @@ _ALL = '2147483647'
 
 def account(client):
     if not client.uid or not client.coid:
-        raise ValueError('采购单查询需要登录，请重新登录聚水潭')
+        raise SessionExpired('采购单查询需要登录')
     return [str(client.uid), str(client.coid)]
+
+
+def _session_like(exc):
+    return isinstance(exc, SessionExpired)
+
+
+def _account_blocked(exc):
+    """整个账号层面的阻断：验证码 / 风控 / 清单接口登录失效，不是某个范围的问题。"""
+    return isinstance(exc, SessionExpired) or any(t in str(exc) for t in ('验证码', '风控'))
 
 
 def concrete(value):
@@ -72,8 +81,8 @@ def discover(client, no, source):
                 ident = str(row.get('id') or '').strip()
                 if concrete(ident) and ident not in dest: dest.append(ident)
         except (BizError, OSError, ValueError) as exc:
-            if any(t in str(exc) for t in ('登录', '验证码', '风控')):
-                raise ValueError('采购单查询未完成：'+str(exc)) from exc
+            if _account_blocked(exc):
+                raise   # 保留原错误码（如 E-JST-1101）和「请重新登录」提示
             warnings.append(label+'清单未完整读取，请刷新登录/权限后重试')
     # The existing source is a hint, not a restriction and not an authorization.
     # ERP validates every request; selection and commit re-read the actual target.
@@ -81,6 +90,11 @@ def discover(client, no, source):
     scopes = list(dict.fromkeys(hints + [(_ALL, a) for a in auths]))
     fallback = [(o, a) for a in auths for o in owners if (o, a) not in scopes]
     found, errors, queried = {}, [], []
+    # 某个货主 / 分仓范围返回登录页（聚水潭对无权访问的分仓会跳登录页），
+    # 不等于整个账号掉线：记下来接着查其他范围。只有所有范围都返回登录页
+    # （包括本账号自己的范围）才算真正登录失效。以前第一个这样的范围就中断整次查询，
+    # 重新登录也没用，还被改成泛泛的 E-UNP-1000。
+    login_pages, answered = [], []
 
     def query(scope):
         owner, auth = scope
@@ -91,10 +105,14 @@ def discover(client, no, source):
                 if not isinstance(rows, list) or any(not isinstance(r, dict) for r in rows):
                     raise ValueError('采购列表响应格式异常')
             except (BizError, OSError, ValueError) as exc:
-                if any(t in str(exc) for t in ('登录', '验证码', '风控')):
-                    raise ValueError('采购单查询未完成：'+str(exc)) from exc
+                if _session_like(exc):
+                    login_pages.append((scope, exc))
+                    return   # 这个范围换单号类型也一样会跳登录页
+                if _account_blocked(exc):
+                    raise
                 errors.append(str(exc) or type(exc).__name__)
                 continue
+            if scope not in answered: answered.append(scope)
             if len(rows) >= 25:
                 warnings.append('查询结果较多，以下可能不是全部；请优先使用具体采购单号')
             for raw in rows:
@@ -113,6 +131,12 @@ def discover(client, no, source):
     if not found:
         for scope in fallback[:16]: query(scope)
         if len(fallback) > 16: warnings.append('货主 / 分仓组合较多，本次未查询全部范围，请核对具体采购单号及权限')
+    if login_pages and not answered:
+        # 每个范围（含本账号自己的范围）都返回登录页：确实是登录失效。保留原异常。
+        raise login_pages[0][1]
+    if login_pages:
+        names = '、'.join(dict.fromkeys('货主 %s / 分仓 %s' % sc for sc, _ in login_pages))
+        warnings.append('部分范围聚水潭返回登录页（多半是当前账号无权访问该分仓 / 货主），已跳过：'+names[:160])
     if errors: warnings.append('部分范围查询失败：'+'；'.join(dict.fromkeys(errors))[:180])
     if not found:
         if errors or warnings:
